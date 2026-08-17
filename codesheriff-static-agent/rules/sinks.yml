@@ -1,0 +1,36 @@
+python:
+  - id: sql.execute
+    match: "(cursor|conn|db|session)\\.execute"
+    cwe: CWE-89
+    danger: high
+  - id: os.system
+    match: "os\\.(system|popen)"
+    cwe: CWE-78
+    danger: critical
+  - id: subprocess.shell
+    match: "subprocess\\.(run|call|check_output|Popen)"
+    requires_arg: "shell=True"
+    cwe: CWE-78
+    danger: critical
+  - id: yaml.unsafe_load
+    match: "yaml\\.load"
+    forbids_arg: "Loader=SafeLoader"
+    cwe: CWE-502
+    danger: high
+  - id: path.open
+    match: "(open|os\\.remove|shutil\\.rmtree)"
+    cwe: CWE-22
+    danger: medium
+javascript:
+  - id: eval
+    match: "\\beval"
+    cwe: CWE-94
+    danger: critical
+  - id: child_process.exec
+    match: "child_process\\.exec"
+    cwe: CWE-78
+    danger: critical
+  - id: dom.innerHTML
+    match: "(innerHTML|dangerouslySetInnerHTML)"
+    cwe: CWE-79
+    danger: high

@@ -1,0 +1,14 @@
+python:
+  - id: flask.request.args
+    match: "request\\.(args|form|json|values|cookies)"
+    cwe_hint: injection
+  - id: os.environ
+    match: "os\\.environ"
+    cwe_hint: injection
+  - id: sys.argv
+    match: "sys\\.argv"
+    cwe_hint: injection
+javascript:
+  - id: express.req
+    match: "req\\.(query|body|params|headers)"
+    cwe_hint: injection
