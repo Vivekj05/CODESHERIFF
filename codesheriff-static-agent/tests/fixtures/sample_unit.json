@@ -1,0 +1,25 @@
+{
+  "contract_version": "1.0.0",
+  "unit_id": "demo-001",
+  "repo": "acme/webapp",
+  "language": "python",
+  "file": "app/api/users.py",
+  "symbol": "get_user",
+  "pre_src": "def get_user(user_id):\n    return db.query(User).get(user_id)\n",
+  "post_src": "def get_user():\n    uid = request.args.get('id')\n    q = f\"SELECT * FROM users WHERE id = {uid}\"\n    return cursor.execute(q).fetchone()\n",
+  "changed_lines": [1, 2, 3, 4],
+  "start_line": 42,
+  "neighbours": [
+    {
+      "relation": "caller",
+      "symbol": "user_route",
+      "file": "app/api/routes.py",
+      "src": "@app.route('/users')\ndef user_route():\n    return jsonify(get_user())\n"
+    }
+  ],
+  "imports": ["flask.request", "app.db.cursor"],
+  "base_sha": "aaaaaaa",
+  "head_sha": "bbbbbbb",
+  "is_test_file": false,
+  "repo_path": null
+}

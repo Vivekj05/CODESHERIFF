@@ -1,0 +1,18 @@
+{
+  "contract_version": "1.0.0",
+  "unit_id": "pr-220",
+  "repo": "acme/webapp",
+  "language": "python",
+  "file": "app/payment.py",
+  "symbol": "quick_payment",
+  "pre_src": "# Empty before",
+  "post_src": "@app.route('/quick-charge')\ndef quick_payment():\n    return stripe_charge(request.json)\n",
+  "changed_lines": [1, 2, 3],
+  "start_line": 12,
+  "neighbours": [],
+  "imports": ["flask.request", "app.payment.stripe_charge"],
+  "base_sha": "111111",
+  "head_sha": "222222",
+  "is_test_file": false,
+  "repo_path": null
+}

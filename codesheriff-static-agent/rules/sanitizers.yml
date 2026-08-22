@@ -1,0 +1,17 @@
+python:
+  - id: sql.parameterized
+    match: "execute\\([^,]+,\\s*[\\(\\[]"
+    clears: [injection]
+  - id: shlex.quote
+    match: "shlex\\.quote"
+    clears: [command]
+  - id: html.escape
+    match: "(html\\.escape|markupsafe\\.escape)"
+    clears: [xss]
+  - id: path.safe_join
+    match: "(werkzeug\\.utils\\.secure_filename|os\\.path\\.basename)"
+    clears: [path]
+javascript:
+  - id: encodeURIComponent
+    match: "encodeURIComponent"
+    clears: [xss]

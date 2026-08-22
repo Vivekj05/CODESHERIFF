@@ -1,0 +1,32 @@
+Review the following code change unit for security vulnerabilities:
+
+Unit Details:
+- ID: {{ unit.unit_id }}
+- Repo: {{ unit.repo }}
+- Language: {{ unit.language }}
+- File: {{ unit.file }}
+- Symbol: {{ unit.symbol or 'N/A' }}
+- Line Range: {{ unit.start_line }} to {{ unit.start_line + unit.changed_lines|length }}
+
+<code_to_analyze>
+--- BEFORE CHANGE ---
+{{ unit.pre_src }}
+
+--- AFTER CHANGE ---
+{{ unit.post_src }}
+</code_to_analyze>
+
+{% if context %}
+<additional_context>
+{% for ctx in context %}
+File: {{ ctx.file | default('N/A') }}
+Relation: {{ ctx.relation | default('N/A') }}
+Symbol: {{ ctx.symbol | default('N/A') }}
+Snippet:
+{{ ctx.src | default('') }}
+---
+{% endfor %}
+</additional_context>
+{% endif %}
+
+Analyze the code inside `<code_to_analyze>` using the 3-stage security framework. Return structured JSON matching the LLMResponse schema. If no vulnerability is present, return {"findings": []}.
