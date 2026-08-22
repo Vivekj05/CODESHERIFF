@@ -1,0 +1,8 @@
+{
+  "pr_id": "pr-105",
+  "title": "Enforce CSRF protection and rate limiting on Stripe charges",
+  "description": "Established security wrappers requiring @require_csrf_token and @rate_limit on all payment endpoints calling stripe_charge.",
+  "files": ["app/payment.py"],
+  "symbols": ["process_payment", "stripe_charge"],
+  "code_diff": "@app.route('/charge')\n@require_csrf_token\n@rate_limit\ndef process_payment():\n    return stripe_charge(request.json)"
+}

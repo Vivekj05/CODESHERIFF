@@ -1,0 +1,19 @@
+{
+  "findings": [
+    {
+      "functional_intent": "Developer intended to run ffmpeg command to convert media files based on user URL parameter.",
+      "untrusted_data_sources": ["request.args.get('url')"],
+      "violated_safety_invariant": "Untrusted parameter is formatted directly into OS shell command string without escaping or validation.",
+      "cwe": "CWE-78",
+      "title": "OS Command Injection in video converter",
+      "file": "app/media.py",
+      "start_line": 10,
+      "end_line": 13,
+      "sink_expression": "os.system(f'ffmpeg -i {url} output.mp4')",
+      "severity": "critical",
+      "rationale": "Direct string interpolation of untrusted URL parameter into os.system allows command execution.",
+      "evidence_lines": [11, 12],
+      "exploitability": "direct"
+    }
+  ]
+}
