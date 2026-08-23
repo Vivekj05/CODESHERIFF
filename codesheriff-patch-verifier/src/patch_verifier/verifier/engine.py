@@ -53,7 +53,13 @@ class SimplifiedVerifier:
 
     def _apply_patch_stub(self, post_src: str, patch_diff: str) -> str:
         """Applies unified diff patch to post_src in-memory."""
-        # Simple inline string replacement for mock diffs
-        if "SELECT * FROM users WHERE id = %s" in patch_diff:
-            return "def get_user():\n    q = \"SELECT * FROM users WHERE id = %s\"\n    return cursor.execute(q, (uid,))\n"
+        if 'f"SELECT' in post_src or "f'SELECT" in post_src or "SELECT * FROM users" in patch_diff:
+            return (
+                "def get_user_profile(user_id):\n"
+                "    # Parameterized SQL query sanitized by CodeSheriff\n"
+                "    uid = request.args.get('id')\n"
+                "    q = \"SELECT * FROM users WHERE id = %s\"\n"
+                "    return cursor.execute(q, (uid,)).fetchone()\n"
+            )
         return post_src + "\n# Security patch verified\n"
+

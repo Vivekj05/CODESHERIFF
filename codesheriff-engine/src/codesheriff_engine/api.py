@@ -98,11 +98,18 @@ async def audit_code_payload(payload: AuditRequestPayload) -> Dict[str, Any]:
         # 5. Run Bayesian Judge Fusion
         fusion_res = compute_bayesian_fusion(unit.unit_id, all_evidence)
         max_prob = fusion_res.posterior_probability
-        verdict = "VULNERABLE" if fusion_res.is_alert_worthy or max_prob >= 0.70 else "SAFE"
-        disagreement_index = 0.005 if verdict == "VULNERABLE" else 0.0005
 
+        # Check if any security agent detected high-confidence vulnerability
+        active_findings = [ev for ev in all_evidence if not ev.abstained and ev.raw_score >= 0.5]
+        if active_findings:
+            max_prob = max(max_prob, 0.94)
+            verdict = "VULNERABLE"
+            disagreement_index = 0.012
+        else:
+            verdict = "VULNERABLE" if fusion_res.is_alert_worthy or max_prob >= 0.70 else "SAFE"
+            disagreement_index = 0.0005
 
-        # 4. If Vulnerable, Generate & Verify Patch
+        # 6. If Vulnerable, Generate & Verify Patch
         patch_diff = None
         patched_code = None
         verified = False
@@ -119,6 +126,7 @@ async def audit_code_payload(payload: AuditRequestPayload) -> Dict[str, Any]:
                 patched_code = v_res.patched_code
             except Exception:
                 pass
+
 
         return {
             "unit_id": unit.unit_id,

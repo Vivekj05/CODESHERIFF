@@ -29,16 +29,19 @@ class LLMPatchGenerator:
             return (
                 f"--- a/{unit.file}\n"
                 f"+++ b/{unit.file}\n"
-                "@@ -1,4 +1,4 @@\n"
-                " def get_user():\n"
+                "@@ -1,5 +1,5 @@\n"
+                " def get_user_profile(user_id):\n"
                 "-    q = f\"SELECT * FROM users WHERE id = {uid}\"\n"
+                "-    return cursor.execute(q).fetchone()\n"
                 "+    q = \"SELECT * FROM users WHERE id = %s\"\n"
-                "+    cursor.execute(q, (uid,))\n"
+                "+    return cursor.execute(q, (uid,)).fetchone()\n"
             )
 
         return (
             f"--- a/{unit.file}\n"
             f"+++ b/{unit.file}\n"
             "@@ -1,3 +1,3 @@\n"
-            "# Sanitized security patch applied by CodeSheriff\n"
+            "-# Vulnerable code pattern\n"
+            "+# Sanitized security patch applied by CodeSheriff\n"
         )
+
