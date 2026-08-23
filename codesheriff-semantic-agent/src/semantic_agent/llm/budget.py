@@ -6,11 +6,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Default pricing per 1K tokens in USD
+# Pricing per 1K tokens in USD (Gemini Free Tier is $0, but tracked for reference)
 MODEL_PRICING = {
-    "gpt-4o-mini": {"input": 0.00015 / 1000, "output": 0.00060 / 1000},
-    "gpt-4o": {"input": 0.0025 / 1000, "output": 0.0100 / 1000},
-    "default": {"input": 0.001 / 1000, "output": 0.002 / 1000},
+    "gemini-1.5-flash": {"input": 0.000075 / 1000, "output": 0.00030 / 1000},
+    "gemini-2.0-flash": {"input": 0.00010 / 1000, "output": 0.00040 / 1000},
+    "gemini-1.5-pro": {"input": 0.00125 / 1000, "output": 0.0050 / 1000},
+    "default": {"input": 0.0001 / 1000, "output": 0.0003 / 1000},
 }
 
 
@@ -22,7 +23,7 @@ class BudgetTracker:
         self.spent_usd: float = 0.0
 
     def estimate_cost(
-        self, prompt_tokens: int, completion_tokens: int, model: str = "gpt-4o-mini"
+        self, prompt_tokens: int, completion_tokens: int, model: str = "gemini-1.5-flash"
     ) -> float:
         """Calculate estimated cost in USD based on model pricing."""
         rates = MODEL_PRICING.get(model, MODEL_PRICING["default"])

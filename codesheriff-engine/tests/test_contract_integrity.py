@@ -7,7 +7,7 @@ EXPECTED_SHA256 = "7176be9e1d36850bd6a2f4d79332d40a5fdc7812a81faa8313ebe3bfe6a19
 
 
 def test_vendored_contract_is_unmodified() -> None:
-    p = Path(__file__).parent.parent / "src" / "semantic_agent" / "contracts.py"
+    p = Path(__file__).parent.parent / "src" / "codesheriff_engine" / "contracts.py"
     assert p.exists(), f"contracts.py file not found at {p}"
     content = p.read_text(encoding="utf-8").replace("\r\n", "\n").encode("utf-8")
     actual = hashlib.sha256(content).hexdigest().lower()
