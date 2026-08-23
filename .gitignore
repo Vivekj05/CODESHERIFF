@@ -7,3 +7,5 @@ __pycache__/
 .cache/
 .chroma_db/
 *.egg-info/
+node_modules/
+dist/
