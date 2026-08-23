@@ -19,7 +19,7 @@ class SemanticConfig(BaseSettings):
 
     agent_id: str = Field(default="semantic.hosted")
     agent_version: str = Field(default="0.1.0")
-    model: str = Field(default="gpt-4o-mini")
+    model: str = Field(default="gemini-1.5-flash")
     temperature: float = Field(default=0.3)
     n_samples: int = Field(default=3)
     budget_usd_per_unit: float = Field(default=0.05)
@@ -30,7 +30,11 @@ class SemanticConfig(BaseSettings):
     @classmethod
     def load(cls) -> SemanticConfig:
         """Load configuration from environment variables or defaults."""
-        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY")
+        api_key = (
+            os.getenv("GEMINI_API_KEY")
+            or os.getenv("GOOGLE_API_KEY")
+            or os.getenv("LLM_API_KEY")
+        )
         cfg = cls()
         if api_key and not cfg.api_key:
             cfg.api_key = api_key
