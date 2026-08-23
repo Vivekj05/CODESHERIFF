@@ -251,10 +251,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Render Agent Cards
         const evList = data.evidence || [];
-        renderAgentCard(bodyStatic, 'structural.taint', evList);
-        renderAgentCard(bodySemantic, 'semantic.llm', evList);
-        renderAgentCard(bodyContext, 'context.rag', evList);
-        renderAgentCard(bodyRuntime, 'runtime.sfi', evList);
+        renderAgentCard(bodyStatic, 'structural', evList);
+        renderAgentCard(bodySemantic, 'semantic', evList);
+        renderAgentCard(bodyContext, 'context', evList);
+        renderAgentCard(bodyRuntime, 'runtime', evList);
 
         // Render Patch Diff & Action Buttons
         if (data.patch_diff && data.verified) {
@@ -281,22 +281,23 @@ document.addEventListener('DOMContentLoaded', () => {
         addHistoryRow(payload.unit_id, payload.file, verdict, prob, disagree);
     }
 
-    function renderAgentCard(bodyElem, agentId, evList) {
-        const item = evList.find(e => e.agent_id === agentId);
+    function renderAgentCard(bodyElem, prefix, evList) {
+        const item = evList.find(e => e.agent_id && (e.agent_id.startsWith(prefix) || (prefix === 'structural' && e.agent_id.includes('static'))));
         if (!item) {
-            bodyElem.innerHTML = '<span class="text-muted">No finding reported</span>';
+            bodyElem.innerHTML = '<span class="text-muted">Awaiting audit...</span>';
             return;
         }
         if (item.abstained) {
-            bodyElem.innerHTML = `<span class="text-muted">Abstained (${item.abstain_reason || 'N/A'})</span>`;
+            bodyElem.innerHTML = `<span class="text-muted">⚠️ Abstained (${item.abstain_reason || 'N/A'})${item.explanation ? `<br/><small style="opacity:0.8">${item.explanation.slice(0, 70)}...</small>` : ''}</span>`;
             return;
         }
         if (item.raw_score > 0.0) {
-            bodyElem.innerHTML = `<strong style="color: var(--status-vuln)">${item.cwe || 'Finding'}</strong> (Score: ${item.raw_score})<br/>${item.explanation}`;
+            bodyElem.innerHTML = `<strong style="color: var(--status-vuln)">${item.cwe || 'Vulnerability Finding'}</strong> (Score: ${item.raw_score})<br/><small>${item.explanation}</small>`;
         } else {
             bodyElem.innerHTML = `<span style="color: var(--status-safe)">🟢 Clean Pass (Score: 0.0)</span>`;
         }
     }
+
 
     function addHistoryRow(unitId, file, verdict, prob, disagree) {
         const time = new Date().toLocaleTimeString();

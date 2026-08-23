@@ -295,10 +295,30 @@ export default function App() {
 
           {/* Agents Grid */}
           <div className="agents-grid">
-            <AgentCard icon="🔍" name="Static Agent" tag="structural.taint" agentId="structural.taint" evidence={auditResult?.evidence?.find(e => e.agent_id === 'structural.taint')} />
-            <AgentCard icon="🧠" name="Semantic Agent" tag="semantic.hosted" agentId="semantic.hosted" evidence={auditResult?.evidence?.find(e => e.agent_id === 'semantic.hosted')} />
-            <AgentCard icon="📚" name="Context Agent" tag="context.rag" agentId="context.rag" evidence={auditResult?.evidence?.find(e => e.agent_id === 'context.rag')} />
-            <AgentCard icon="⚡" name="Runtime Agent" tag="runtime.sfi" agentId="runtime.sfi" evidence={auditResult?.evidence?.find(e => e.agent_id === 'runtime.sfi')} />
+            <AgentCard
+              icon="🔍"
+              name="Static Agent"
+              tag="structural.taint"
+              evidence={auditResult?.evidence?.find(e => e.agent_id && (e.agent_id.startsWith('structural') || e.agent_id.includes('static')))}
+            />
+            <AgentCard
+              icon="🧠"
+              name="Semantic Agent"
+              tag="semantic.hosted"
+              evidence={auditResult?.evidence?.find(e => e.agent_id && e.agent_id.startsWith('semantic'))}
+            />
+            <AgentCard
+              icon="📚"
+              name="Context Agent"
+              tag="context.rag"
+              evidence={auditResult?.evidence?.find(e => e.agent_id && e.agent_id.startsWith('context'))}
+            />
+            <AgentCard
+              icon="⚡"
+              name="Runtime Agent"
+              tag="runtime.sfi"
+              evidence={auditResult?.evidence?.find(e => e.agent_id && e.agent_id.startsWith('runtime'))}
+            />
           </div>
         </section>
 
@@ -427,6 +447,7 @@ export default function App() {
 }
 
 function AgentCard({ icon, name, tag, evidence }) {
+  const displayTag = evidence?.agent_id || tag;
   if (!evidence) {
     return (
       <div className="agent-card">
@@ -448,16 +469,23 @@ function AgentCard({ icon, name, tag, evidence }) {
         <span className="agent-icon">{icon}</span>
         <div className="agent-info">
           <h3>{name}</h3>
-          <span className="agent-tag">{tag}</span>
+          <span className="agent-tag">{displayTag}</span>
         </div>
       </div>
       <div className="agent-card-body">
         {evidence.abstained ? (
-          <span className="text-muted">Abstained ({evidence.abstain_reason || 'N/A'})</span>
+          <span className="text-muted">
+            ⚠️ Abstained ({evidence.abstain_reason || 'N/A'})
+            {evidence.explanation && (
+              <div style={{ fontSize: '0.75rem', marginTop: '4px', opacity: 0.8 }}>
+                {evidence.explanation.length > 70 ? evidence.explanation.slice(0, 70) + '...' : evidence.explanation}
+              </div>
+            )}
+          </span>
         ) : evidence.raw_score > 0 ? (
           <div>
-            <strong style={{ color: 'var(--status-vuln)' }}>{evidence.cwe || 'Finding'}</strong> (Score: {evidence.raw_score})<br/>
-            {evidence.explanation}
+            <strong style={{ color: 'var(--status-vuln)' }}>{evidence.cwe || 'Vulnerability Finding'}</strong> (Score: {evidence.raw_score})<br/>
+            <span style={{ fontSize: '0.8rem' }}>{evidence.explanation}</span>
           </div>
         ) : (
           <span style={{ color: 'var(--status-safe)' }}>🟢 Clean Pass (Score: 0.0)</span>
@@ -466,3 +494,4 @@ function AgentCard({ icon, name, tag, evidence }) {
     </div>
   );
 }
+

@@ -9,9 +9,11 @@ from pydantic import BaseModel
 from codesheriff_engine.contracts import ChangeUnit, Evidence
 from codesheriff_engine.fusion.bayes import compute_bayesian_fusion
 # pyrefly: ignore [missing-import]
-from static_agent.taint.engine import analyze_taint as run_static_analysis
+from static_agent.agent import StaticAgent
 # pyrefly: ignore [missing-import]
-from static_agent.config import StaticConfig
+from semantic_agent.agent import SemanticAgent
+# pyrefly: ignore [missing-import]
+from context_agent.agent import ContextAgent
 # pyrefly: ignore [missing-import]
 from runtime_agent.agent import RuntimeAgent
 # pyrefly: ignore [missing-import]
@@ -45,7 +47,7 @@ class CreatePRPayload(BaseModel):
 
 @router.post("/audit")
 async def audit_code_payload(payload: AuditRequestPayload) -> Dict[str, Any]:
-    """Runs Multi-Agent Pipeline (Static, Runtime, Bayesian Judge, Patch Verifier)."""
+    """Runs Multi-Agent Pipeline (Static, Semantic, Context, Runtime, Bayesian Judge, Patch Verifier)."""
     try:
         unit = ChangeUnit(
             unit_id=payload.unit_id,
@@ -61,14 +63,31 @@ async def audit_code_payload(payload: AuditRequestPayload) -> Dict[str, Any]:
 
         all_evidence: List[Evidence] = []
 
-        # 1. Run Static Agent
+        # 1. Run Static Agent (Taint + Semgrep)
         try:
-            static_ev = run_static_analysis(unit, StaticConfig())
+            static_agent = StaticAgent()
+            static_ev = static_agent.analyze(unit)
             all_evidence.extend(static_ev)
         except Exception:
             pass
 
-        # 2. Run Runtime Agent
+        # 2. Run Semantic Agent (LLM + Invariant Analysis)
+        try:
+            semantic_agent = SemanticAgent()
+            semantic_ev = semantic_agent.analyze(unit)
+            all_evidence.extend(semantic_ev)
+        except Exception:
+            pass
+
+        # 3. Run Context Agent (RAG + Historical PR Anchors)
+        try:
+            context_agent = ContextAgent()
+            context_ev = context_agent.analyze(unit)
+            all_evidence.extend(context_ev)
+        except Exception:
+            pass
+
+        # 4. Run Runtime Agent (SFI Sandbox)
         try:
             runtime_agent = RuntimeAgent()
             runtime_ev = runtime_agent.analyze(unit)
@@ -76,11 +95,12 @@ async def audit_code_payload(payload: AuditRequestPayload) -> Dict[str, Any]:
         except Exception:
             pass
 
-        # 3. Run Bayesian Judge Fusion
+        # 5. Run Bayesian Judge Fusion
         fusion_res = compute_bayesian_fusion(unit.unit_id, all_evidence)
         max_prob = fusion_res.posterior_probability
         verdict = "VULNERABLE" if fusion_res.is_alert_worthy or max_prob >= 0.70 else "SAFE"
         disagreement_index = 0.005 if verdict == "VULNERABLE" else 0.0005
+
 
         # 4. If Vulnerable, Generate & Verify Patch
         patch_diff = None
