@@ -6,13 +6,14 @@ who has not started Docker sees skips rather than a wall of connection errors.
 
 pgvector cannot be faked on SQLite, and a schema built from `Base.metadata` is not the schema
 production runs — so these tests migrate a real database with Alembic or they do not run at all.
+
+The migrate-and-roll-back machinery itself lives in `codesheriff_storage.testing`, because
+`apps/api` needs exactly the same thing and two copies of it drift apart until one is subtly wrong.
 """
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable, Iterator
-from pathlib import Path
 
 import pytest
 from alembic import command
@@ -20,16 +21,8 @@ from alembic.config import Config
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
-from codesheriff_storage.session import build_engine, build_session_factory
-
-ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
-
-
-def alembic_config(connection: object) -> Config:
-    """Alembic config bound to an open connection, so migrations join the test's transaction."""
-    config = Config(str(ALEMBIC_INI))
-    config.attributes["connection"] = connection
-    return config
+from codesheriff_storage.session import build_engine
+from codesheriff_storage.testing import alembic_config, rollback_session, test_database_url
 
 
 @pytest.fixture
@@ -41,7 +34,7 @@ def alembic_cfg() -> Callable[[object], Config]:
 @pytest.fixture(scope="session")
 def db_url() -> str:
     """URL of a throwaway database. Skips the test when it is not set."""
-    url = os.environ.get("CODESHERIFF_TEST_DB")
+    url = test_database_url()
     if not url:
         pytest.skip(
             "CODESHERIFF_TEST_DB is not set. Start Postgres (docker compose up -d postgres) and "
@@ -70,20 +63,8 @@ def migrated_engine(db_url: str) -> Iterator[Engine]:
 @pytest.fixture
 def session(migrated_engine: Engine) -> Iterator[Session]:
     """A session whose work is rolled back afterwards, so tests cannot leak rows into each other."""
-    connection = migrated_engine.connect()
-    transaction = connection.begin()
-    factory = build_session_factory(migrated_engine)
-    db_session = factory(bind=connection)
-    try:
+    with rollback_session(migrated_engine) as db_session:
         yield db_session
-    finally:
-        db_session.close()
-        # A test that asserts the database REJECTS a row leaves the session having already rolled
-        # back, which deassociates this transaction. Rolling it back again is not an error, but it
-        # warns — and a warning in every constraint test trains people to ignore warnings.
-        if transaction.is_active:
-            transaction.rollback()
-        connection.close()
 
 
 @pytest.fixture

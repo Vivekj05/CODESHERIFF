@@ -106,6 +106,81 @@ _evidence_kind_enum = Enum(
 )
 
 
+class User(Base):
+    """One signed-in GitHub user. Identity only.
+
+    §6 puts multi-tenancy with billing out of scope, and this table is where that would creep in
+    first. There are no roles, no teams, no plans and no per-repository grants: what a user may see
+    is derived from GitHub at sign-in and held in their session, never stored as an ACL here
+    (D-035). A stored ACL is a copy of GitHub's answer that starts going stale immediately.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    """The GitHub user id — stable across renames, which `login` is not."""
+
+    login: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+    sessions: Mapped[list[Session]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class Session(Base):
+    """One signed-in browser session.
+
+    Two deliberate absences.
+
+    **No GitHub token is stored.** The OAuth access token is used once, at sign-in, to read the
+    user's identity and the installations they can see, and is then discarded. Nothing here can be
+    replayed against GitHub if this database leaks (D-036).
+
+    **The session token itself is not stored either** — only `token_sha256`. The cookie holds the
+    secret; the database holds a hash of it, so a database read does not hand over live sessions.
+    """
+
+    __tablename__ = "sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    token_sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    """SHA-256 of the opaque cookie value. Never the value itself."""
+
+    visible_installation_ids: Mapped[list[int]] = mapped_column(
+        ARRAY(BigInteger), nullable=False, default=list
+    )
+    """Installations this user could see at sign-in, from `GET /user/installations`.
+
+    A snapshot, and knowingly so: access granted or revoked on GitHub is reflected at the user's
+    next sign-in rather than immediately (D-035). The alternative — storing a GitHub credential to
+    re-ask on every request — trades a bounded staleness window for a permanent secret at rest.
+    """
+
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+    user: Mapped[User] = relationship(back_populates="sessions")
+
+    __table_args__ = (
+        Index("ix_sessions_expires_at", "expires_at"),
+        CheckConstraint("length(token_sha256) = 64", name="ck_sessions_token_hash_length"),
+        CheckConstraint("expires_at > created_at", name="ck_sessions_expiry_after_creation"),
+    )
+
+
 class Installation(Base):
     """One GitHub App installation.
 

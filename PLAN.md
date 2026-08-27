@@ -220,7 +220,7 @@ an `AGENTS.md` saying so. Conventions that differ: typed `PageProps<'/route'>` a
 `apps/dashboard/node_modules/next/dist/docs/` are authoritative; read them before writing
 components.
 
-## Chapter 5 — GitHub OAuth, App installation, repository listing ⬜
+## Chapter 5 — GitHub OAuth, App installation, repository listing 🔨
 
 OAuth flow, session handling, App installation, per-repo permission derivation. Repo listing with
 infinite scrolling, connect/disconnect, connection status.
@@ -230,6 +230,45 @@ request, behaviour on force-push, one summary comment vs inline review comments,
 rather than duplicate on subsequent pushes.
 
 **Done when:** the App installs against a real account and connected repos persist across sessions.
+
+**Delivered.** The first vertical slice: dashboard → FastAPI → GitHub and Postgres. D-034 through
+D-037.
+
+- **§7 open question 1 is closed (D-034).** Metadata: read, Contents: read, Pull requests: read and
+  write — nothing else, and no Contents: write, because §6 puts auto-commit out of scope. Events:
+  `pull_request`, `installation`, `installation_repositories`, not `push`. Each head SHA is a new
+  audit; a superseded run is abandoned. **One summary comment, edited in place** via
+  `audits.github_comment_id`, rather than inline review comments — calibration has to be legible in
+  one place, and inline anchors go stale on the force-push that this project's users make most.
+- **Authorisation is derived from GitHub, never stored (D-035).** `GET /user/installations` at
+  sign-in; the ids live on the session row and scope every query. No permissions table. An empty
+  list returns nothing rather than everything, tested at both layers.
+- **No GitHub credential and no session token reach the database (D-036).** The OAuth token is spent
+  on two reads and dropped — the gateway interface has no method that returns one. `sessions` holds
+  a SHA-256 of the cookie, so logout can revoke server-side and a stolen copy stops working.
+- **The install callback grants nothing (D-037).** `?installation_id=` is user-controlled, so it is
+  logged and ignored; the handler redirects into OAuth, which re-derives the list from GitHub.
+- Storage gains `users` and `sessions` (migration `0002`), `identity.py` for every sign-in query,
+  and `testing.py` so `apps/api` shares the migrate-and-roll-back fixtures instead of copying them.
+- Dashboard gains `/sign-in`, a real session-backed shell, and a repository list with keyset
+  infinite scroll and an analysis toggle. Chapter 4's placeholder session is deleted.
+
+**Verified.** 167 Python tests pass against Postgres · `ruff`, `ruff format`, `mypy --strict` clean
+across 74 source files · `lint-imports` 4 contracts kept · dashboard `lint` and `build` clean across
+8 routes · both services run together: unknown cookie → 401, no credentials → 501 naming the missing
+variable, CORS allows `localhost:3000` and refuses `evil.example`.
+
+Tests never touch the network: an autouse fixture fails any non-loopback socket, GitHub is
+substituted at the `GitHubGateway` interface, and `test_github_gateway.py` drives the **real**
+`githubkit` client against an httpx `MockTransport` — which is what pins the `redirect_uri` and the
+pagination behaviour that a fake would have let slide.
+
+⚠️ **Not ✅ until the App is registered.** The acceptance criterion is "the App installs against a
+real account and connected repos persist across sessions", and registering a GitHub App is an
+account-owner action nobody else can do. Everything up to that point is verified.
+`docs/github-app-setup.md` is the twenty-minute checklist: create the App with the D-034 permissions,
+fill five values into `.env`, install it, sign in, and confirm the repository list survives a sign-out
+and back in.
 
 ## Chapter 6 — Webhook, HMAC, Celery — **the v0.1 seam** ⬜
 

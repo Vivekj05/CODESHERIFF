@@ -715,3 +715,125 @@ helper and adds the redirect the route group's name implies.
 **Why.** The alternative — a plausible-looking `getSession()` that always succeeds — is how a
 placeholder survives into a release. Making the absence of auth loud in the name, the type and the
 UI means the day it becomes real is a day someone deletes an obvious lie, not a day nobody notices.
+
+---
+
+## D-034 — GitHub App configuration: permissions, events, and one comment that gets edited
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 5
+
+Resolves `PROJECT_CONTEXT.md` §7 open question 1.
+
+**Permissions requested.** Repository level only, and the smallest set that lets the pipeline work:
+
+| Permission | Level | Why |
+|---|---|---|
+| Metadata | Read | Mandatory for every App |
+| Contents | Read | The changed file contents the agents analyse |
+| Pull requests | Read & write | Read the diff; post and edit the review comment |
+
+Nothing else. In particular **no Checks**, no Actions, no Administration, no Members, and no write
+access to Contents. §6 puts auto-merge and auto-commit of patches out of scope, so an App that could
+write to a branch would hold a capability the product deliberately does not use — and Chapter 17's
+patches are suggestions inside a comment, which Pull requests: write already covers.
+
+**Events subscribed.** `pull_request`, `installation`, `installation_repositories`. Not `push`: a
+force-push to a PR branch already arrives as `pull_request` with action `synchronize`, and
+subscribing to `push` would deliver every commit on every branch, most of which is not under review.
+
+**Force-push behaviour.** Each head SHA is a new audit. `audits` is deliberately not unique on
+`(repository_id, head_sha)` — re-analysing a commit under a new calibration artifact is how a
+recalibration gets evaluated. An audit still running for a superseded head is abandoned rather than
+finished: its findings would describe code that is no longer at the head of the branch, and a
+posterior about a commit nobody can see is worse than no posterior.
+
+**One summary comment, edited in place — not inline review comments.** `audits.github_comment_id`
+holds the comment id, and each subsequent push edits that comment rather than adding another. Three
+reasons, in order of weight:
+
+1. **Calibration has to be legible in one place.** The claim this project makes is about the
+   posterior and the reliability behind it. Scattered across inline threads, there is nowhere to
+   state "this number is provisional" once, and a reader assembles their own impression from
+   fragments.
+2. **Inline comments cannot be updated as a set.** They anchor to `(path, line)` in a specific
+   commit. After a force-push the anchors are stale, GitHub marks them outdated, and the only way
+   to refresh them is to post a new review — which is precisely the duplication this decision
+   exists to prevent.
+3. **A single edited comment is the quietest thing a bot can be.** The failure mode this project
+   attacks is developers learning to ignore an alerting tool.
+
+Inline comments are reconsidered in Chapter 16 or 17, when there is a fitted threshold and a reason
+to point at an exact line. Until then, the summary comment links to the finding page.
+
+---
+
+## D-035 — Authorisation is derived from GitHub at sign-in, never stored as an ACL
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 5
+
+**Decision.** At sign-in, the user's OAuth token is used to read `GET /user/installations`, and that
+list of installation ids is stored on their session row. Every query is scoped by it — repository
+listing and the analysis toggle both take `installation_ids` and return nothing for an empty list.
+There is no permissions table, no roles, no per-repository grants.
+
+**Why.** GitHub is the authority on who may see what, and it already answers the question. A stored
+ACL is a copy of that answer which begins going stale the moment somebody's access changes on
+GitHub, and reconciling it is the kind of background job that fails silently. §6 also puts
+multi-tenancy out of scope; a permissions table is where that scope creep would start.
+
+**The trade-off, stated plainly.** Access is a snapshot, so a revocation on GitHub is reflected at
+the user's next sign-in rather than immediately. Sessions therefore last 8 hours and are never
+extended. The alternative — storing a GitHub credential so the question can be re-asked on every
+request — trades a bounded staleness window for a permanent secret at rest (D-036).
+
+**Consequences.** The empty-list case is the whole access check, so it is tested at both layers:
+`list_repositories(installation_ids=[])` returns `[]` rather than falling through to every row, and
+the API returns 404 — not 403 — for a repository outside the session, which avoids confirming that
+it exists.
+
+---
+
+## D-036 — The database holds no GitHub credential and no session token
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 5
+
+**Decision.** Two absences, both enforced by the shape of the code rather than by care:
+
+- **No GitHub token is stored.** `GitHubGateway.sign_in()` takes an authorisation code and returns
+  identity plus installation ids. There is no method on the interface that hands a caller a token,
+  so there is nothing to persist by accident. `githubkit` performs the exchange inside its auth
+  strategy, and the client goes out of scope when the call returns.
+- **The session token is stored only as a SHA-256.** The cookie holds 256 random bits; `sessions`
+  holds a one-way image of it. Reading the table does not hand over live sessions. Plain SHA-256
+  rather than a password hash on purpose: the token is random, not human-chosen, so there is
+  nothing for a slow KDF to defend against.
+
+Sessions are rows rather than signed tokens specifically so that logout can revoke server-side.
+Clearing a cookie only asks a browser to forget; a copy taken beforehand must stop working, and
+there is a test that steals one and checks that it does.
+
+**Why.** §6 keeps credentials out of persisted records. A leaked database that yields replayable
+GitHub access is a far worse outcome than one that yields findings, and the only reliable way to
+prevent it is to never have the credential in the first place.
+
+---
+
+## D-037 — The installation callback grants nothing
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 5
+
+**Context.** After installing the App, GitHub redirects the user to the configured setup URL with
+`?installation_id=...`. The obvious implementation adds that id to the current session.
+
+**Decision.** `/auth/install/callback` logs the parameter and ignores it, then redirects into
+`/auth/login`, which re-derives the whole installation list from GitHub.
+
+**Why.** That parameter arrives in a URL the user controls. Anyone could request the endpoint with
+somebody else's installation id, and if the handler trusted it, a session would gain visibility of
+repositories it was never granted. Re-running OAuth makes GitHub the authority, which is the only
+source that cannot be forged by editing an address bar. For a user who has already authorised the
+App the redirect is silent, so the cost is one hop.
+
+**Consequences.** The path that widens a session is the same path that created it, so there is one
+place to audit rather than two. The repository sync also happens there, which means no unauthenticated
+request can cause writes on behalf of an installation.

@@ -110,7 +110,7 @@ CODESHERIFF/
 │   ├── engine/           # Fusion, calibration. May NOT import a DB client.
 │   └── storage/          # SQLAlchemy models, Alembic, pgvector precedent store
 ├── apps/
-│   ├── api/              # FastAPI: verify HMAC, enqueue, 202. No analysis.  (stub — Ch 6)
+│   ├── api/              # FastAPI: sign-in + repo listing (Ch 5); HMAC + enqueue (Ch 6)
 │   ├── worker/           # Celery: owns the pipeline and all agents          (stub — Ch 6)
 │   └── dashboard/        # Next.js 16 — rendering layer only. Shell + mock data (Ch 4)
 └── docs/history/         # Superseded specs, kept for provenance
@@ -169,6 +169,13 @@ project; agents that failed the same way would add nothing to a probability esti
 - Threshold selected **only** on the validation split
 - Test split evaluated **exactly once**, at the end
 
+**Sign-in and access.** The dashboard never talks to GitHub and holds no secret; `apps/api` owns the
+OAuth flow. What a user may see is read from `GET /user/installations` at sign-in and stored on their
+session — there is no permissions table, and an empty installation list returns nothing rather than
+everything (D-035). The database holds no GitHub token and no session token, only a SHA-256 of the
+cookie (D-036). A URL parameter never widens a session: the installation callback re-derives
+everything through OAuth (D-037).
+
 **Security.** Untrusted PR code executes only in the sandbox (deny-by-default network, ephemeral
 filesystem, resource caps) and never on a host holding database credentials. Source code lives in
 memory and ephemeral storage only; persisted records hold findings, evidence and hashes — never
@@ -217,7 +224,7 @@ uv run pytest                    # all packages
 uv run pytest packages/agent_static
 uv run ruff check . && uv run ruff format --check . && uv run mypy .
 uv run lint-imports              # agent + storage boundary enforcement — must stay green
-uv run uvicorn codesheriff_api.main:app --reload   # health endpoint only for now
+uv run uvicorn codesheriff_api.main:app --reload   # /health, /auth/*, /repositories
 
 # Database (Chapter 3). Alembic owns the schema; never Base.metadata.create_all.
 docker compose up -d postgres
@@ -233,16 +240,26 @@ The dashboard is a separate npm project, not a uv workspace member (Chapter 4):
 
 ```bash
 cd apps/dashboard
-npm run dev                      # http://localhost:3000, mock data, no backend needed
+npm run dev                      # http://localhost:3000 — sign-in needs the API on :8000
 npm run lint && npm run build    # the two frontend gates — must stay green
 ```
 
-All five Python gates and both frontend gates are green as of Chapter 4. `ruff` and `mypy` are
+`NEXT_PUBLIC_API_BASE_URL` is inlined at **build** time, not read at runtime. Changing which API the
+dashboard talks to means rebuilding it.
+
+Signing in needs a registered GitHub App — `docs/github-app-setup.md`. Without one the API answers
+`501` naming the missing variable rather than failing at import, so `/health` works on a machine
+that has never seen a `.pem`.
+
+All five Python gates and both frontend gates are green as of Chapter 5. `ruff` and `mypy` are
 configured **once**, in the root `pyproject.toml` — a per-package `[tool.ruff]` silently shadows it
 with a different rule set, which is how the agent packages went unlinted (D-023).
 
-**Tests must never make live API calls.** Enforced via recorded responses; `conftest.py` should
-hard-fail if a live call occurs without an explicit flag.
+**Tests must never make live API calls.** `apps/api/tests/conftest.py` fails any non-loopback socket
+connection unless `CODESHERIFF_ALLOW_LIVE_CALLS` is set — a guard at the socket layer, so a forgotten
+mock cannot leak a real request. GitHub is substituted at the `GitHubGateway` interface rather than
+at the HTTP layer; the real `githubkit` client is exercised separately against an httpx
+`MockTransport`, with response bodies generated from githubkit's own schemas.
 
 ---
 

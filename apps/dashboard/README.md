@@ -20,25 +20,36 @@ npm run lint    # eslint — a gate, kept green
 npm run build   # next build, includes the TypeScript check — a gate, kept green
 ```
 
-No backend is required, and none is contacted. Every page renders from `src/lib/mock-data.ts`.
+Sign-in and the repository list need the API on `http://localhost:8000` and a registered GitHub App
+(`docs/github-app-setup.md`). The audits, findings and settings pages still render from
+`src/lib/mock-data.ts` and need no backend at all.
+
+`NEXT_PUBLIC_API_BASE_URL` selects the API origin. Next.js inlines `NEXT_PUBLIC_*` at **build**
+time, so changing it means rebuilding, not restarting. Default: `http://localhost:8000`.
 
 ## What is real and what is not
 
 | Path | State |
 |---|---|
 | `src/lib/types.ts` | Mirrors contract v2.0.0. Real shapes; keep in step with `packages/contracts`. |
-| `src/lib/mock-data.ts` | Fixtures. Deleted when Chapter 15 lands the read API. |
-| `src/lib/session.ts` | **Placeholder that protects nothing.** Chapter 5 replaces it. |
-| `src/app/(protected)/` | Route structure and shell. Pages are thin; each names the chapter that fills it. |
+| `src/lib/mock-data.ts` | Fixtures for audits and findings. Deleted when Chapter 15 lands the read API. |
+| `src/lib/api.ts` | Real calls to the FastAPI edge. The only place this app talks to a backend. |
+| `src/app/sign-in/` | Real. A plain link into the API's OAuth flow — not a fetch, because the flow is a sequence of top-level navigations. |
+| `src/app/(protected)/repositories/` | Real data: keyset infinite scroll and the analysis toggle. |
+| `src/app/(protected)/audits`, `findings`, `settings` | Still mock data; Chapters 15 and 16. |
 | `src/components/posterior.tsx` | Real, and load-bearing — see below. |
 
-## Two rules this scaffold encodes
+## Three rules this app encodes
 
 **No probability reaches the screen bare.** Every posterior renders through `<Posterior>`, which
 reads `calibration.isProvisional` and marks the number as an uncalibrated estimate while it is
 true — which it will be until Chapter 14 fits likelihood ratios on the calibration split (D-010).
 A confident number with nothing behind it is the failure this project exists to attack; the UI must
 not reproduce it.
+
+**No secret and no GitHub call lives here.** §6 makes this a rendering layer: the API owns the OAuth
+client secret, exchanges the code, and sets an HttpOnly session cookie this JavaScript cannot read.
+Every call sends `credentials: "include"`, and the API allows exactly one origin.
 
 **Silences and abstentions are shown, not only detections.** An agent that ran and found nothing is
 evidence; an agent that could not run is not. Collapsing them into one "no finding" chip would
