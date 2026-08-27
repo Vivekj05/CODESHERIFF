@@ -17,7 +17,7 @@ One chapter per session. Start a session by reading this file, take the first ch
 
 ## Where the project actually is
 
-Roughly: **v0.1 partially built, v0.3–v0.5 built as facades.**
+Roughly: **v0.1 partially built, v0.2 contract frozen, v0.3–v0.5 built as facades.**
 
 Four packages exist with a passing test suite and a webhook that reaches GitHub. But the conformance
 audit found three of four analysis components non-functional, the fusion engine implementing the
@@ -26,10 +26,17 @@ numeric is calibrated, because no corpus exists.
 
 The test suite reports 100% and cannot detect any of this.
 
+As of Chapter 2 the workspace installs, runs and passes its four gates, and the contract every other
+component serialises is frozen at v2.0.0. **The analysis components are still the shells the audit
+described** — Chapter 2 made them speak the right contract, not do the right work. The taint engine
+still builds a def-use graph and discards it; the context agent's reasoning is still four substring
+tests; the runtime agent still does not exist; the webhook still has no HMAC verification. Each has
+a chapter.
+
 | Version | Goal | Status |
 |---|---|---|
 | v0.1 | webhook → diff parsed → comment posted | ⚠️ posts comments; no HMAC, no queue, per-file units |
-| v0.2 | contracts frozen + corpus with committed splits | ⚠️ contracts non-conformant; **no corpus at all** |
+| v0.2 | contracts frozen + corpus with committed splits | ⚠️ contracts frozen at v2.0.0 (Ch 2); **no corpus at all** |
 | v0.3 | Semgrep backend + fusion engine | ⚠️ Semgrep runner works; fusion has 7 defects |
 | v0.4 | taint engine | ⚠️ **no taint engine** — def-use graph discarded; line cross-product |
 | v0.5 | semantic agent | ⚠️ runs; exemplars never loaded, gate incomplete, no size check |
@@ -74,26 +81,49 @@ Also delivered: `README.md` rewritten (was `ReadME.md`, describing a placeholder
 and Redis, Python pinned to 3.12, `.gitignore` rewritten (`uv.lock` deliberately committed —
 calibration must be reproducible).
 
-## Chapter 2 — Contracts frozen + workspace green ⬜
+## Chapter 2 — Contracts frozen + workspace green ✅
 
 **The gate on everything.** Nothing else can start: the DB schema stores `Evidence`, the API
 serialises it, the dashboard renders it.
 
-Rewrite `packages/contracts` per `AUDIT.md` Tier 1:
+**Delivered.** Contract v2.0.0 (`packages/contracts`), D-019 through D-024:
 
-- `finding_key = sha256(f"{file}::{qualified_symbol}::{cwe}")[:16]` — **no sink expression** (D-004)
+- `finding_key(file, qualified_symbol, cwe)` — **no sink expression** (D-004)
 - Three evidence kinds: `DETECTION` / `SILENCE` / `ABSTENTION` (D-005)
-- `covered_cwes` on SILENCE (D-006)
+- `covered_cwes` on SILENCE, rejected if empty (D-006, D-020)
 - `IN_SCOPE_CWES` closed set: 22, 78, 79, 89, 94, 502, 639, 798, 862, 918
 - `ChangeUnit`: `pre_src` nullable, plus `decorators`, `enclosing_class` (D-013)
-- `pr_context` separate, never inside `ChangeUnit` (D-014)
-- `analyze(unit) -> list[Evidence]` — **remove `anchors`** (D-008)
+- `PRContext` separate, never inside `ChangeUnit` (D-014)
+- `analyze(unit) -> list[Evidence]` — `anchors` removed from all three agents, the orchestrator and
+  the context CLI; the orchestrator now fans out in one `asyncio.gather` (D-008, D-022)
 
-Rewire every agent import to `codesheriff_contracts`. Get `uv sync`, `pytest`, `ruff`, `mypy` and
-`lint-imports` green.
+Beyond the plan, each forced by the above and recorded in `DECISIONS.md`:
 
-**Done when:** `uv run lint-imports` passes, a deliberate agent→agent import fails CI, and the twin
-fixtures load against the new contract.
+- **Non-detections carry no `finding_key`**, enforced by a validator. Closes both raw-string
+  bypasses (`abstain:{unit_id}:{reason}` and `abstention:all_agents`) in one move (D-019).
+- **`ChangeUnit.key_for(cwe)` is the only sanctioned way to build a key.** Removing the sink
+  expression closes one route to divergent keys; leaving each agent to assemble the symbol name
+  would open another (D-019).
+- **Both static backends deduplicate per key** — with the sink expression gone, several source-sink
+  pairs in one function collapse onto one key, and emitting each would apply one agent's likelihood
+  ratio several times to a single finding (D-019).
+- **Out-of-scope CWEs are dropped, not relabelled.** Semgrep's `CWE-200` default is gone (D-021).
+- **Agents emit SILENCE where they returned `[]`**, so evidence can lower a posterior at all.
+
+**Closes** `AUDIT.md` 1.1, 1.2, 1.3, 1.5, and 3.10 early (see D-021 — the hallucination gate is where
+`IN_SCOPE_CWES` is enforced for the LLM path, and the other two weakened checks sat on adjacent
+lines). `AUDIT.md` 1.4 stays open by design: iterating all agents needs fitted ratios for SILENCE,
+so it lands with Chapter 9 and Chapter 14. The marker is in `fusion/bayes.py`.
+
+**Two defects found by running the toolchain for the first time** (D-020, D-023). The static agent's
+`rules_dir` was CWD-relative *and* the rules sat outside the package, so the installed agent could
+never have loaded them — from the workspace root the catalog loaded empty and the taint engine
+reported silence on every unit. And three package distributions were named such that `uv sync` could
+not resolve the workspace at all. Chapter 1 wrote the workspace config but never ran it.
+
+**Verified.** 69 tests pass · `ruff check` and `ruff format --check` clean · `mypy --strict` clean
+across 57 source files · `lint-imports` 3 contracts kept · a deliberate `static_agent ->
+semantic_agent` import was added and correctly failed `lint-imports`, then removed.
 
 ## Chapter 3 — Database: SQLAlchemy + Alembic + pgvector ⬜
 

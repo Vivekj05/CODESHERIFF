@@ -1,7 +1,7 @@
 """Tests for self-consistency finding aggregation."""
 
+from codesheriff_contracts import ChangeUnit
 from semantic_agent.consistency import aggregate_self_consistency
-from semantic_agent.contracts import ChangeUnit
 from semantic_agent.schema import LLMFinding, LLMResponse
 
 

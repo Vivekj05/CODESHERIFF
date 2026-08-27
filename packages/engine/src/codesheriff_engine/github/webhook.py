@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
-from fastapi import APIRouter, Header, HTTPException, Request
+from typing import Any
+
 import requests
+from fastapi import APIRouter, Header, Request
 
 from codesheriff_engine.config import EngineConfig
 from codesheriff_engine.github.parser import parse_pr_files_to_change_units
@@ -16,7 +17,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def fetch_pr_files(repo_full_name: str, pr_number: int, token: str | None, api_base: str) -> List[Dict[str, Any]]:
+def fetch_pr_files(
+    repo_full_name: str, pr_number: int, token: str | None, api_base: str
+) -> list[dict[str, Any]]:
     """Fetch changed files for a pull request from GitHub API."""
     url = f"{api_base.rstrip('/')}/repos/{repo_full_name}/pulls/{pr_number}/files"
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "CodeSheriff-Engine"}
@@ -26,7 +29,8 @@ def fetch_pr_files(repo_full_name: str, pr_number: int, token: str | None, api_b
     try:
         resp = requests.get(url, headers=headers, timeout=10.0)
         if resp.status_code == 200:
-            return resp.json()
+            files: list[dict[str, Any]] = resp.json()
+            return files
         logger.warning("Failed to fetch PR files: status %s %s", resp.status_code, resp.text)
         return []
     except Exception as e:
@@ -38,7 +42,7 @@ def fetch_pr_files(repo_full_name: str, pr_number: int, token: str | None, api_b
 async def github_webhook(
     request: Request,
     x_github_event: str = Header(default="pull_request"),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Receive and process incoming GitHub Pull Request webhook events."""
     config = EngineConfig.load()
     payload = await request.json()
@@ -64,7 +68,9 @@ async def github_webhook(
     logger.info("Processing PR #%s in '%s' (action: %s)", pr_number, repo_full_name, action)
 
     # 1. Fetch changed files
-    pr_files = fetch_pr_files(repo_full_name, pr_number, config.github_token, config.github_api_base)
+    pr_files = fetch_pr_files(
+        repo_full_name, pr_number, config.github_token, config.github_api_base
+    )
     if not pr_files:
         return {"status": "completed", "message": "No files found in PR diff."}
 
@@ -82,7 +88,9 @@ async def github_webhook(
 
     # 3. Run Multi-Agent Orchestration & Bayesian Fusion
     orchestrator = Orchestrator(config=config)
-    fusion_results = await orchestrator.analyze_change_units(change_units, run_debate=config.enable_debate)
+    fusion_results = await orchestrator.analyze_change_units(
+        change_units, run_debate=config.enable_debate
+    )
 
     # 4. Generate Markdown Comment
     comment_markdown = format_github_comment(fusion_results, pr_title=pr_title)

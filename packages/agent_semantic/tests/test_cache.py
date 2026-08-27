@@ -1,6 +1,7 @@
 """Tests for LLMCache module."""
 
 from pathlib import Path
+
 from semantic_agent.llm.cache import LLMCache
 
 

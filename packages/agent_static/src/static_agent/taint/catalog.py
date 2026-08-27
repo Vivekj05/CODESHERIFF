@@ -2,7 +2,8 @@
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
+
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -31,15 +32,15 @@ class RuleSanitizer(BaseModel):
 
     id: str
     match: str
-    clears: List[str] = Field(default_factory=list)
+    clears: list[str] = Field(default_factory=list)
 
 
 class Catalog(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    sources: Dict[str, List[RuleSource]] = Field(default_factory=dict)
-    sinks: Dict[str, List[RuleSink]] = Field(default_factory=dict)
-    sanitizers: Dict[str, List[RuleSanitizer]] = Field(default_factory=dict)
+    sources: dict[str, list[RuleSource]] = Field(default_factory=dict)
+    sinks: dict[str, list[RuleSink]] = Field(default_factory=dict)
+    sanitizers: dict[str, list[RuleSanitizer]] = Field(default_factory=dict)
 
     @classmethod
     def load_from_dir(cls, rules_dir: Path) -> "Catalog":
@@ -48,7 +49,7 @@ class Catalog(BaseModel):
         sinks_path = rules_dir / "sinks.yml"
         sanitizers_path = rules_dir / "sanitizers.yml"
 
-        def _load_yaml(path: Path) -> Dict[str, Any]:
+        def _load_yaml(path: Path) -> dict[str, Any]:
             if not path.exists():
                 return {}
             try:
@@ -58,8 +59,8 @@ class Catalog(BaseModel):
             except Exception:
                 return {}
 
-        def _parse_rules(raw_dict: Dict[str, Any], model_cls: Any) -> Dict[str, List[Any]]:
-            parsed: Dict[str, List[Any]] = {}
+        def _parse_rules(raw_dict: dict[str, Any], model_cls: Any) -> dict[str, list[Any]]:
+            parsed: dict[str, list[Any]] = {}
             for lang, items in raw_dict.items():
                 if not isinstance(items, list):
                     continue
@@ -87,4 +88,3 @@ class Catalog(BaseModel):
             return bool(re.search(pattern, text))
         except re.error:
             return False
-

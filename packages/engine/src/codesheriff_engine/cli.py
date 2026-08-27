@@ -3,22 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sys
 from pathlib import Path
-from typing import Optional
+
 import typer
 import uvicorn
 
 # Ensure UTF-8 output encoding on Windows consoles
 if hasattr(sys.stdout, "reconfigure"):
-    try:
+    with contextlib.suppress(Exception):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
 
+from codesheriff_contracts import CONTRACT_VERSION, ChangeUnit, EvidenceKind
 from codesheriff_engine.config import EngineConfig
-from codesheriff_engine.contracts import CONTRACT_VERSION, ChangeUnit
 from codesheriff_engine.github.reporter import format_github_comment
 from codesheriff_engine.orchestrator import Orchestrator
 
@@ -39,7 +38,9 @@ def version() -> None:
 def run(
     unit_path: Path = typer.Argument(..., help="Path to ChangeUnit JSON file"),
     debate: bool = typer.Option(True, help="Enable multi-agent debate on conflicting scores"),
-    output_markdown: bool = typer.Option(False, "--markdown", "-m", help="Output formatted GitHub Markdown"),
+    output_markdown: bool = typer.Option(
+        False, "--markdown", "-m", help="Output formatted GitHub Markdown"
+    ),
 ) -> None:
     """Run full multi-agent Bayesian security audit on a ChangeUnit JSON."""
     if not unit_path.exists():
@@ -51,7 +52,7 @@ def run(
         unit = ChangeUnit.model_validate(raw_data)
     except Exception as e:
         typer.secho(f"Error: Failed to parse ChangeUnit JSON: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
     config = EngineConfig.load()
     orchestrator = Orchestrator(config=config)
@@ -68,7 +69,11 @@ def run(
         return
 
     typer.echo("\n" + "=" * 60)
-    typer.secho(f"[+] BAYESIAN FUSION AUDIT REPORT ({len(results)} findings)", fg=typer.colors.BRIGHT_WHITE, bold=True)
+    typer.secho(
+        f"[+] BAYESIAN FUSION AUDIT REPORT ({len(results)} findings)",
+        fg=typer.colors.BRIGHT_WHITE,
+        bold=True,
+    )
     typer.echo("=" * 60)
 
     for idx, f in enumerate(results, start=1):
@@ -76,7 +81,8 @@ def run(
         color = typer.colors.RED if f.is_alert_worthy else typer.colors.GREEN
 
         typer.secho(
-            f"\n#{idx} {alert_tag} {f.title or 'Security Finding'} | Posterior P(V): {f.posterior_probability * 100:.1f}%",
+            f"\n#{idx} {alert_tag} {f.title or 'Security Finding'} | "
+            f"Posterior P(V): {f.posterior_probability * 100:.1f}%",
             fg=color,
             bold=True,
         )
@@ -86,7 +92,11 @@ def run(
         typer.echo("   Agent Breakdown:")
 
         for ev in f.evidence_list:
-            ev_status = "[ABSTAIN]" if ev.abstained else f"Score: {ev.raw_score:.2f}"
+            ev_status = (
+                f"Score: {ev.raw_score:.2f}"
+                if ev.kind is EvidenceKind.DETECTION
+                else f"[{ev.kind.value.upper()}]"
+            )
             typer.echo(f"     - {ev.agent_id:<18} : {ev_status:<12} | {ev.explanation[:70]}")
 
         if f.consensus_rationale:
@@ -102,7 +112,9 @@ def serve(
     reload: bool = typer.Option(False, help="Enable auto-reload"),
 ) -> None:
     """Start the FastAPI GitHub Webhook server."""
-    typer.secho(f"[*] Starting CodeSheriff Engine server on {host}:{port}...", fg=typer.colors.GREEN)
+    typer.secho(
+        f"[*] Starting CodeSheriff Engine server on {host}:{port}...", fg=typer.colors.GREEN
+    )
     uvicorn.run("codesheriff_engine.main:app", host=host, port=port, reload=reload)
 
 

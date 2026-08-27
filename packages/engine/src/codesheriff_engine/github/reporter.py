@@ -3,19 +3,21 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 import requests
 
+from codesheriff_contracts import EvidenceKind
 from codesheriff_engine.fusion.bayes import FusionResult
 
 logger = logging.getLogger(__name__)
 
 
 def format_github_comment(
-    fusion_results: List[FusionResult],
+    fusion_results: list[FusionResult],
     pr_title: str = "",
 ) -> str:
-    """Format Bayesian fusion results into a rich, structured Markdown review comment for GitHub PRs."""
+    """Format fusion results into a structured Markdown review comment for a PR."""
     comment = "## 🛡️ CodeSheriff Security Review\n\n"
     if pr_title:
         comment += f"> PR: **{pr_title}**\n\n"
@@ -29,7 +31,10 @@ def format_github_comment(
         )
         return comment
 
-    comment += f"⚠️ **Security Alert**: Detected **{len(alert_findings)}** potential vulnerability issue(s) requiring attention.\n\n"
+    comment += (
+        f"⚠️ **Security Alert**: Detected **{len(alert_findings)}** potential "
+        "vulnerability issue(s) requiring attention.\n\n"
+    )
 
     for idx, f in enumerate(alert_findings, start=1):
         prob_pct = f"{f.posterior_probability * 100:.1f}%"
@@ -47,10 +52,18 @@ def format_github_comment(
         comment += "| :--- | :--- | :--- | :--- |\n"
 
         for item in f.evidence_list:
-            if item.abstained:
+            if item.kind is EvidenceKind.ABSTENTION:
                 stance = "⚪ Abstain"
                 score_str = "—"
-                rationale_str = f"Abstained: {item.abstain_reason or item.explanation}"
+                rationale_str = f"Could not analyse: {item.reason or item.explanation}"
+            elif item.kind is EvidenceKind.SILENCE:
+                # Shown, not hidden. That an agent looked and found nothing is part of
+                # why the posterior is what it is; omitting it makes the number
+                # unexplainable (PLAN.md Chapter 16).
+                covered = ", ".join(sorted(item.covered_cwes))
+                stance = "🔇 Silent"
+                score_str = "—"
+                rationale_str = f"Analysed, no finding. Covers: {covered}"
             elif item.raw_score >= 0.5:
                 stance = "⚠️ Alert"
                 score_str = f"`{item.raw_score:.2f}`"
@@ -68,7 +81,8 @@ def format_github_comment(
         comment += "\n---\n"
 
     comment += (
-        "\n*Automated review by [CodeSheriff](https://github.com/) Bayesian Multi-Agent Security Engine.*"
+        "\n*Automated review by [CodeSheriff](https://github.com/) "
+        "Bayesian Multi-Agent Security Engine.*"
     )
     return comment
 
@@ -77,9 +91,9 @@ def post_pr_review_comment(
     repo_full_name: str,
     pr_number: int,
     comment_body: str,
-    token: Optional[str] = None,
+    token: str | None = None,
     api_base: str = "https://api.github.com",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Post formatted markdown review comment back to GitHub Pull Request."""
     if not token or "your_github" in token.lower():
         logger.warning("GITHUB_TOKEN is missing or placeholder. Skipping comment post.")

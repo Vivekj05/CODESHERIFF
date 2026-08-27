@@ -374,3 +374,146 @@ until D-017 is implemented.
 explaining what each gets wrong and why. Deleting them would remove the paper trail for the report's
 account of how the design diverged from its implementation — and that account is the most useful
 thing this repository currently contains.
+
+---
+
+## D-019 — Contract v2.0.0: three evidence kinds, and a key that two agents can agree on
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Implements** D-004, D-005, D-006, D-013, D-014 ·
+**Closes** `AUDIT.md` 1.1, 1.2, 1.3, 1.5 · **Chapter:** 2
+
+**Decision.** Rewrite `packages/contracts` and rewire all four packages onto it. The contract now
+carries `EvidenceKind` (`DETECTION` / `SILENCE` / `ABSTENTION`), `covered_cwes` on SILENCE, the
+closed `IN_SCOPE_CWES` set, `PRContext` as a separate model, `pre_src` nullable, `decorators` and
+`enclosing_class` on `ChangeUnit`, and `finding_key(file, qualified_symbol, cwe)` — no sink
+expression.
+
+**Non-detections carry no `finding_key` at all.** This is the part that goes beyond the plan and is
+worth stating plainly. SILENCE and ABSTENTION are statements about a *unit*, not about a finding, so
+there is nothing for them to be keyed by. Making the field `None` and enforcing it in a validator
+closes both raw-string bypasses in one move — `contracts.py`'s `f"abstain:{unit_id}:{reason}"` and
+`fusion/bayes.py`'s `"abstention:all_agents"` — and means no non-finding can ever enter the key
+space again. A test asserts the rejection.
+
+**`ChangeUnit.qualified_symbol` and `ChangeUnit.key_for(cwe)` are the only sanctioned way to build a
+key.** Removing the sink expression fixes one route to divergent keys; leaving each agent to
+assemble the symbol name itself would immediately open another. Every call site now goes through the
+unit.
+
+**Consequence — the static agent had to learn to deduplicate.** Once the key excludes the sink
+expression, several source-sink pairs inside one function collapse onto one key. Emitting each
+would apply one agent's likelihood ratio several times to a single finding, which is not what
+conditional independence *across agents* licenses. Both static backends now keep the
+highest-scoring evidence per key.
+
+---
+
+## D-020 — SILENCE requires a non-empty `covered_cwes`, so an agent with no rules must abstain
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Refines** D-006 · **Chapter:** 2
+
+**Decision.** The contract rejects a SILENCE with empty `covered_cwes`. An agent that ran but
+covered nothing has not produced evidence of absence — it has failed to look, which is ABSTENTION.
+
+**Why this surfaced.** `StaticConfig.rules_dir` defaulted to a bare relative `Path("rules")`,
+resolved against the current working directory. It only ever worked when tests were run from inside
+`packages/agent_static/`. From the workspace root the catalog loaded empty, and the taint engine
+reported *silence* on every unit — an agent with zero rules loaded telling the fusion engine it had
+checked and found the code clean. That is the most dangerous statement an agent in this design can
+make, and it took the contract validator to expose it.
+
+Two fixes: the rules moved to `src/static_agent/rules/` (they were outside the package and therefore
+absent from the built wheel — the installed agent could never have found them), `rules_dir` now
+defaults package-relative, and the engine returns an explicit `rules_unavailable` abstention when the
+catalog is empty for the unit's language.
+
+---
+
+## D-021 — Out-of-scope CWEs are dropped, never relabelled
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Implements** the `IN_SCOPE_CWES` closed set ·
+**Chapter:** 2
+
+**Decision.** `Evidence.detection()` rejects any CWE outside `IN_SCOPE_CWES`. The Semgrep mapper,
+which previously defaulted unmatched rules to `CWE-200`, now returns `None` and the runner drops the
+result.
+
+**Why.** `CWE-200` is not in the closed set, so every such finding was an assertion about a CWE the
+project has never calibrated against and does not claim to cover. Inventing scope is worse than
+missing a finding: a miss shows up in recall, an invention corrupts the denominator of every
+calibrated number.
+
+The semantic agent's hallucination gate gained the same check. That check is listed under Chapter 11
+in `PLAN.md`, but the gate is where `IN_SCOPE_CWES` has to be enforced for the LLM path, so it landed
+here — along with the other two weakened checks in `AUDIT.md` 3.10, since they sat on adjacent lines:
+the file comparison is now exact rather than basename (which accepted a finding about
+`app/models/user.py` against `tests/user.py`), and the `+ 5` line-number slack is gone, since
+accepting evidence lines that do not exist in the unit is precisely the hallucination the gate is
+for. `AUDIT.md` 3.9, 3.11 and 3.12 remain open for Chapter 11.
+
+---
+
+## D-022 — Agents run blind: the orchestrator's two-phase anchor pass is deleted
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Implements** D-008 · **Closes** `AUDIT.md` 1.5 ·
+**Chapter:** 2
+
+**Decision.** Remove the `anchors` parameter from `analyze()` in all three agents, the engine's
+`Orchestrator`, and the context agent's `--anchor` CLI flag. `Orchestrator.analyze_change_unit` now
+runs every agent in one `asyncio.gather` fan-out.
+
+**Why the parameter had to go rather than default to `None`.** As long as the signature accepted
+anchors, the anchored path remained reachable and would be reintroduced by the first person who
+found it convenient. The context agent's `no_anchor` abstention is gone with it — that abstention
+made the agent architecturally incapable of contributing anything the static agent had not already
+found, and the static agent has no CWE-862 sink, so the anchor set could never contain the only key
+the context agent produces. It returned `[]` on every input, and its test suite never noticed
+because the test called the internal function directly instead of `analyze()`.
+
+---
+
+## D-023 — One toolchain configuration, at the workspace root
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 2
+
+**Decision.** Delete the per-package `[tool.ruff]` and `[tool.mypy]` sections from the three agent
+packages. The root `pyproject.toml` configures both for the whole workspace.
+
+**Why.** Those sections declared only `line-length` and `target-version`, but a local `[tool.ruff]`
+shadows the root config for that package's files and silently applies a *different* rule set — the
+agent packages were being linted without the root's import-sorting and naming rules at all. Four
+copies of a configuration drifting apart is the same failure mode as four copies of `contracts.py`,
+and it is worth fixing the same way.
+
+Also settled here, all of it discovered by running the tools for the first time:
+
+- Three agent distributions renamed to `codesheriff-agent-{static,semantic,context}`, matching their
+  directories and the names the root workspace config and `apps/worker` already referenced.
+  `uv sync` could not resolve the workspace until they agreed.
+- `pytest` runs with `--import-mode=importlib`: several packages have a `tests/test_agent.py`, and
+  the default prepend mode collides on module name.
+- `mypy` excludes `tests/` — every package has a `tests/conftest.py`, and mypy resolves them to one
+  module name and refuses to continue. There is no way to disambiguate while each package keeps a
+  directory called `tests`. Strict checking covers all 57 source files.
+- `import-linter` needs `include_external_packages = true`, because the forbidden-modules contract
+  names third-party packages.
+- `ruff format` was run across the tree once, establishing a formatted baseline.
+
+**Verified, not assumed.** A deliberate `static_agent -> semantic_agent` import was added and
+`lint-imports` failed on it with the expected message; the probe was then removed.
+
+---
+
+## D-024 — `covered_cwes` serialises as a sorted list
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 2
+
+**Decision.** `Evidence.covered_cwes` is a `frozenset` in Python and a sorted list on the wire, via a
+Pydantic field serialiser.
+
+**Why.** A `frozenset` is not JSON-serialisable, and `Evidence` has to survive a round trip through
+PostgreSQL (Chapter 3), the REST API (Chapter 15) and the dashboard (Chapter 16) — the CLI crashed
+on `json.dumps` the first time an agent emitted a SILENCE. Sorted rather than arbitrary order
+because serialised evidence must be byte-stable: snapshot tests and any content hash over an
+evidence record depend on it.
+

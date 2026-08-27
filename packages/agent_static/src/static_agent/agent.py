@@ -1,41 +1,39 @@
 """Main StaticAgent interface class."""
 
-from typing import List, Optional, Set
+from codesheriff_contracts import ChangeUnit, Evidence
 from static_agent.config import StaticConfig
-from static_agent.contracts import ChangeUnit, Evidence
 from static_agent.semgrep.runner import run_semgrep
 from static_agent.taint.engine import analyze_taint
 
 
 class StaticAgent:
     """Static analysis agent for CodeSheriff."""
+
     id: str = "structural.taint"
     version: str = "0.1.0"
 
-    def __init__(self, config: Optional[StaticConfig] = None) -> None:
+    def __init__(self, config: StaticConfig | None = None) -> None:
         self.config = config or StaticConfig()
 
-    def analyze(
-        self, unit: ChangeUnit, anchors: Optional[Set[str]] = None
-    ) -> List[Evidence]:
-        """Analyze a ChangeUnit for vulnerabilities.
-        
-        Never raises exceptions. Returns list of Evidence or Evidence.abstention.
+    def analyze(self, unit: ChangeUnit) -> list[Evidence]:
+        """Analyse a ChangeUnit for vulnerabilities.
+
+        Runs blind: no `anchors` parameter (D-008). Anchoring on another agent's
+        findings correlates the agents and breaks the conditional independence the
+        fusion math assumes, which is the one thing that makes a fused posterior
+        mean anything.
+
+        Never raises. Every failure path returns an abstention with a distinct reason.
         """
         try:
-            # 1. Run Taint Engine
             taint_evidence = analyze_taint(unit, self.config)
-
-            # 2. Run Semgrep Subprocess Runner
             semgrep_evidence = run_semgrep(unit, self.config)
 
-            # Combine evidence, filtering out duplicate abstentions if findings exist
-            findings = [e for e in taint_evidence + semgrep_evidence if not e.abstained]
-            if findings:
-                return findings
-
-            abstentions = [e for e in taint_evidence + semgrep_evidence if e.abstained]
-            return abstentions
+            # Return everything both backends said, detections and silences alike.
+            # Collapsing `structural.taint` and `structural.semgrep` into a single
+            # fused contribution is the engine's job (D-011, PLAN.md Chapter 9);
+            # discarding one backend's statement here would hide it from that step.
+            return taint_evidence + semgrep_evidence
 
         except Exception as e:
             return [
@@ -44,6 +42,6 @@ class StaticAgent:
                     agent_version=self.version,
                     unit_id=unit.unit_id,
                     reason="internal_error",
-                    explanation=f"StaticAgent analysis failed unexpectedly: {str(e)}",
+                    explanation=f"StaticAgent analysis failed unexpectedly: {e}",
                 )
             ]

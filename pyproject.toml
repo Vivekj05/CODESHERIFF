@@ -37,9 +37,19 @@ codesheriff-engine = { workspace = true }
 target-version = "py312"
 line-length = 100
 src = ["packages/*/src", "apps/*/src"]
+# Never touch Markdown. `ruff format` reformats fenced Python blocks inside .md,
+# which silently rewrote the archived specs in docs/history/ — the provenance
+# record of how the design diverged from its implementation. Those files are
+# evidence; they are not code to be tidied.
+extend-exclude = ["*.md", "docs/history/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# typer.Argument()/typer.Option() in parameter defaults is how Typer declares a
+# CLI; B008 is a false positive against that idiom, not a defect to fix.
+"**/cli.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -47,11 +57,46 @@ strict = true
 warn_unreachable = true
 # The audit found dead code hidden behind `if False` (AUDIT.md 3.1). Keep this on.
 warn_unused_ignores = true
+# Type-check the shipped source. Every package has a tests/conftest.py, and mypy
+# resolves those to one module name and refuses to continue; there is no way to
+# disambiguate them while each package keeps a directory called `tests`.
+exclude = ["/tests/", "^build/"]
+mypy_path = [
+    "packages/contracts/src",
+    "packages/corpus/src",
+    "packages/agent_static/src",
+    "packages/agent_semantic/src",
+    "packages/agent_context/src",
+    "packages/agent_runtime/src",
+    "packages/engine/src",
+    "apps/api/src",
+    "apps/worker/src",
+]
+
+[[tool.mypy.overrides]]
+# Third-party packages without type information.
+module = [
+    "networkx.*",
+    "tree_sitter.*",
+    "tree_sitter_language_pack.*",
+    "yaml.*",
+    # Optional at runtime and not declared as dependencies. `chromadb` is in fact
+    # REJECTED (CLAUDE.md: pgvector instead) and its remaining import is drift
+    # that Chapter 12 removes; `sentence_transformers` arrives with the real
+    # embedder in the same chapter.
+    "chromadb.*",
+    "sentence_transformers.*",
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["packages", "apps"]
 python_files = ["test_*.py"]
-addopts = "--strict-markers"
+# Several packages have a tests/test_agent.py. Under the default prepend import
+# mode those collide on module name; importlib mode keeps them distinct without
+# scattering __init__.py through the test trees.
+addopts = "--strict-markers --import-mode=importlib"
+consider_namespace_packages = true
 
 # ---------------------------------------------------------------------------
 # Agent boundary enforcement (PROJECT_CONTEXT.md §5).
@@ -65,6 +110,9 @@ addopts = "--strict-markers"
 # right. This contract is what keeps it.
 # ---------------------------------------------------------------------------
 [tool.importlinter]
+# The "forbidden" contract below names third-party packages (sqlalchemy, celery,
+# fastapi, ...), so external imports have to be graphed too.
+include_external_packages = true
 root_packages = [
     "codesheriff_contracts",
     "static_agent",

@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
-from typing import Optional
+
 import typer
 
+from codesheriff_contracts import ChangeUnit, EvidenceKind
 from semantic_agent import __version__
 from semantic_agent.agent import SemanticAgent
 from semantic_agent.config import SemanticConfig
-from semantic_agent.contracts import ChangeUnit
 
 app = typer.Typer(
     name="semantic-agent",
@@ -27,7 +26,7 @@ def run(
         exists=True,
         readable=True,
     ),
-    output: Optional[Path] = typer.Option(
+    output: Path | None = typer.Option(
         None,
         "--output",
         "-o",
@@ -76,10 +75,10 @@ def bench(
         unit = ChangeUnit.model_validate(data)
         ev_list = agent.analyze(unit)
         for ev in ev_list:
-            if ev.abstained:
-                abstentions_count += 1
-            else:
+            if ev.kind is EvidenceKind.DETECTION:
                 findings_count += 1
+            else:
+                abstentions_count += 1
 
     typer.echo(f"Benchmark Complete: {len(files)} files processed.")
     typer.echo(f"Findings emitted: {findings_count}, Abstentions: {abstentions_count}")

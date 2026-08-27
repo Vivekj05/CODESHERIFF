@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
-from typing import Optional, Type
+
 import httpx
 from pydantic import BaseModel
 
@@ -16,9 +15,9 @@ class HostedLLMClient:
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         model: str = "gemini-1.5-flash",
-        base_url: Optional[str] = None,
+        base_url: str | None = None,
     ) -> None:
         self.api_key = api_key
         self.model = model
@@ -28,9 +27,9 @@ class HostedLLMClient:
         self,
         system_prompt: str,
         user_prompt: str,
-        schema: Type[BaseModel],
+        schema: type[BaseModel],
         temperature: float = 0.3,
-        seed: Optional[int] = None,
+        seed: int | None = None,
     ) -> str:
         """Call Gemini API and return raw response string formatted as JSON."""
         if not self.api_key:
@@ -41,32 +40,29 @@ class HostedLLMClient:
         headers = {"Content-Type": "application/json"}
 
         payload = {
-            "system_instruction": {
-                "parts": [{"text": system_prompt}]
-            },
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": user_prompt}]
-                }
-            ],
+            "system_instruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
             "generationConfig": {
                 "temperature": temperature,
                 "responseMimeType": "application/json",
-            }
+            },
         }
 
         if seed is not None:
-            payload["generationConfig"]["seed"] = seed
+            generation_config = payload["generationConfig"]
+            assert isinstance(generation_config, dict)
+            generation_config["seed"] = seed
 
         with httpx.Client(timeout=30.0) as client:
             resp = client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
-            
+
             try:
                 content = data["candidates"][0]["content"]["parts"][0]["text"]
                 return str(content)
             except (KeyError, IndexError) as err:
                 logger.error(f"Unexpected response structure from Gemini API: {data}")
-                raise RuntimeError(f"Failed to extract candidate text from Gemini response: {err}")
+                raise RuntimeError(
+                    f"Failed to extract candidate text from Gemini response: {err}"
+                ) from err

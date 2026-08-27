@@ -1,12 +1,13 @@
 """Taint path artifact renderer."""
 
-from typing import Any, Dict, List
-from static_agent.contracts import Artifact
+from typing import Any
+
+from codesheriff_contracts import Artifact
 
 
-def render_taint_path(path_nodes: List[Dict[str, Any]]) -> Artifact:
+def render_taint_path(path_nodes: list[dict[str, Any]]) -> Artifact:
     """Format ordered list of path nodes into a taint_path Artifact."""
-    formatted_chain: List[Dict[str, Any]] = []
+    formatted_chain: list[dict[str, Any]] = []
     for step in path_nodes:
         formatted_chain.append(
             {

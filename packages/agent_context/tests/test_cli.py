@@ -1,7 +1,9 @@
 """Tests for Typer CLI commands in Context Agent."""
 
 from pathlib import Path
+
 from typer.testing import CliRunner
+
 from context_agent.cli import app
 
 runner = CliRunner()
@@ -28,4 +30,8 @@ def test_cli_ingest_and_run(tmp_path: Path, monkeypatch) -> None:
 
     run_res = runner.invoke(app, ["run", str(bypassing_file)])
     assert run_res.exit_code == 0
-    assert "no_anchor" in run_res.stdout
+    # Previously this asserted `no_anchor`: the CLI had no way to supply anchors, so
+    # the agent's only possible output was an abstention. It now runs blind (D-008)
+    # and reports what it actually found.
+    assert '"kind": "detection"' in run_res.stdout
+    assert "CWE-862" in run_res.stdout

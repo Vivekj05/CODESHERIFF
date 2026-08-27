@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Protocol, Type
+from typing import Protocol
+
 from pydantic import BaseModel
 
 
@@ -13,7 +14,7 @@ class LLMClient(Protocol):
         self,
         system_prompt: str,
         user_prompt: str,
-        schema: Type[BaseModel],
+        schema: type[BaseModel],
         temperature: float = 0.3,
         seed: int | None = None,
     ) -> str:

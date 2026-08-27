@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
+
 from context_agent.rag.embedder import LocalEmbedder
 from context_agent.rag.store import VectorStore
 
 
-def create_hybrid_pr_document(pr_data: Dict[str, Any]) -> str:
-    """Combine PR title, description, modified symbols, and code diff into one searchable document."""
+def create_hybrid_pr_document(pr_data: dict[str, Any]) -> str:
+    """Combine PR title, description, symbols and diff into one searchable document."""
     pr_id = pr_data.get("pr_id", "unknown-pr")
     title = pr_data.get("title", "")
     desc = pr_data.get("description", "")
@@ -29,7 +30,7 @@ Modified Symbols: {symbols}
 
 
 def ingest_pr(
-    pr_data: Dict[str, Any],
+    pr_data: dict[str, Any],
     store: VectorStore,
     embedder: LocalEmbedder,
 ) -> str:

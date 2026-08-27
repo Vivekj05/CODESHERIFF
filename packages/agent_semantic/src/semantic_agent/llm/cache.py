@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import sqlite3
 from pathlib import Path
-from typing import Optional
 
 
 class LLMCache:
@@ -37,13 +35,13 @@ class LLMCache:
         model: str,
         agent_version: str,
         temperature: float,
-        seed: Optional[int] = None,
+        seed: int | None = None,
     ) -> str:
         """Compute stable SHA-256 cache key."""
         raw = f"{system_prompt}|{user_prompt}|{model}|{agent_version}|{temperature}|{seed or 0}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-    def get(self, key: str) -> Optional[str]:
+    def get(self, key: str) -> str | None:
         """Retrieve cached response if exists."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()

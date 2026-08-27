@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
-from context_agent.contracts import ChangeUnit
+from typing import Any
+
+from codesheriff_contracts import ChangeUnit
 from context_agent.rag.embedder import LocalEmbedder
 from context_agent.rag.store import VectorStore
 
@@ -13,7 +14,7 @@ def retrieve_similar_prs(
     store: VectorStore,
     embedder: LocalEmbedder,
     top_k: int = 3,
-) -> Dict[str, List[Any]]:
+) -> dict[str, list[Any]]:
     """Generate vector embedding of new ChangeUnit and query vector store for top-K past PRs."""
     query_text = (
         f"File: {unit.file}\n"

@@ -2,6 +2,7 @@
 
 import pytest
 from pydantic import ValidationError
+
 from semantic_agent.schema import LLMFinding, LLMResponse
 
 
@@ -9,7 +10,9 @@ def test_valid_llm_finding() -> None:
     finding = LLMFinding(
         functional_intent="Execute database query",
         untrusted_data_sources=["request.args.get('id')"],
-        violated_safety_invariant="Query parameters are concatenated into SQL string without escaping.",
+        violated_safety_invariant=(
+            "Query parameters are concatenated into SQL string without escaping."
+        ),
         cwe="CWE-89",
         title="SQL Injection in get_user",
         file="app/api/users.py",

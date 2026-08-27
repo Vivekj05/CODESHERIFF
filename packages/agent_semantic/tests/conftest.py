@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+
 import pytest
-from semantic_agent.contracts import ChangeUnit
+
+from codesheriff_contracts import ChangeUnit
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

@@ -6,14 +6,14 @@ import json
 import math
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
-def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
     """Calculate cosine similarity between two vectors."""
     if not vec1 or not vec2 or len(vec1) != len(vec2):
         return 0.0
-    dot = sum(a * b for a, b in zip(vec1, vec2))
+    dot = sum(a * b for a, b in zip(vec1, vec2, strict=True))
     norm1 = math.sqrt(sum(a * a for a in vec1))
     norm2 = math.sqrt(sum(b * b for b in vec2))
     if norm1 == 0 or norm2 == 0:
@@ -32,6 +32,7 @@ class VectorStore:
 
         try:
             import chromadb
+
             client = chromadb.PersistentClient(path=str(self.storage_dir))
             self._chroma_collection = client.get_or_create_collection(
                 name="accepted_pull_requests",
@@ -57,7 +58,7 @@ class VectorStore:
     def count(self) -> int:
         """Return total count of ingested PR documents."""
         if self._chroma_collection:
-            return self._chroma_collection.count()
+            return int(self._chroma_collection.count())
         with sqlite3.connect(self._sqlite_path) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM prs")
@@ -68,8 +69,8 @@ class VectorStore:
         self,
         pr_id: str,
         hybrid_document: str,
-        embedding: List[float],
-        metadata: Dict[str, Any],
+        embedding: list[float],
+        metadata: dict[str, Any],
     ) -> None:
         """Store accepted PR document and vector embedding."""
         if self._chroma_collection:
@@ -83,17 +84,18 @@ class VectorStore:
 
         with sqlite3.connect(self._sqlite_path) as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO prs (id, document, embedding, metadata) VALUES (?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO prs (id, document, embedding, metadata) "
+                "VALUES (?, ?, ?, ?)",
                 (pr_id, hybrid_document, json.dumps(embedding), json.dumps(metadata)),
             )
             conn.commit()
 
     def query_similar_prs(
-        self, query_embedding: List[float], top_k: int = 3
-    ) -> Dict[str, List[Any]]:
+        self, query_embedding: list[float], top_k: int = 3
+    ) -> dict[str, list[Any]]:
         """Query top-K similar PRs by cosine similarity."""
         if self._chroma_collection:
-            res = self._chroma_collection.query(
+            res: dict[str, list[Any]] = self._chroma_collection.query(
                 query_embeddings=[query_embedding],
                 n_results=top_k,
             )
@@ -109,13 +111,15 @@ class VectorStore:
                 emb = json.loads(emb_str)
                 meta = json.loads(meta_str)
                 sim = cosine_similarity(query_embedding, emb)
-                records.append({
-                    "id": p_id,
-                    "document": doc,
-                    "metadata": meta,
-                    "similarity": sim,
-                    "distance": 1.0 - sim,
-                })
+                records.append(
+                    {
+                        "id": p_id,
+                        "document": doc,
+                        "metadata": meta,
+                        "similarity": sim,
+                        "distance": 1.0 - sim,
+                    }
+                )
 
         records.sort(key=lambda r: r["similarity"], reverse=True)
         top = records[:top_k]

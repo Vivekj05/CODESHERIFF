@@ -1,7 +1,7 @@
 """Tests for Tree-sitter CodeParser and symbols extraction."""
 
 from static_agent.taint.parse import CodeParser
-from static_agent.taint.symbols import extract_symbols, enclosing_symbol
+from static_agent.taint.symbols import enclosing_symbol, extract_symbols
 
 
 def test_code_parser_python() -> None:

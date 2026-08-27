@@ -115,15 +115,21 @@ CODESHERIFF/
 └── docs/history/         # Superseded specs, kept for provenance
 ```
 
-⚠️ **The layout is correct; the code inside it is not.** The restructure moved files and collapsed
-four vendored `contracts.py` copies into `packages/contracts/`. It did **not** fix any of the
-defects in `AUDIT.md`, and it deliberately left imports pointing at the deleted vendored copies —
-`PLAN.md` Chapter 2 rewires them along with the contract rewrite. Do not expect the test suite to run
-until then.
+⚠️ **The layout is correct and the workspace now runs; most of the code inside it is still not.**
+Chapter 2 froze the contract at v2.0.0, rewired every package onto it, and got `uv sync`, `pytest`,
+`ruff`, `mypy --strict` and `lint-imports` green. It did **not** fix the analysis defects in
+`AUDIT.md` — it made the agents speak the right contract, not do the right work. The taint engine
+still builds a def-use graph and discards it; the context agent is still four substring tests; the
+runtime agent still does not exist.
 
 The live webhook still sits at `packages/engine/src/codesheriff_engine/github/webhook.py` and is
 **not** mounted by `apps/api` — it has no HMAC verification (`AUDIT.md` 0.1). It moves to
 `apps/api` in Chapter 6, verified and enqueueing.
+
+**Building evidence.** Never construct `Evidence(...)` directly — use `Evidence.detection()`,
+`.silence()` or `.abstention()`. Never build a `finding_key` by hand — use `unit.key_for(cwe)`. Both
+rules exist because hand-rolled variants are exactly how the same bug came to have two keys
+(`AUDIT.md` 1.1). Returning `[]` from a successful analysis is a bug; that is what SILENCE is for.
 
 ---
 
@@ -198,13 +204,17 @@ multi-tenancy with billing, IDE plugins. JS/TS support is unscheduled until expl
 ## Commands
 
 ```bash
-uv sync                          # install the workspace
-uv run pytest                    # all packages  (will fail until PLAN.md Chapter 2 — see above)
+uv sync --all-packages           # install the workspace  (--all-packages, or members are skipped)
+uv run pytest                    # all packages
 uv run pytest packages/agent_static
-uv run ruff check . && uv run mypy .
+uv run ruff check . && uv run ruff format --check . && uv run mypy .
 uv run lint-imports              # agent boundary enforcement — must stay green
 uv run uvicorn codesheriff_api.main:app --reload   # health endpoint only for now
 ```
+
+All five are green as of Chapter 2. `ruff` and `mypy` are configured **once**, in the root
+`pyproject.toml` — a per-package `[tool.ruff]` silently shadows it with a different rule set, which
+is how the agent packages went unlinted (D-023).
 
 **Tests must never make live API calls.** Enforced via recorded responses; `conftest.py` should
 hard-fail if a live call occurs without an explicit flag.

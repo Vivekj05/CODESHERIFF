@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List, Optional
+
 import typer
 
+from codesheriff_contracts import ChangeUnit
 from context_agent import __version__
 from context_agent.agent import ContextAgent
 from context_agent.config import ContextConfig
-from context_agent.contracts import ChangeUnit
 from context_agent.rag.embedder import LocalEmbedder
 from context_agent.rag.ingest import ingest_pr
 from context_agent.rag.store import VectorStore
@@ -30,13 +30,7 @@ def run(
         exists=True,
         readable=True,
     ),
-    anchor: Optional[List[str]] = typer.Option(
-        None,
-        "--anchor",
-        "-a",
-        help="Finding key anchor ID (can be passed multiple times)",
-    ),
-    output: Optional[Path] = typer.Option(
+    output: Path | None = typer.Option(
         None,
         "--output",
         "-o",
@@ -49,8 +43,8 @@ def run(
     unit = ChangeUnit.model_validate(data)
 
     agent = ContextAgent()
-    anchors_set = set(anchor) if anchor else None
-    evidence_list = agent.analyze(unit, anchors=anchors_set)
+    # No --anchor flag: agents run blind (D-008).
+    evidence_list = agent.analyze(unit)
 
     out_data = [ev.model_dump() for ev in evidence_list]
     json_str = json.dumps(out_data, indent=2)
@@ -78,7 +72,10 @@ def ingest(
     store = VectorStore(cfg.chroma_db_dir)
 
     pr_id = ingest_pr(data, store, embedder)
-    typer.echo(f"Successfully ingested PR document '{pr_id}' into RAG vector store. Total count: {store.count()}")
+    typer.echo(
+        f"Successfully ingested PR document '{pr_id}' into RAG vector store. "
+        f"Total count: {store.count()}"
+    )
 
 
 @app.command()

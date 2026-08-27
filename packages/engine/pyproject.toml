@@ -9,6 +9,7 @@ description = "CodeSheriff Bayesian Fusion & Multi-Agent Integration Engine"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "codesheriff-contracts",
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.28.0",
     "requests>=2.31.0",

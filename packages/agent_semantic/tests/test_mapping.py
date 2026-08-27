@@ -1,6 +1,6 @@
 """Tests for Hallucination Gate and Evidence mapping."""
 
-from semantic_agent.contracts import ChangeUnit
+from codesheriff_contracts import ChangeUnit, EvidenceKind
 from semantic_agent.mapping import HallucinationGate, map_finding_to_evidence
 from semantic_agent.schema import LLMFinding
 
@@ -94,5 +94,7 @@ def test_map_finding_to_evidence(sample_unit: ChangeUnit) -> None:
     assert evidence.unit_id == sample_unit.unit_id
     assert evidence.cwe == "CWE-89"
     assert evidence.raw_score == 1.0
-    assert not evidence.abstained
+    assert evidence.kind is EvidenceKind.DETECTION
+    assert evidence.finding_key is not None
     assert len(evidence.finding_key) == 16
+    assert evidence.finding_key == sample_unit.key_for("CWE-89")

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
-from codesheriff_engine.contracts import ChangeUnit
+from typing import Any
+
+from codesheriff_contracts import ChangeUnit
 
 EXTENSION_TO_LANGUAGE = {
     ".py": "python",
@@ -35,19 +36,28 @@ def is_test_path(filename: str) -> bool:
     lower = filename.lower()
     return any(
         pattern in lower
-        for pattern in ["test_", "_test.", "/tests/", "/test/", "/spec/", "_spec.", ".test.", ".spec."]
+        for pattern in [
+            "test_",
+            "_test.",
+            "/tests/",
+            "/test/",
+            "/spec/",
+            "_spec.",
+            ".test.",
+            ".spec.",
+        ]
     )
 
 
-def parse_patch_lines(patch: str) -> tuple[str, str, List[int], int]:
-    """Parse a unified git diff patch to reconstruct pre_src, post_src, changed lines, and start line.
-    
+def parse_patch_lines(patch: str) -> tuple[str, str, list[int], int]:
+    """Parse a unified git diff to reconstruct pre_src, post_src, lines and start line.
+
     Returns:
         (pre_src, post_src, changed_lines, start_line)
     """
-    pre_lines: List[str] = []
-    post_lines: List[str] = []
-    changed_lines: List[int] = []
+    pre_lines: list[str] = []
+    post_lines: list[str] = []
+    changed_lines: list[int] = []
 
     current_post_line = 1
     start_line = 1
@@ -86,12 +96,12 @@ def parse_patch_lines(patch: str) -> tuple[str, str, List[int], int]:
 def parse_pr_files_to_change_units(
     repo_full_name: str,
     pr_number: int,
-    pr_files: List[Dict[str, Any]],
+    pr_files: list[dict[str, Any]],
     base_sha: str = "base_sha",
     head_sha: str = "head_sha",
-) -> List[ChangeUnit]:
+) -> list[ChangeUnit]:
     """Convert GitHub API PR files list into a list of ChangeUnits for security auditing."""
-    units: List[ChangeUnit] = []
+    units: list[ChangeUnit] = []
 
     for idx, file_info in enumerate(pr_files, start=1):
         filename = file_info.get("filename", "")

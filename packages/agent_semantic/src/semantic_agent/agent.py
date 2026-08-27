@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import List, Optional, Set
+
 from jinja2 import Template
 from pydantic import ValidationError
 
+from codesheriff_contracts import IN_SCOPE_CWES, ChangeUnit, Evidence
 from semantic_agent.config import SemanticConfig
 from semantic_agent.consistency import aggregate_self_consistency
-from semantic_agent.contracts import ChangeUnit, Evidence
 from semantic_agent.llm.base import LLMClient
 from semantic_agent.llm.budget import BudgetTracker
 from semantic_agent.llm.cache import LLMCache
@@ -30,9 +30,9 @@ class SemanticAgent:
 
     def __init__(
         self,
-        config: Optional[SemanticConfig] = None,
-        llm_client: Optional[LLMClient] = None,
-        retriever: Optional[Retriever] = None,
+        config: SemanticConfig | None = None,
+        llm_client: LLMClient | None = None,
+        retriever: Retriever | None = None,
     ) -> None:
         self.config = config or SemanticConfig.load()
         self.agent_id = self.config.agent_id
@@ -65,15 +65,21 @@ class SemanticAgent:
     def _load_user_template(self) -> Template:
         p = self._prompts_dir / "user_v1.jinja"
         if p.exists():
-            return Template(p.read_text(encoding="utf-8"))
-        return Template("Review unit: {{ unit.unit_id }}\n\n<code_to_analyze>\n{{ unit.post_src }}\n</code_to_analyze>")
+            return Template(p.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+        return Template(  # type: ignore[no-any-return]
+            "Review unit: {{ unit.unit_id }}\n\n"
+            "<code_to_analyze>\n{{ unit.post_src }}\n</code_to_analyze>"
+        )
 
-    def analyze(
-        self,
-        unit: ChangeUnit,
-        anchors: Optional[Set[str]] = None,
-    ) -> List[Evidence]:
-        """Analyze a ChangeUnit for security flaws. Guarantees zero unhandled exceptions."""
+    def analyze(self, unit: ChangeUnit) -> list[Evidence]:
+        """Analyse a ChangeUnit for security flaws.
+
+        Runs blind: no `anchors` parameter (D-008). Filtering this agent's findings
+        down to another agent's keys made the two agents dependent, and a fused
+        posterior over dependent evidence is not a probability of anything.
+
+        Guarantees zero unhandled exceptions.
+        """
         try:
             # 1. Budget check
             if self.budget_tracker.is_exceeded():
@@ -95,12 +101,12 @@ class SemanticAgent:
 
             # 4. Self-consistency sampling (n samples)
             n_samples = max(1, self.config.n_samples)
-            valid_responses: List[LLMResponse] = []
+            valid_responses: list[LLMResponse] = []
             parse_failures = 0
 
             for i in range(n_samples):
                 seed = 100 + i
-                raw_response: Optional[str] = None
+                raw_response: str | None = None
 
                 # Check Cache
                 cache_key = None
@@ -155,7 +161,9 @@ class SemanticAgent:
                         if is_valid:
                             filtered_findings.append(f)
                         else:
-                            logger.info(f"Hallucination gate rejected finding '{f.title}': {reason}")
+                            logger.info(
+                                f"Hallucination gate rejected finding '{f.title}': {reason}"
+                            )
 
                     valid_responses.append(LLMResponse(findings=filtered_findings))
                 except (json.JSONDecodeError, ValidationError) as parse_err:
@@ -170,7 +178,9 @@ class SemanticAgent:
                         agent_version=self.agent_version,
                         unit_id=unit.unit_id,
                         reason="schema_violation",
-                        explanation="Failed to produce valid structured LLM output matching schema.",
+                        explanation=(
+                            "Failed to produce valid structured LLM output matching schema."
+                        ),
                     )
                 ]
 
@@ -182,9 +192,19 @@ class SemanticAgent:
                 agent_version=self.agent_version,
             )
 
-            # 7. Anchor filtering (if anchors supplied)
-            if anchors is not None:
-                evidence_list = [ev for ev in evidence_list if ev.finding_key in anchors]
+            # 7. Ran to completion with nothing to report: that is SILENCE, not an
+            #    empty list. The model looked across the full in-scope CWE set, so its
+            #    silence is informative about all of it (D-005, D-006).
+            if not evidence_list:
+                return [
+                    Evidence.silence(
+                        agent_id=self.agent_id,
+                        agent_version=self.agent_version,
+                        unit_id=unit.unit_id,
+                        covered_cwes=IN_SCOPE_CWES,
+                        explanation="Model reviewed the unit and reported no in-scope finding.",
+                    )
+                ]
 
             return evidence_list
 

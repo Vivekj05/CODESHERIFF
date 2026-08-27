@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
+
 import pytest
-from context_agent.contracts import ChangeUnit
+
+from codesheriff_contracts import ChangeUnit
 
 
 @pytest.fixture
@@ -26,7 +28,7 @@ def sample_unit_safe() -> ChangeUnit:
 
 
 @pytest.fixture
-def sample_past_pr() -> Dict[str, Any]:
+def sample_past_pr() -> dict[str, Any]:
     """Provide sample_past_pr metadata dict."""
     p = Path(__file__).parent / "fixtures" / "sample_past_pr.json"
     return json.loads(p.read_text(encoding="utf-8"))

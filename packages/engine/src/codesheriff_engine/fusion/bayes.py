@@ -2,71 +2,62 @@
 
 from __future__ import annotations
 
-import math
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
+from codesheriff_contracts import Evidence, EvidenceKind
 from codesheriff_engine.config import DEFAULT_LIKELIHOOD_TABLE, FALLBACK_LIKELIHOOD_TIER
-from codesheriff_engine.contracts import Evidence
 
 
 class FusionResult(BaseModel):
     """Aggregated output from Bayesian fusion over all agent evidence for a finding."""
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     finding_key: str
     posterior_probability: float
     is_alert_worthy: bool
-    evidence_list: List[Evidence]
+    evidence_list: list[Evidence]
     consensus_rationale: str = ""
-    cwe: Optional[str] = None
-    title: Optional[str] = None
-    severity: Optional[str] = None
-    file: Optional[str] = None
-    line_numbers: List[int] = Field(default_factory=list)
+    cwe: str | None = None
+    title: str | None = None
+    severity: str | None = None
+    file: str | None = None
+    line_numbers: list[int] = Field(default_factory=list)
 
 
-def normalize_evidence(evidence_list: List[Any]) -> List[Evidence]:
-    """Normalize Evidence instances across vendored agent packages into engine Evidence models."""
-    normalized: List[Evidence] = []
+def normalize_evidence(evidence_list: list[Any]) -> list[Evidence]:
+    """Coerce inbound items to the shared Evidence contract.
+
+    This used to reconcile four vendored, separately-evolving Evidence classes. There
+    is now exactly one contract package, so the only real work left is validating
+    dicts that arrive over the wire.
+
+    It no longer swallows failures. The previous `except Exception: pass` discarded
+    malformed evidence silently (AUDIT.md 2.7) — evidence vanishing without trace is
+    the one thing a calibration claim cannot survive.
+    """
+    normalized: list[Evidence] = []
     for ev in evidence_list:
         if isinstance(ev, Evidence):
             normalized.append(ev)
-        elif hasattr(ev, "model_dump"):
-            normalized.append(Evidence.model_validate(ev.model_dump()))
-        elif hasattr(ev, "dict"):
-            normalized.append(Evidence.model_validate(ev.dict()))
         elif isinstance(ev, dict):
             normalized.append(Evidence.model_validate(ev))
+        elif hasattr(ev, "model_dump"):
+            normalized.append(Evidence.model_validate(ev.model_dump()))
         else:
-            # Attempt best-effort attribute copy
-            try:
-                data = {
-                    "agent_id": getattr(ev, "agent_id", "unknown"),
-                    "agent_version": getattr(ev, "agent_version", "0.0.0"),
-                    "unit_id": getattr(ev, "unit_id", "unknown"),
-                    "finding_key": getattr(ev, "finding_key", "unknown"),
-                    "cwe": getattr(ev, "cwe", None),
-                    "raw_score": getattr(ev, "raw_score", 0.0),
-                    "confidence": getattr(ev, "confidence", 1.0),
-                    "explanation": getattr(ev, "explanation", ""),
-                    "artifacts": [
-                        a.model_dump() if hasattr(a, "model_dump") else a
-                        for a in getattr(ev, "artifacts", [])
-                    ],
-                    "abstained": getattr(ev, "abstained", False),
-                    "abstain_reason": getattr(ev, "abstain_reason", None),
-                }
-                normalized.append(Evidence.model_validate(data))
-            except Exception:
-                pass
+            raise TypeError(
+                f"Cannot normalise {type(ev).__name__} into Evidence. Agents must return "
+                "codesheriff_contracts.Evidence; there is no vendored variant any more."
+            )
     return normalized
 
 
 def get_likelihood_ratio(
     agent_id: str,
     score: float,
-    likelihood_table: Optional[Dict[str, Dict[str, float]]] = None,
+    likelihood_table: dict[str, dict[str, float]] | None = None,
 ) -> float:
     """Return calibrated Likelihood Ratio (LR) for an agent given its raw confidence score."""
     table = (likelihood_table or DEFAULT_LIKELIHOOD_TABLE).get(agent_id, FALLBACK_LIKELIHOOD_TIER)
@@ -81,21 +72,24 @@ def get_likelihood_ratio(
 
 def compute_bayesian_fusion(
     finding_key: str,
-    evidence_list: List[Any],
+    evidence_list: list[Any],
     prior_p: float = 0.05,
     alert_threshold: float = 0.70,
-    likelihood_table: Optional[Dict[str, Dict[str, float]]] = None,
+    likelihood_table: dict[str, dict[str, float]] | None = None,
 ) -> FusionResult:
     """Compute posterior vulnerability probability using Bayesian Odds updating."""
     normalized_list = normalize_evidence(evidence_list)
 
-    # Filter active (non-abstained) evidence
-    active_evidence = [
-        ev for ev in normalized_list 
-        if not ev.abstained and not ev.finding_key.startswith("abstain:")
-    ]
+    # Only DETECTIONs move the odds today.
+    #
+    # NOT YET CONFORMANT (AUDIT.md 1.4, D-007): §5 requires fusion to iterate ALL
+    # agents, applying LR < 1.0 for a SILENCE that covers the finding's CWE and
+    # exactly 1.0 for an ABSTENTION. Iterating only the agents that spoke means the
+    # odds can only ever increase. Wiring that in needs fitted ratios, so it lands
+    # with the calibration work — PLAN.md Chapter 9 and Chapter 14. Chapter 2 makes
+    # the evidence to do it with expressible; it does not yet consume it.
+    active_evidence = [ev for ev in normalized_list if ev.kind is EvidenceKind.DETECTION]
 
-    # If no active evidence exists (all agents abstained or no findings)
     if not active_evidence:
         return FusionResult(
             finding_key=finding_key,
@@ -136,7 +130,7 @@ def compute_bayesian_fusion(
 
     # Extract title and lines from artifacts if available
     title = f"{primary_ev.cwe or 'Security Flaw'}: {primary_ev.explanation[:60]}"
-    line_numbers: List[int] = []
+    line_numbers: list[int] = []
     for ev in active_evidence:
         for art in ev.artifacts:
             art_content = getattr(art, "content", art)
@@ -160,11 +154,11 @@ def compute_bayesian_fusion(
 
 
 def fuse_all_evidence(
-    evidence_list: List[Any],
+    evidence_list: list[Any],
     prior_p: float = 0.05,
     alert_threshold: float = 0.70,
-    likelihood_table: Optional[Dict[str, Dict[str, float]]] = None,
-) -> List[FusionResult]:
+    likelihood_table: dict[str, dict[str, float]] | None = None,
+) -> list[FusionResult]:
     """Group all raw evidence from multiple agents by finding_key and compute Bayesian fusion."""
     if not evidence_list:
         return []
@@ -172,16 +166,18 @@ def fuse_all_evidence(
     normalized_list = normalize_evidence(evidence_list)
 
     # Group evidence by finding_key
-    grouped: Dict[str, List[Evidence]] = {}
-    abstentions: List[Evidence] = []
+    grouped: dict[str, list[Evidence]] = {}
+    non_detections: list[Evidence] = []
 
     for ev in normalized_list:
-        if ev.abstained or ev.finding_key.startswith("abstain:"):
-            abstentions.append(ev)
-        else:
+        if ev.kind is EvidenceKind.DETECTION and ev.finding_key is not None:
             grouped.setdefault(ev.finding_key, []).append(ev)
+        else:
+            # SILENCE and ABSTENTION are statements about the unit, not about one
+            # finding, so they carry no key to group under.
+            non_detections.append(ev)
 
-    results: List[FusionResult] = []
+    results: list[FusionResult] = []
 
     for key, ev_group in grouped.items():
         result = compute_bayesian_fusion(
@@ -193,12 +189,12 @@ def fuse_all_evidence(
         )
         results.append(result)
 
-    # If there are no positive findings at all, but there were abstentions
-    if not results and abstentions:
+    # No detections anywhere: report the unit at the prior.
+    if not results and non_detections:
         results.append(
             compute_bayesian_fusion(
                 finding_key="abstention:all_agents",
-                evidence_list=abstentions,
+                evidence_list=non_detections,
                 prior_p=prior_p,
                 alert_threshold=alert_threshold,
                 likelihood_table=likelihood_table,

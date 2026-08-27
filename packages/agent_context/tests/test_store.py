@@ -1,6 +1,7 @@
 """Tests for VectorStore."""
 
 from pathlib import Path
+
 from context_agent.rag.embedder import LocalEmbedder
 from context_agent.rag.store import VectorStore
 

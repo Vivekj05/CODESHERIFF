@@ -4,19 +4,19 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
+from codesheriff_contracts import Evidence, EvidenceKind
 from codesheriff_engine.config import EngineConfig
-from codesheriff_engine.contracts import Evidence
 from codesheriff_engine.fusion.bayes import FusionResult
 
 logger = logging.getLogger(__name__)
 
 DEBATE_PROMPT_TEMPLATE = """You are the CodeSheriff Multi-Agent Security Debate Synthesizer.
-Two or more independent security analyzers disagree on whether the following code change is vulnerable:
+Two or more independent security analyzers disagree on whether the following
+code change is vulnerable:
 
 {agent_breakdown}
 
@@ -26,7 +26,9 @@ CODE CHANGE UNDER REVIEW:
 ```
 
 TASK:
-1. Cross-examine the evidence. Determine if one analyzer identified a real sanitization/type-cast that makes this a FALSE ALARM, or if the taint path is a TRUE VULNERABILITY that another analyzer overlooked.
+1. Cross-examine the evidence. Determine if one analyzer identified a real
+   sanitization/type-cast that makes this a FALSE ALARM, or if the taint path is
+   a TRUE VULNERABILITY that another analyzer overlooked.
 2. Return ONLY a valid JSON object matching this structure:
 {{
   "resolved_vulnerable": true/false,
@@ -36,11 +38,11 @@ TASK:
 """
 
 
-def _build_agent_breakdown(evidence_list: List[Evidence]) -> str:
+def _build_agent_breakdown(evidence_list: list[Evidence]) -> str:
     """Format agent findings into structured debate input."""
-    lines: List[str] = []
+    lines: list[str] = []
     for ev in evidence_list:
-        if ev.abstained:
+        if ev.kind is not EvidenceKind.DETECTION:
             continue
         lines.append(
             f"- [{ev.agent_id}] Score: {ev.raw_score:.2f} | CWE: {ev.cwe or 'N/A'} | "
@@ -50,11 +52,11 @@ def _build_agent_breakdown(evidence_list: List[Evidence]) -> str:
 
 
 def _heuristic_debate_resolution(
-    evidence_list: List[Evidence],
+    evidence_list: list[Evidence],
     code_snippet: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Offline deterministic fallback to synthesize agent conflicts when LLM is unavailable."""
-    scores = [ev.raw_score for ev in evidence_list if not ev.abstained]
+    scores = [ev.raw_score for ev in evidence_list if ev.kind is EvidenceKind.DETECTION]
     if not scores:
         return {
             "resolved_vulnerable": False,
@@ -66,24 +68,47 @@ def _heuristic_debate_resolution(
     code_lower = code_snippet.lower()
     has_sanitizer = any(
         kw in code_lower
-        for kw in ["escape", "sanitize", "parameterized", "prepare", "int(", "float(", "quote", "urlencode", "whitelist"]
+        for kw in [
+            "escape",
+            "sanitize",
+            "parameterized",
+            "prepare",
+            "int(",
+            "float(",
+            "quote",
+            "urlencode",
+            "whitelist",
+        ]
     )
     has_danger_sink = any(
         kw in code_lower
-        for kw in ["os.system", "eval(", "exec(", "cursor.execute(f", "cursor.execute(\"\"\" +", "subprocess.call(cmd"]
+        for kw in [
+            "os.system",
+            "eval(",
+            "exec(",
+            "cursor.execute(f",
+            'cursor.execute(""" +',
+            "subprocess.call(cmd",
+        ]
     )
 
     if has_sanitizer and not has_danger_sink:
         return {
             "resolved_vulnerable": False,
             "final_score": 0.25,
-            "consensus_explanation": "Debate resolved as False Alarm: Sanitization / parameterization detected in code flow.",
+            "consensus_explanation": (
+                "Debate resolved as False Alarm: Sanitization / parameterization "
+                "detected in code flow."
+            ),
         }
     elif has_danger_sink:
         return {
             "resolved_vulnerable": True,
             "final_score": 0.85,
-            "consensus_explanation": "Debate confirmed Vulnerability: Direct unsanitized input reaches high-danger execution sink.",
+            "consensus_explanation": (
+                "Debate confirmed Vulnerability: Direct unsanitized input reaches "
+                "high-danger execution sink."
+            ),
         }
     else:
         avg_score = sum(scores) / len(scores)
@@ -100,7 +125,7 @@ def _heuristic_debate_resolution(
 def _call_llm_debate_sync(
     prompt: str,
     config: EngineConfig,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Call LLM provider synchronously for debate synthesis."""
     if not config.llm_api_key:
         return None
@@ -118,7 +143,11 @@ def _call_llm_debate_sync(
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are a precise security arbiter that resolves disagreements between static analysis and LLM analyzers. Always respond in JSON.",
+                    "content": (
+                        "You are a precise security arbiter that resolves "
+                        "disagreements between static analysis and LLM analyzers. "
+                        "Always respond in JSON."
+                    ),
                 },
                 {"role": "user", "content": prompt},
             ],
@@ -146,14 +175,16 @@ def _call_llm_debate_sync(
 def resolve_agent_conflict(
     fusion: FusionResult,
     code_snippet: str,
-    config: Optional[EngineConfig] = None,
+    config: EngineConfig | None = None,
 ) -> FusionResult:
     """Examine evidence for severe disagreement; trigger multi-agent debate if necessary."""
     cfg = config or EngineConfig.load()
     if not cfg.enable_debate:
         return fusion
 
-    active_scores = [ev.raw_score for ev in fusion.evidence_list if not ev.abstained]
+    active_scores = [
+        ev.raw_score for ev in fusion.evidence_list if ev.kind is EvidenceKind.DETECTION
+    ]
     if len(active_scores) < 2:
         return fusion
 

@@ -1,5 +1,6 @@
 """Scoring module for evidence raw_score computation."""
 
+
 def clamp(val: float, min_val: float = 0.0, max_val: float = 1.0) -> float:
     return max(min_val, min(max_val, val))
 

@@ -1,7 +1,9 @@
 """Tests for Typer CLI commands."""
 
 from pathlib import Path
+
 from typer.testing import CliRunner
+
 from semantic_agent.cli import app
 
 runner = CliRunner()

@@ -2,8 +2,10 @@
 
 import json
 from pathlib import Path
+
 import pytest
-from static_agent.contracts import ChangeUnit
+
+from codesheriff_contracts import ChangeUnit
 
 
 @pytest.fixture

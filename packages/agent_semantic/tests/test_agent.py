@@ -2,9 +2,10 @@
 
 import json
 from pathlib import Path
+
+from codesheriff_contracts import ChangeUnit, EvidenceKind
 from semantic_agent.agent import SemanticAgent
 from semantic_agent.config import SemanticConfig
-from semantic_agent.contracts import ChangeUnit
 from semantic_agent.llm.stub import StubLLMClient
 
 
@@ -35,8 +36,9 @@ def test_semantic_agent_vulnerable_unit(sample_unit: ChangeUnit, tmp_path: Path)
     ev_list = agent.analyze(sample_unit)
     assert len(ev_list) == 1
     ev = ev_list[0]
-    assert not ev.abstained
+    assert ev.kind is EvidenceKind.DETECTION
     assert ev.cwe == "CWE-89"
+    assert ev.finding_key == sample_unit.key_for("CWE-89")
     assert ev.raw_score == 1.0
     assert ev.unit_id == sample_unit.unit_id
 
@@ -47,7 +49,11 @@ def test_semantic_agent_safe_unit(sample_unit_safe: ChangeUnit, tmp_path: Path) 
     agent = SemanticAgent(config=cfg, llm_client=stub_client)
 
     ev_list = agent.analyze(sample_unit_safe)
-    assert len(ev_list) == 0
+    # SILENCE, not []. The model looked and found nothing, which is evidence that
+    # should lower a posterior — an empty list throws that away (D-005).
+    assert len(ev_list) == 1
+    assert ev_list[0].kind is EvidenceKind.SILENCE
+    assert ev_list[0].covered_cwes
 
 
 def test_semantic_agent_budget_exceeded(sample_unit: ChangeUnit, tmp_path: Path) -> None:
@@ -57,8 +63,8 @@ def test_semantic_agent_budget_exceeded(sample_unit: ChangeUnit, tmp_path: Path)
 
     ev_list = agent.analyze(sample_unit)
     assert len(ev_list) == 1
-    assert ev_list[0].abstained
-    assert ev_list[0].abstain_reason == "budget_exceeded"
+    assert ev_list[0].kind is EvidenceKind.ABSTENTION
+    assert ev_list[0].reason == "budget_exceeded"
 
 
 def test_semantic_agent_schema_violation(sample_unit: ChangeUnit, tmp_path: Path) -> None:
@@ -68,8 +74,8 @@ def test_semantic_agent_schema_violation(sample_unit: ChangeUnit, tmp_path: Path
 
     ev_list = agent.analyze(sample_unit)
     assert len(ev_list) == 1
-    assert ev_list[0].abstained
-    assert ev_list[0].abstain_reason == "schema_violation"
+    assert ev_list[0].kind is EvidenceKind.ABSTENTION
+    assert ev_list[0].reason == "schema_violation"
 
 
 def test_semantic_agent_never_raises(sample_unit: ChangeUnit, tmp_path: Path) -> None:
@@ -82,5 +88,5 @@ def test_semantic_agent_never_raises(sample_unit: ChangeUnit, tmp_path: Path) ->
 
     ev_list = agent.analyze(sample_unit)
     assert len(ev_list) == 1
-    assert ev_list[0].abstained
-    assert "schema_violation" in ev_list[0].abstain_reason or "runtime_error" in ev_list[0].abstain_reason
+    assert ev_list[0].kind is EvidenceKind.ABSTENTION
+    assert ev_list[0].reason in {"schema_violation", "runtime_error"}

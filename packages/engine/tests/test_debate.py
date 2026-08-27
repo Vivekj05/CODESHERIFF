@@ -1,14 +1,13 @@
 """Unit tests for Multi-Agent Debate & Conflict Synthesizer."""
 
-import pytest
+from codesheriff_contracts import Evidence
 from codesheriff_engine.config import EngineConfig
-from codesheriff_engine.contracts import Evidence
 from codesheriff_engine.fusion.bayes import FusionResult
 from codesheriff_engine.fusion.debate import resolve_agent_conflict
 
 
 def test_debate_skipped_when_no_conflict() -> None:
-    ev1 = Evidence(
+    ev1 = Evidence.detection(
         agent_id="structural.taint",
         agent_version="0.1.0",
         unit_id="u1",
@@ -17,7 +16,7 @@ def test_debate_skipped_when_no_conflict() -> None:
         raw_score=0.85,
         explanation="SQLi taint",
     )
-    ev2 = Evidence(
+    ev2 = Evidence.detection(
         agent_id="semantic.hosted",
         agent_version="0.1.0",
         unit_id="u1",
@@ -45,7 +44,7 @@ def test_debate_skipped_when_no_conflict() -> None:
 
 def test_debate_resolves_sanitized_code_as_false_alarm() -> None:
     # Static says high danger (0.95), Semantic says safe/sanitized (0.10)
-    ev1 = Evidence(
+    ev1 = Evidence.detection(
         agent_id="structural.taint",
         agent_version="0.1.0",
         unit_id="u1",
@@ -54,7 +53,7 @@ def test_debate_resolves_sanitized_code_as_false_alarm() -> None:
         raw_score=0.95,
         explanation="Detected string in query",
     )
-    ev2 = Evidence(
+    ev2 = Evidence.detection(
         agent_id="semantic.hosted",
         agent_version="0.1.0",
         unit_id="u1",
@@ -84,12 +83,15 @@ def test_debate_resolves_sanitized_code_as_false_alarm() -> None:
     # Score delta is 0.85 >= 0.50 => debate runs
     assert resolved.posterior_probability <= 0.30
     assert resolved.is_alert_worthy is False
-    assert "False Alarm" in resolved.consensus_rationale or "sanitiz" in resolved.consensus_rationale.lower()
+    assert (
+        "False Alarm" in resolved.consensus_rationale
+        or "sanitiz" in resolved.consensus_rationale.lower()
+    )
 
 
 def test_debate_resolves_danger_sink_as_vulnerable() -> None:
     # Static says high danger (0.95), Semantic low (0.20), but code has direct os.system
-    ev1 = Evidence(
+    ev1 = Evidence.detection(
         agent_id="structural.taint",
         agent_version="0.1.0",
         unit_id="u2",
@@ -98,7 +100,7 @@ def test_debate_resolves_danger_sink_as_vulnerable() -> None:
         raw_score=0.95,
         explanation="Command injection sink",
     )
-    ev2 = Evidence(
+    ev2 = Evidence.detection(
         agent_id="semantic.hosted",
         agent_version="0.1.0",
         unit_id="u2",

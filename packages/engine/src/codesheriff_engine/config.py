@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import os
-from typing import Dict, Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-DEFAULT_LIKELIHOOD_TABLE: Dict[str, Dict[str, float]] = {
+DEFAULT_LIKELIHOOD_TABLE: dict[str, dict[str, float]] = {
     "structural.taint": {
-        "high": 8.5,    # score >= 0.8
+        "high": 8.5,  # score >= 0.8
         "medium": 3.2,  # score >= 0.5
-        "low": 0.8,     # score < 0.5
+        "low": 0.8,  # score < 0.5
     },
     "structural.semgrep": {
         "high": 7.0,
@@ -19,9 +17,9 @@ DEFAULT_LIKELIHOOD_TABLE: Dict[str, Dict[str, float]] = {
         "low": 0.9,
     },
     "semantic.hosted": {
-        "high": 12.0,   # score >= 0.8 (high consensus)
+        "high": 12.0,  # score >= 0.8 (high consensus)
         "medium": 4.5,  # score >= 0.5
-        "low": 0.5,     # score < 0.5
+        "low": 0.5,  # score < 0.5
     },
     "semantic.lora": {
         "high": 11.0,
@@ -29,13 +27,13 @@ DEFAULT_LIKELIHOOD_TABLE: Dict[str, Dict[str, float]] = {
         "low": 0.6,
     },
     "context.rag": {
-        "high": 4.2,    # score >= 0.8 (direct bypass of historical control)
+        "high": 4.2,  # score >= 0.8 (direct bypass of historical control)
         "medium": 2.1,  # score >= 0.5
-        "low": 0.9,     # score < 0.5
+        "low": 0.9,  # score < 0.5
     },
 }
 
-FALLBACK_LIKELIHOOD_TIER: Dict[str, float] = {
+FALLBACK_LIKELIHOOD_TIER: dict[str, float] = {
     "high": 3.0,
     "medium": 1.5,
     "low": 1.0,
@@ -55,19 +53,21 @@ class EngineConfig(BaseSettings):
     prior_probability: float = Field(default=0.05, ge=0.001, le=0.999)
     alert_threshold: float = Field(default=0.70, ge=0.0, le=1.0)
     conflict_threshold: float = Field(default=0.50, ge=0.0, le=1.0)
-    likelihood_table: Dict[str, Dict[str, float]] = Field(default_factory=lambda: DEFAULT_LIKELIHOOD_TABLE)
+    likelihood_table: dict[str, dict[str, float]] = Field(
+        default_factory=lambda: DEFAULT_LIKELIHOOD_TABLE
+    )
 
     # Multi-Agent Debate Configuration
     enable_debate: bool = True
-    llm_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
-    anthropic_api_key: Optional[str] = Field(default=None, alias="ANTHROPIC_API_KEY")
-    gemini_api_key: Optional[str] = Field(default=None, alias="GEMINI_API_KEY")
+    llm_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
+    anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
+    gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
     debate_model: str = "gpt-4o-mini"
     debate_timeout_seconds: float = 15.0
 
     # GitHub Webhook & API Integration
-    github_token: Optional[str] = Field(default=None, alias="GITHUB_TOKEN")
-    github_webhook_secret: Optional[str] = Field(default=None, alias="GITHUB_WEBHOOK_SECRET")
+    github_token: str | None = Field(default=None, alias="GITHUB_TOKEN")
+    github_webhook_secret: str | None = Field(default=None, alias="GITHUB_WEBHOOK_SECRET")
     github_api_base: str = "https://api.github.com"
 
     # Server Settings

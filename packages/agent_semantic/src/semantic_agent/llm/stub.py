@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import List, Type
+
 from pydantic import BaseModel
 
 DEFAULT_SQLI_RESPONSE = {
@@ -11,7 +11,9 @@ DEFAULT_SQLI_RESPONSE = {
         {
             "functional_intent": "Fetch user details from database",
             "untrusted_data_sources": ["request.args.get('id')"],
-            "violated_safety_invariant": "Interpolates untrusted user ID into raw SQL query without escaping.",
+            "violated_safety_invariant": (
+                "Interpolates untrusted user ID into raw SQL query without escaping."
+            ),
             "cwe": "CWE-89",
             "title": "SQL Injection in get_user",
             "file": "app/api/users.py",
@@ -30,7 +32,7 @@ DEFAULT_SQLI_RESPONSE = {
 class StubLLMClient:
     """Scripted LLM client returning predefined responses for unit testing."""
 
-    def __init__(self, responses: List[str] | None = None) -> None:
+    def __init__(self, responses: list[str] | None = None) -> None:
         self.responses = responses or []
         self.call_count = 0
 
@@ -38,7 +40,7 @@ class StubLLMClient:
         self,
         system_prompt: str,
         user_prompt: str,
-        schema: Type[BaseModel],
+        schema: type[BaseModel],
         temperature: float = 0.3,
         seed: int | None = None,
     ) -> str:

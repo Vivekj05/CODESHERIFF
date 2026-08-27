@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import math
-from typing import List
 
 
 class LocalEmbedder:
@@ -16,11 +15,12 @@ class LocalEmbedder:
 
         try:
             from sentence_transformers import SentenceTransformer
+
             self._model = SentenceTransformer(model_name)
         except ImportError:
             self._model = None
 
-    def embed_text(self, text: str) -> List[float]:
+    def embed_text(self, text: str) -> list[float]:
         """Generate normalized 384-dimensional embedding vector."""
         if self._model:
             emb = self._model.encode(text, normalize_embeddings=True)

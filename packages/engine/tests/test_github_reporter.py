@@ -1,7 +1,6 @@
 """Unit tests for GitHub reporter formatting and API poster."""
 
-import pytest
-from codesheriff_engine.contracts import Evidence
+from codesheriff_contracts import Evidence
 from codesheriff_engine.fusion.bayes import FusionResult
 from codesheriff_engine.github.reporter import format_github_comment, post_pr_review_comment
 
@@ -13,7 +12,7 @@ def test_format_clean_github_comment() -> None:
 
 
 def test_format_alert_github_comment() -> None:
-    ev1 = Evidence(
+    ev1 = Evidence.detection(
         agent_id="structural.taint",
         agent_version="0.1.0",
         unit_id="u1",
@@ -22,7 +21,7 @@ def test_format_alert_github_comment() -> None:
         raw_score=0.92,
         explanation="SQL injection taint path found",
     )
-    ev2 = Evidence(
+    ev2 = Evidence.detection(
         agent_id="semantic.hosted",
         agent_version="0.1.0",
         unit_id="u1",

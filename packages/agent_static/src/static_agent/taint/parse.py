@@ -1,18 +1,20 @@
 """Tree-sitter AST parser wrapper and node representation."""
 
-from typing import Any, List, Optional
+from typing import Any
+
 from pydantic import BaseModel
 
 
 class ASTNodeView(BaseModel):
     """Normalized AST node view."""
+
     kind: str
     start_byte: int
     end_byte: int
     start_point: tuple[int, int]  # (line, col) 1-based line
     end_point: tuple[int, int]
     text: str
-    children: List["ASTNodeView"] = []
+    children: list["ASTNodeView"] = []
 
 
 ASTNodeView.model_rebuild()
@@ -24,7 +26,7 @@ class CodeParser:
     def __init__(self) -> None:
         self._parsers: dict[str, Any] = {}
 
-    def get_parser(self, language: str) -> Optional[Any]:
+    def get_parser(self, language: str) -> Any | None:
         lang = language.lower()
         if lang in ("python", "py"):
             lang_key = "python"
@@ -38,13 +40,14 @@ class CodeParser:
 
         try:
             import tree_sitter_language_pack as tslp
+
             parser = tslp.get_parser(lang_key)
             self._parsers[lang_key] = parser
             return parser
         except Exception:
             return None
 
-    def parse(self, source_code: str, language: str) -> Optional[ASTNodeView]:
+    def parse(self, source_code: str, language: str) -> ASTNodeView | None:
         """Parse source code into ASTNodeView tree."""
         parser = self.get_parser(language)
         if not parser:
@@ -58,7 +61,7 @@ class CodeParser:
 
     def _build_node_view(self, node: Any, source_code: str) -> ASTNodeView:
         children = [self._build_node_view(child, source_code) for child in node.children]
-        text_bytes = bytes(source_code, "utf-8")[node.start_byte:node.end_byte]
+        text_bytes = bytes(source_code, "utf-8")[node.start_byte : node.end_byte]
         text = text_bytes.decode("utf-8", errors="replace")
         return ASTNodeView(
             kind=node.type,

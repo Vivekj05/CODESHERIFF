@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -31,9 +32,7 @@ class SemanticConfig(BaseSettings):
     def load(cls) -> SemanticConfig:
         """Load configuration from environment variables or defaults."""
         api_key = (
-            os.getenv("GEMINI_API_KEY")
-            or os.getenv("GOOGLE_API_KEY")
-            or os.getenv("LLM_API_KEY")
+            os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("LLM_API_KEY")
         )
         cfg = cls()
         if api_key and not cfg.api_key:

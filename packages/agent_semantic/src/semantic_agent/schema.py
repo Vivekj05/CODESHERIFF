@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import List, Literal
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -14,7 +15,7 @@ class LLMFinding(BaseModel):
         max_length=200,
         description="What the developer's code is attempting to accomplish.",
     )
-    untrusted_data_sources: List[str] = Field(
+    untrusted_data_sources: list[str] = Field(
         default_factory=list,
         description="Inputs coming from untrusted boundaries (HTTP, params, files, etc.).",
     )
@@ -37,13 +38,11 @@ class LLMFinding(BaseModel):
     )
     severity: Literal["critical", "high", "medium", "low"]
     rationale: str = Field(..., max_length=400)
-    evidence_lines: List[int] = Field(default_factory=list)
-    exploitability: Literal["direct", "conditional", "theoretical"] = Field(
-        default="direct"
-    )
+    evidence_lines: list[int] = Field(default_factory=list)
+    exploitability: Literal["direct", "conditional", "theoretical"] = Field(default="direct")
 
 
 class LLMResponse(BaseModel):
     """Root LLM output container."""
 
-    findings: List[LLMFinding] = Field(default_factory=list, max_length=5)
+    findings: list[LLMFinding] = Field(default_factory=list, max_length=5)

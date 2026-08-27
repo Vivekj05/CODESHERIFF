@@ -1,7 +1,7 @@
 """Def-Use graph construction using NetworkX."""
 
 import re
-from typing import Dict, List, Optional, Tuple
+
 import networkx as nx
 from pydantic import BaseModel
 
@@ -19,7 +19,7 @@ class DefUseGraph:
 
     def __init__(self) -> None:
         self.graph = nx.DiGraph()
-        self.nodes: Dict[str, DefUseNode] = {}
+        self.nodes: dict[str, DefUseNode] = {}
         self._counter = 0
 
     def add_node(self, var_name: str, expr: str, line: int, role: str) -> str:
@@ -45,7 +45,7 @@ def build_defuse_graph(source_code: str, language: str = "python") -> DefUseGrap
     builder = DefUseGraph()
     lines = source_code.splitlines()
 
-    last_def_of: Dict[str, str] = {}
+    last_def_of: dict[str, str] = {}
 
     for line_idx, line_str in enumerate(lines, start=1):
         line = line_str.strip()
@@ -69,7 +69,9 @@ def build_defuse_graph(source_code: str, language: str = "python") -> DefUseGrap
             last_def_of[target_var] = def_id
 
         # Function call / sink execution pattern: function_call(arg1, arg2)
-        call_match = re.search(r"([a-zA-Z0-9_\.]+\.execute|[a-zA-Z0-9_\.]+\.system|eval|exec|open)\s*\((.+)\)", line)
+        call_match = re.search(
+            r"([a-zA-Z0-9_\.]+\.execute|[a-zA-Z0-9_\.]+\.system|eval|exec|open)\s*\((.+)\)", line
+        )
         if call_match:
             func_name = call_match.group(1).strip()
             args_str = call_match.group(2).strip()

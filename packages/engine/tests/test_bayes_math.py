@@ -1,8 +1,6 @@
 """Unit tests for Bayesian Odds and Likelihood Ratio fusion calculations."""
 
-import pytest
-from typing import List
-from codesheriff_engine.contracts import Evidence
+from codesheriff_contracts import Evidence, EvidenceKind
 from codesheriff_engine.fusion.bayes import (
     compute_bayesian_fusion,
     fuse_all_evidence,
@@ -26,7 +24,7 @@ def test_likelihood_ratio_tiers() -> None:
 
 
 def test_bayesian_single_agent_update() -> None:
-    ev = Evidence(
+    ev = Evidence.detection(
         agent_id="structural.taint",
         agent_version="0.1.0",
         unit_id="unit-1",
@@ -44,7 +42,9 @@ def test_bayesian_single_agent_update() -> None:
     assert not result.is_alert_worthy  # 0.3091 < 0.70
 
 
-def test_bayesian_multi_agent_consensus_triggers_alert(sample_evidence_list: List[Evidence]) -> None:
+def test_bayesian_multi_agent_consensus_triggers_alert(
+    sample_evidence_list: list[Evidence],
+) -> None:
     # 3 agents agree on SQLi (structural: 0.95, semantic: 0.90, context: 0.85)
     # Post Odds = (0.05/0.95) * 8.5 * 12.0 * 4.2 = 22.547368
     # Posterior P = 22.547368 / 23.547368 = 0.9575
@@ -62,8 +62,13 @@ def test_bayesian_abstention_handling() -> None:
         agent_id="context.rag",
         agent_version="0.1.0",
         unit_id="unit-1",
-        reason="no_anchor",
+        reason="embedding_backend_unavailable",
     )
+    assert abstention.kind is EvidenceKind.ABSTENTION
+    # An abstention carries no finding_key. The old contract minted a raw
+    # `abstain:<unit>:<reason>` string, which bypassed finding_key() entirely and
+    # let non-findings enter the key space (AUDIT.md 1.1).
+    assert abstention.finding_key is None
 
     result = compute_bayesian_fusion("key-abs", [abstention], prior_p=0.05)
     assert result.posterior_probability == 0.05
@@ -71,7 +76,7 @@ def test_bayesian_abstention_handling() -> None:
 
 
 def test_fuse_all_evidence_groups_by_key() -> None:
-    ev1 = Evidence(
+    ev1 = Evidence.detection(
         agent_id="structural.taint",
         agent_version="0.1.0",
         unit_id="unit-1",
@@ -80,7 +85,7 @@ def test_fuse_all_evidence_groups_by_key() -> None:
         raw_score=0.9,
         explanation="SQLi",
     )
-    ev2 = Evidence(
+    ev2 = Evidence.detection(
         agent_id="semantic.hosted",
         agent_version="0.1.0",
         unit_id="unit-1",
@@ -89,7 +94,7 @@ def test_fuse_all_evidence_groups_by_key() -> None:
         raw_score=0.9,
         explanation="SQLi semantic",
     )
-    ev3 = Evidence(
+    ev3 = Evidence.detection(
         agent_id="structural.taint",
         agent_version="0.1.0",
         unit_id="unit-1",

@@ -1,33 +1,38 @@
 """Tests for Python taint engine analysis."""
 
+from codesheriff_contracts import ChangeUnit, EvidenceKind
 from static_agent.config import StaticConfig
-from static_agent.contracts import ChangeUnit
 from static_agent.taint.engine import analyze_taint
 
 
 def test_python_sqli_detection() -> None:
     unit = ChangeUnit(
-        contract_version="1.0.0",
         unit_id="test-py-01",
         repo="acme/app",
         language="python",
         file="app/users.py",
         symbol="get_user",
         pre_src="def get_user(uid): pass",
-        post_src="def get_user():\n    uid = request.args.get('id')\n    q = f'SELECT * FROM users WHERE id = {uid}'\n    cursor.execute(q)\n",
+        post_src=(
+            "def get_user():\n"
+            "    uid = request.args.get('id')\n"
+            "    q = f'SELECT * FROM users WHERE id = {uid}'\n"
+            "    cursor.execute(q)\n"
+        ),
         changed_lines=[1, 2, 3, 4],
         start_line=1,
         base_sha="aaa",
         head_sha="bbb",
     )
     results = analyze_taint(unit, StaticConfig())
-    assert len(results) == 1
-    assert results[0].cwe == "CWE-89"
+    detections = [e for e in results if e.kind is EvidenceKind.DETECTION]
+    assert len(detections) == 1
+    assert detections[0].cwe == "CWE-89"
+    assert detections[0].finding_key == unit.key_for("CWE-89")
 
 
 def test_python_os_command_injection() -> None:
     unit = ChangeUnit(
-        contract_version="1.0.0",
         unit_id="test-py-02",
         repo="acme/app",
         language="python",
@@ -41,5 +46,6 @@ def test_python_os_command_injection() -> None:
         head_sha="bbb",
     )
     results = analyze_taint(unit, StaticConfig())
-    assert len(results) == 1
-    assert results[0].cwe == "CWE-78"
+    detections = [e for e in results if e.kind is EvidenceKind.DETECTION]
+    assert len(detections) == 1
+    assert detections[0].cwe == "CWE-78"

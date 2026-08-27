@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import FastAPI
+
 from codesheriff_engine.github.webhook import router as webhook_router
 
 app = FastAPI(
@@ -15,7 +18,7 @@ app.include_router(webhook_router)
 
 
 @app.get("/")
-async def root():
+async def root() -> dict[str, Any]:
     return {
         "service": "CodeSheriff Fusion Engine",
         "status": "running",
@@ -27,5 +30,5 @@ async def root():
 
 
 @app.get("/health")
-async def health():
+async def health() -> dict[str, str]:
     return {"status": "healthy"}

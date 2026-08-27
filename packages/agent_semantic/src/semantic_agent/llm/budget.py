@@ -37,7 +37,9 @@ class BudgetTracker:
     def record_expenditure(self, cost: float) -> None:
         """Record spent USD."""
         self.spent_usd += cost
-        logger.debug(f"Budget update: spent ${self.spent_usd:.5f} / ${self.budget_usd_per_unit:.5f}")
+        logger.debug(
+            f"Budget update: spent ${self.spent_usd:.5f} / ${self.budget_usd_per_unit:.5f}"
+        )
 
     def is_exceeded(self) -> bool:
         """Check if total spent has met or exceeded the budget."""

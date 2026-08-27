@@ -3,12 +3,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "codesheriff-static-agent"
+name = "codesheriff-agent-static"
 version = "0.1.0"
 description = "Standalone static analysis security review agent for CodeSheriff"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "codesheriff-contracts",
     "pydantic>=2.7.0",
     "pydantic-settings>=2.2.0",
     "tree-sitter>=0.22.0",
@@ -38,11 +39,6 @@ packages = ["src/static_agent"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 
-[tool.ruff]
-line-length = 100
-target-version = "py312"
-
-[tool.mypy]
-python_version = "3.12"
-strict = true
-ignore_missing_imports = true
+# ruff and mypy are configured once, in the workspace root pyproject.toml. A local
+# [tool.ruff] here shadows it for this package's files and silently applies a
+# different rule set — which is how these packages drifted apart in the first place.

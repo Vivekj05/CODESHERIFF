@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Set
+
+from codesheriff_contracts import IN_SCOPE_CWES, ChangeUnit, Evidence
 from context_agent.config import ContextConfig
-from context_agent.contracts import ChangeUnit, Evidence
 from context_agent.rag.embedder import LocalEmbedder
 from context_agent.rag.store import VectorStore
 from context_agent.reasoning.analyzer import evaluate_cross_pr_regression
@@ -13,15 +13,20 @@ from context_agent.retrieval.search import retrieve_similar_prs
 
 logger = logging.getLogger(__name__)
 
+#: What repository precedent can actually evidence: the removal of an access
+#: control that earlier accepted PRs established. No taint path shows these,
+#: which is the whole reason this agent exists (D-006).
+COVERED_CWES: frozenset[str] = frozenset({"CWE-862", "CWE-639"}) & IN_SCOPE_CWES
+
 
 class ContextAgent:
     """RAG-powered cross-PR security regression reviewer agent for CodeSheriff."""
 
     def __init__(
         self,
-        config: Optional[ContextConfig] = None,
-        embedder: Optional[LocalEmbedder] = None,
-        store: Optional[VectorStore] = None,
+        config: ContextConfig | None = None,
+        embedder: LocalEmbedder | None = None,
+        store: VectorStore | None = None,
     ) -> None:
         self.config = config or ContextConfig.load()
         self.agent_id = self.config.agent_id
@@ -29,12 +34,20 @@ class ContextAgent:
         self.embedder = embedder or LocalEmbedder(self.config.embedding_model)
         self.store = store or VectorStore(self.config.chroma_db_dir)
 
-    def analyze(
-        self,
-        unit: ChangeUnit,
-        anchors: Optional[Set[str]] = None,
-    ) -> List[Evidence]:
-        """Analyze a ChangeUnit against RAG memory for cross-PR security regressions. Guarantees zero unhandled exceptions."""
+    def analyze(self, unit: ChangeUnit) -> list[Evidence]:
+        """Analyse a ChangeUnit against RAG memory for cross-PR security regressions.
+
+        Runs blind: no `anchors` parameter (D-008). The agent previously abstained
+        with `no_anchor` unless handed the static agent's finding keys, which made it
+        architecturally incapable of contributing anything the static agent had not
+        already found — and correlated the two.
+
+        It still corroborates rather than solos (D-012): evidence is emitted under the
+        key any agent would derive for this unit and CWE, so it lands on an existing
+        finding when one exists instead of opening a case of its own.
+
+        Guarantees zero unhandled exceptions.
+        """
         try:
             # 1. Cold Start Check (PR #1 handling)
             if self.store.count() == 0:
@@ -45,18 +58,6 @@ class ContextAgent:
                         unit_id=unit.unit_id,
                         reason="no_historical_prs",
                         explanation="Vector database is empty (1st PR in repository).",
-                    )
-                ]
-
-            # 2. Anchor requirement check
-            if anchors is None or len(anchors) == 0:
-                return [
-                    Evidence.abstention(
-                        agent_id=self.agent_id,
-                        agent_version=self.agent_version,
-                        unit_id=unit.unit_id,
-                        reason="no_anchor",
-                        explanation="Context agent abstains when no finding_key anchor keys are supplied.",
                     )
                 ]
 
@@ -102,9 +103,19 @@ class ContextAgent:
                 agent_version=self.agent_version,
             )
 
-            # 6. Anchor filtering
-            if anchors is not None:
-                evidence_list = [ev for ev in evidence_list if ev.finding_key in anchors]
+            # 6. Retrieval succeeded and nothing regressed: SILENCE, not [] (D-005).
+            #    This agent reasons from repository precedent, so its silence speaks
+            #    only to the control-bypass CWEs it can recognise (D-006).
+            if not evidence_list:
+                return [
+                    Evidence.silence(
+                        agent_id=self.agent_id,
+                        agent_version=self.agent_version,
+                        unit_id=unit.unit_id,
+                        covered_cwes=COVERED_CWES,
+                        explanation="Relevant precedent retrieved; no security control regressed.",
+                    )
+                ]
 
             return evidence_list
 

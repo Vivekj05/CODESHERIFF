@@ -1,8 +1,9 @@
 """Symbol extraction and range resolution."""
 
 import re
-from typing import List, Optional
+
 from pydantic import BaseModel
+
 from static_agent.taint.parse import ASTNodeView
 
 
@@ -14,12 +15,17 @@ class SymbolInfo(BaseModel):
     text: str
 
 
-def extract_symbols(root: ASTNodeView) -> List[SymbolInfo]:
+def extract_symbols(root: ASTNodeView) -> list[SymbolInfo]:
     """Extract top-level and nested function/method symbols from AST."""
-    symbols: List[SymbolInfo] = []
+    symbols: list[SymbolInfo] = []
 
     def _walk(node: ASTNodeView) -> None:
-        if node.kind in ("function_definition", "function_declaration", "method_definition", "arrow_function"):
+        if node.kind in (
+            "function_definition",
+            "function_declaration",
+            "method_definition",
+            "arrow_function",
+        ):
             name = "anonymous"
             for child in node.children:
                 if child.kind in ("identifier", "property_identifier", "name"):
@@ -44,7 +50,9 @@ def extract_symbols(root: ASTNodeView) -> List[SymbolInfo]:
         # Regex fallback for function extraction if AST didn't capture symbols
         lines = root.text.splitlines()
         for i, line in enumerate(lines, start=1):
-            m = re.match(r"^\s*def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", line) or re.match(r"^\s*function\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", line)
+            m = re.match(r"^\s*def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", line) or re.match(
+                r"^\s*function\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", line
+            )
             if m:
                 symbols.append(
                     SymbolInfo(
@@ -59,7 +67,7 @@ def extract_symbols(root: ASTNodeView) -> List[SymbolInfo]:
     return symbols
 
 
-def enclosing_symbol(line: int, symbols: List[SymbolInfo]) -> Optional[str]:
+def enclosing_symbol(line: int, symbols: list[SymbolInfo]) -> str | None:
     """Find the symbol name enclosing the specified line number."""
     matched = [s for s in symbols if s.start_line <= line <= s.end_line]
     if not matched:
