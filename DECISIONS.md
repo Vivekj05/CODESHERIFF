@@ -517,3 +517,140 @@ on `json.dumps` the first time an agent emitted a SILENCE. Sorted rather than ar
 because serialised evidence must be byte-stable: snapshot tests and any content hash over an
 evidence record depend on it.
 
+
+---
+
+## D-025 — Persistence is its own package, and the engine may not import a database client
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 3
+
+**Context.** Chapter 3 needed a home for SQLAlchemy models, Alembic and the pgvector store. The
+obvious one was `codesheriff_engine/db/`: no new package, and the existing layers contract already
+put both apps above the engine.
+
+**Decision.** Persistence lives in `packages/storage` (`codesheriff_storage`). The layers contract
+becomes `api | worker → storage → engine → contracts`, and a new `forbidden` contract stops
+`codesheriff_engine` and `codesheriff_contracts` importing `codesheriff_storage`, `sqlalchemy`,
+`alembic` or `psycopg` at all. `apps/worker` gains the dependency (it owns the pipeline, so it owns
+the writes); `apps/api` gains it in Chapter 15 when the dashboard needs reads.
+
+**Why.** §6 requires every fitted number to be reproducible from the calibration split and a
+recorded corpus hash. A fusion or calibration module that *can* open a session makes that an
+honour system — the next person who needs a lookup adds one, and the reproducibility claim quietly
+stops being checkable by anything but review. Agent isolation is already a CI-enforced property
+rather than a convention; this is the same move for research integrity. It also keeps the fusion
+package a pure function of its inputs, which is what makes a corpus run and a production run
+comparable at all.
+
+**Consequences.** Storage may import the engine (it maps `FusionResult` to rows); the engine can
+never import storage. A future calibration job reads its corpus from files, not from the database.
+Verified by adding `import sqlalchemy` to `fusion/bayes.py` and watching `lint-imports` break, then
+removing it.
+
+---
+
+## D-026 — Contract invariants are CHECK constraints as well as Pydantic validators
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 3
+
+**Decision.** The three-kind evidence rules, the closed CWE set and the `finding_key` format are
+restated in the schema: `kind = 'detection'` requires a key and an in-scope CWE, SILENCE requires a
+non-empty `covered_cwes`, ABSTENTION requires a reason, `finding_key` must match `^[0-9a-f]{16}$`,
+and `cwe` must be one of `IN_SCOPE_CWES`. The model constraints are generated from
+`IN_SCOPE_CWES`; the migration writes the same list out literally, and a `db`-marked test compares
+the migrated database against the metadata so the two cannot drift apart unnoticed.
+
+**Why.** Every Tier 1 defect in `AUDIT.md` was an invariant enforced in exactly one place and then
+bypassed from another. The vendored contract's checksum test was defeated by rewriting the expected
+hash. Raw keys such as `abstain:{unit_id}:{reason}` passed a Pydantic model that had no opinion
+about the string it was handed. A second, independent enforcement point costs one migration.
+
+**Consequences.** Widening `IN_SCOPE_CWES` now requires a migration — intended friction for a change
+that invalidates every number fitted against the old set. The `findings.finding_key` regex is also
+what stops `fuse_all_evidence`'s synthetic `abstention:all_agents` key from being stored as if an
+agent had produced it; `mapping.persistable_findings` drops it earlier, with a warning, and
+Chapter 9 removes it at source.
+
+---
+
+## D-027 — Source code is never persisted; bounded excerpts only, capped at write time
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 3
+
+**Context.** §6 says persisted records hold findings, evidence and hashes — never full file
+contents. Two things resist that literally. A taint-path artifact names the lines it walked, and
+that artifact *is* the explanation rendered into the PR comment. A RAG precedent chunk must hold the
+text it was embedded from, or retrieval can neither be shown as evidence nor re-embedded when the
+embedding model changes.
+
+**Decision.** `change_units` stores `post_src_sha256`, `pre_src_sha256`, byte and line counts,
+symbol names and decorator names — there is no source column, and a metadata-level test fails if one
+appears under any of the usual names. Excerpts are permitted in exactly two places,
+`evidence.artifacts` and `precedent_chunks.content`, capped by `redaction.py` at 300 characters per
+line, 20 lines per artifact, 8 KiB of serialised artifacts per evidence row, and 4 KiB / 60 lines
+per precedent chunk. The chunk cap is a CHECK constraint as well. Every cut is marked in the text.
+
+**Why.** Storing whole files would put customers' private source in a database that also holds
+credentials — the thing §6 exists to prevent. Storing nothing would make findings unexplainable and
+the precedent store un-rebuildable. A cap is the smallest thing that satisfies both, and putting it
+in one module means it cannot be forgotten at a call site.
+
+**Note.** This is not the truncation D-015 forbids. That rule protects *analysis input*: an agent
+must abstain rather than reason about half a function. This clips an explanation already produced
+from the whole unit, and says where it clipped.
+
+---
+
+## D-028 — Synchronous sessions
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 3
+
+**Decision.** One synchronous engine and session factory, psycopg3, `postgresql+psycopg://`.
+
+**Why.** Celery is synchronous and owns the pipeline; the API only verifies, enqueues and returns
+202 until Chapter 15. An async stack would mean two engines, two session factories and two test
+harnesses to serve one real consumer. `expire_on_commit=False`, because the worker commits an audit
+and then goes on using its id. Revisit when the dashboard's read path justifies it; the models are
+shared either way.
+
+---
+
+## D-029 — Database tests run against real Postgres, or they do not run
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 3
+
+**Decision.** Tests that touch Postgres carry `@pytest.mark.db` and are skipped unless
+`CODESHERIFF_TEST_DB` names a throwaway database. `uv run pytest` stays green on a machine with no
+services running. Alembic builds the schema in those tests — never `Base.metadata.create_all`.
+
+**Why.** pgvector cannot be faked on SQLite, and a schema built from metadata is not the schema
+production runs: the difference is exactly where a missing migration hides. Skipping loudly is
+better than a fake backend that passes for the wrong reason — this repository already has a test
+suite that reports 100% while three of four components are shells.
+
+**Consequences.** CI needs a Postgres service container for the `db` job. Anyone who never starts
+Docker sees 16 skips, not 16 failures — and never sees the migration or vector coverage either, so
+CI must run it.
+
+---
+
+## D-030 — Vector indexes are declared on the model, not only in the migration
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 3
+
+**Context.** The HNSW index on `precedent_chunks.embedding` was first created with raw SQL in the
+migration, because `CREATE INDEX ... USING hnsw (embedding vector_cosine_ops)` has no obvious
+declarative form. Alembic's comparison against `Base.metadata` then reported it as drift and wanted
+to drop it — caught by `test_no_pending_schema_changes` on its first run against a real database.
+
+**Decision.** Every index, including operator-class indexes, is declared in `__table_args__` with
+`postgresql_using` / `postgresql_ops` **and** created through `op.create_index` in the migration.
+No schema object exists only as raw SQL.
+
+**Why.** Anything the models do not know about is drift as far as autogenerate is concerned, and the
+first `--autogenerate` in a later chapter would have quietly proposed dropping the index that makes
+retrieval fast. A schema object that exists in the database but not the metadata is a schema object
+nobody is comparing.
+
+**Note.** `CREATE EXTENSION IF NOT EXISTS vector` stays raw — an extension is not a metadata object,
+and it is idempotent.

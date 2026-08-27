@@ -125,7 +125,7 @@ not resolve the workspace at all. Chapter 1 wrote the workspace config but never
 across 57 source files · `lint-imports` 3 contracts kept · a deliberate `static_agent ->
 semantic_agent` import was added and correctly failed `lint-imports`, then removed.
 
-## Chapter 3 — Database: SQLAlchemy + Alembic + pgvector ⬜
+## Chapter 3 — Database: SQLAlchemy + Alembic + pgvector ✅
 
 Schema for repositories, audits, change_units, evidence, findings. pgvector extension enabled.
 
@@ -137,6 +137,51 @@ and ephemeral storage.
 
 **Done when:** migrations apply to a clean DB and roll back cleanly; a 384-dim vector column
 round-trips.
+
+**Delivered.** `packages/storage` (`codesheriff_storage`), D-025 through D-029:
+
+- Nine tables: `installations`, `repositories`, `calibration_runs`, `audits`, `change_units`,
+  `evidence`, `findings`, `pr_precedents`, `precedent_chunks`. One Alembic chain, extension created
+  by the migration rather than left to the docker init script.
+- **Persistence is its own package and the engine cannot reach it** — `lint-imports` now forbids
+  `codesheriff_engine` and `codesheriff_contracts` from importing `sqlalchemy`, `alembic`, `psycopg`
+  or `codesheriff_storage`, so §6 reproducibility is CI-enforced rather than honoured (D-025).
+- **Contract invariants restated as CHECK constraints** — the three evidence kinds, the closed CWE
+  set, and `finding_key ~ '^[0-9a-f]{16}$'` (D-026). That last one is also what stops
+  `fuse_all_evidence`'s `abstention:all_agents` marker being stored as a finding; `mapping.py` drops
+  it first, with a warning, and Chapter 9 removes it at source.
+- **No source column anywhere**, asserted against the metadata rather than by review. Excerpts are
+  capped in one module and permitted only in `evidence.artifacts` and `precedent_chunks.content`
+  (D-027).
+- `calibration_runs.is_provisional`, and `prior_probability` / `alert_threshold` stored per finding,
+  so a threshold selected later cannot retroactively rewrite which past findings were alerts (§6).
+- Vector retrieval (`precedents.py`) is scoped to one repository and returned behind a plain
+  dataclass, ready for Chapter 12 to inject into `context.rag` — which still may not import a
+  database client.
+
+**Verified.** 123 tests pass against `pgvector/pgvector:pg16` (106 pass and 17 skip without a
+database) · `ruff` and `ruff format --check` clean across 105 files · `mypy --strict` clean across 66
+source files · `lint-imports` 4 contracts kept, with a deliberate `codesheriff_engine -> sqlalchemy`
+import added, correctly broken, and removed. Both "Done when" criteria hold: `upgrade head` →
+`downgrade base` → `upgrade head` on a clean database, and a 384-dim vector round-trips with correct
+nearest-neighbour ordering.
+
+**Two defects found by running against a real database** — both invisible to the non-db tests:
+
+- The HNSW index was created by raw SQL in the migration and not declared on the model, so Alembic's
+  comparison read it as drift and wanted to drop it. It is now declared in both places. This is
+  exactly what `test_no_pending_schema_changes` exists to catch, on its first run.
+- `search_precedents` defaulted `min_similarity` to `0.0`, silently discarding negatively-similar
+  neighbours — so a query could return fewer rows than `limit` and read as "this repository has no
+  precedent", which is a different claim. The floor is now opt-in; choosing it is Chapter 12's
+  judgement and eventually a fitted number.
+
+```bash
+docker compose up -d postgres
+docker exec codesheriff-postgres psql -U codesheriff -d codesheriff -c "CREATE DATABASE codesheriff_test"
+export CODESHERIFF_TEST_DB=postgresql+psycopg://codesheriff:codesheriff@localhost:5432/codesheriff_test
+uv run pytest packages/storage -m db
+```
 
 ## Chapter 4 — Next.js + shadcn scaffold ⬜
 

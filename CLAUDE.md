@@ -107,7 +107,8 @@ CODESHERIFF/
 │   ├── agent_semantic/   # semantic.hosted
 │   ├── agent_context/    # context.rag
 │   ├── agent_runtime/    # runtime.sfi                                  (empty — Ch 13)
-│   └── engine/           # Fusion, calibration
+│   ├── engine/           # Fusion, calibration. May NOT import a DB client.
+│   └── storage/          # SQLAlchemy models, Alembic, pgvector precedent store
 ├── apps/
 │   ├── api/              # FastAPI: verify HMAC, enqueue, 202. No analysis.  (stub — Ch 6)
 │   ├── worker/           # Celery: owns the pipeline and all agents          (stub — Ch 6)
@@ -125,6 +126,13 @@ runtime agent still does not exist.
 The live webhook still sits at `packages/engine/src/codesheriff_engine/github/webhook.py` and is
 **not** mounted by `apps/api` — it has no HMAC verification (`AUDIT.md` 0.1). It moves to
 `apps/api` in Chapter 6, verified and enqueueing.
+
+**Persisting anything.** All database access lives in `packages/storage`, and `codesheriff_engine`
+is forbidden from importing `sqlalchemy`, `alembic`, `psycopg` or `codesheriff_storage` — enforced
+by `import-linter` (D-025). Fitted numbers must be reproducible from the calibration split and a
+recorded corpus hash; a fusion module that can open a session makes that unverifiable. Never write a
+row by hand: `mapping.py` is the only writer, it hashes source rather than storing it, and it drops
+fusion results whose key no agent could have produced (D-026, D-027).
 
 **Building evidence.** Never construct `Evidence(...)` directly — use `Evidence.detection()`,
 `.silence()` or `.abstention()`. Never build a `finding_key` by hand — use `unit.key_for(cwe)`. Both
@@ -208,11 +216,20 @@ uv sync --all-packages           # install the workspace  (--all-packages, or me
 uv run pytest                    # all packages
 uv run pytest packages/agent_static
 uv run ruff check . && uv run ruff format --check . && uv run mypy .
-uv run lint-imports              # agent boundary enforcement — must stay green
+uv run lint-imports              # agent + storage boundary enforcement — must stay green
 uv run uvicorn codesheriff_api.main:app --reload   # health endpoint only for now
+
+# Database (Chapter 3). Alembic owns the schema; never Base.metadata.create_all.
+docker compose up -d postgres
+uv run alembic -c packages/storage/alembic.ini upgrade head
+uv run alembic -c packages/storage/alembic.ini downgrade base
+
+# Tests that touch Postgres are marked `db` and SKIP unless this is set (D-029).
+export CODESHERIFF_TEST_DB=postgresql+psycopg://codesheriff:codesheriff@localhost:5432/codesheriff
+uv run pytest packages/storage -m db
 ```
 
-All five are green as of Chapter 2. `ruff` and `mypy` are configured **once**, in the root
+All five are green as of Chapter 3. `ruff` and `mypy` are configured **once**, in the root
 `pyproject.toml` — a per-package `[tool.ruff]` silently shadows it with a different rule set, which
 is how the agent packages went unlinted (D-023).
 

@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "codesheriff-contracts",
     "codesheriff-engine",
+    "codesheriff-storage",
     "codesheriff-agent-static",
     "codesheriff-agent-semantic",
     "codesheriff-agent-context",

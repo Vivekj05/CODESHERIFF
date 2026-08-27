@@ -32,6 +32,7 @@ codesheriff-agent-semantic = { workspace = true }
 codesheriff-agent-context = { workspace = true }
 codesheriff-agent-runtime = { workspace = true }
 codesheriff-engine = { workspace = true }
+codesheriff-storage = { workspace = true }
 
 [tool.ruff]
 target-version = "py312"
@@ -69,6 +70,7 @@ mypy_path = [
     "packages/agent_context/src",
     "packages/agent_runtime/src",
     "packages/engine/src",
+    "packages/storage/src",
     "apps/api/src",
     "apps/worker/src",
 ]
@@ -97,6 +99,11 @@ python_files = ["test_*.py"]
 # scattering __init__.py through the test trees.
 addopts = "--strict-markers --import-mode=importlib"
 consider_namespace_packages = true
+markers = [
+    # pgvector cannot be faked on SQLite, and a schema built from metadata is not the schema
+    # production runs — so these tests use a real Postgres or they do not run (D-029).
+    "db: needs a live Postgres; skipped unless CODESHERIFF_TEST_DB names a throwaway database",
+]
 
 # ---------------------------------------------------------------------------
 # Agent boundary enforcement (PROJECT_CONTEXT.md §5).
@@ -115,6 +122,7 @@ consider_namespace_packages = true
 include_external_packages = true
 root_packages = [
     "codesheriff_contracts",
+    "codesheriff_storage",
     "static_agent",
     "semantic_agent",
     "context_agent",
@@ -145,6 +153,7 @@ source_modules = [
 ]
 forbidden_modules = [
     "codesheriff_engine",
+    "codesheriff_storage",
     "codesheriff_api",
     "codesheriff_worker",
     "sqlalchemy",
@@ -154,10 +163,34 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "Layered: apps depend on engine depends on contracts"
+name = "Layered: apps depend on storage depends on engine depends on contracts"
 type = "layers"
 layers = [
     "codesheriff_api | codesheriff_worker",
+    "codesheriff_storage",
     "codesheriff_engine",
     "codesheriff_contracts",
+]
+
+# ---------------------------------------------------------------------------
+# Research integrity, enforced the same way agent isolation is (D-025).
+#
+# §6 requires every fitted number to be reproducible from the calibration split and a recorded
+# corpus hash. A fusion or calibration module that can open a database session turns that into an
+# honour system: the next person to need a lookup adds one, and the reproducibility claim quietly
+# stops being checkable. Persistence is an application concern — apps/worker writes, apps/api
+# reads — and the engine below them cannot see it.
+# ---------------------------------------------------------------------------
+[[tool.importlinter.contracts]]
+name = "Fusion and calibration cannot reach the database"
+type = "forbidden"
+source_modules = [
+    "codesheriff_contracts",
+    "codesheriff_engine",
+]
+forbidden_modules = [
+    "codesheriff_storage",
+    "sqlalchemy",
+    "alembic",
+    "psycopg",
 ]
