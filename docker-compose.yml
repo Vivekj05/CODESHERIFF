@@ -1,0 +1,47 @@
+# Local development services.
+#
+# Postgres (with pgvector) and Redis only. The API and worker run on the host
+# via `uv run` so the edit/reload loop stays fast.
+#
+# Note on the runtime agent (Chapter 13): the sandbox is Wasmtime + WASI, NOT a
+# container. PROJECT_CONTEXT.md §4 rejects Docker as the sandbox — containers
+# are OS-level isolation, not software fault isolation, and the SFI claim
+# requires the latter. Docker here is developer convenience, nothing more.
+
+services:
+  postgres:
+    # pgvector is required (§4); the plain postgres image does not carry it.
+    image: pgvector/pgvector:pg16
+    container_name: codesheriff-postgres
+    environment:
+      POSTGRES_USER: codesheriff
+      POSTGRES_PASSWORD: codesheriff
+      POSTGRES_DB: codesheriff
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Enables the extension on first boot. Alembic owns the schema itself.
+      - ./scripts/init-pgvector.sql:/docker-entrypoint-initdb.d/00-pgvector.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codesheriff -d codesheriff"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: codesheriff-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-data:
+  redis-data:
