@@ -112,7 +112,7 @@ CODESHERIFF/
 ├── apps/
 │   ├── api/              # FastAPI: verify HMAC, enqueue, 202. No analysis.  (stub — Ch 6)
 │   ├── worker/           # Celery: owns the pipeline and all agents          (stub — Ch 6)
-│   └── dashboard/        # Next.js — rendering layer only                    (empty — Ch 15)
+│   └── dashboard/        # Next.js 16 — rendering layer only. Shell + mock data (Ch 4)
 └── docs/history/         # Superseded specs, kept for provenance
 ```
 
@@ -229,9 +229,17 @@ export CODESHERIFF_TEST_DB=postgresql+psycopg://codesheriff:codesheriff@localhos
 uv run pytest packages/storage -m db
 ```
 
-All five are green as of Chapter 3. `ruff` and `mypy` are configured **once**, in the root
-`pyproject.toml` — a per-package `[tool.ruff]` silently shadows it with a different rule set, which
-is how the agent packages went unlinted (D-023).
+The dashboard is a separate npm project, not a uv workspace member (Chapter 4):
+
+```bash
+cd apps/dashboard
+npm run dev                      # http://localhost:3000, mock data, no backend needed
+npm run lint && npm run build    # the two frontend gates — must stay green
+```
+
+All five Python gates and both frontend gates are green as of Chapter 4. `ruff` and `mypy` are
+configured **once**, in the root `pyproject.toml` — a per-package `[tool.ruff]` silently shadows it
+with a different rule set, which is how the agent packages went unlinted (D-023).
 
 **Tests must never make live API calls.** Enforced via recorded responses; `conftest.py` should
 hard-fail if a live call occurs without an explicit flag.

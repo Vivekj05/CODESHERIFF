@@ -654,3 +654,64 @@ nobody is comparing.
 
 **Note.** `CREATE EXTENSION IF NOT EXISTS vector` stays raw — an extension is not a metadata object,
 and it is idempotent.
+
+---
+
+## D-031 — The dashboard is a separate npm project, not a workspace member
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 4
+
+**Decision.** `apps/dashboard` is a standalone Next.js 16 / React 19 / Tailwind v4 / shadcn/ui
+project with its own `package.json` and lockfile. It is not in the `uv` workspace, shares no build
+step with Python, and adds two gates of its own: `npm run lint` and `npm run build` (which includes
+the TypeScript check).
+
+**Why.** There is nothing for the two toolchains to share. §6 already forbids Next.js API routes as
+a backend and forbids business logic in TypeScript, so the only coupling is the shape of the JSON
+the API will return — and that is a contract, not a build dependency. Keeping them separate means a
+Python change can never break the frontend build and vice versa.
+
+**Consequences.** CI grows a Node job. `apps/dashboard/node_modules` is gitignored; the lockfile is
+committed. The generated `AGENTS.md` / `CLAUDE.md` in that directory are committed too — `next dev`
+rewrites them if removed, and they point at the bundled version-correct docs, which matter because
+Next 16 changed App Router conventions (typed `PageProps`, awaited `params`, and a shadcn built on
+Base UI's `render` prop rather than Radix's `asChild`).
+
+---
+
+## D-032 — No probability reaches the screen without its calibration state
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 4
+
+**Decision.** Every posterior renders through one component, `<Posterior>`, which reads the audit's
+calibration artifact. While `isProvisional` is true the number is labelled "provisional — not
+calibrated" in the markup itself; once a fitted artifact exists the same component shows its ECE and
+sample size. No page formats a percentage on its own.
+
+**Why.** The thesis is that a stated 87% must correspond to being right 87% of the time. Existing
+tools emit confident numbers with no reliability behind them, which is exactly why developers learn
+to ignore them — a dashboard that renders a bare "87%" before Chapter 14 fits anything would be the
+same failure with nicer typography. D-010 already forbids treating hand-set ratios as calibrated;
+this makes it structural rather than a rule someone has to remember on every new page.
+
+**Consequences.** Chapter 15 may make this display richer. It may not make it quieter, and any new
+surface showing a probability goes through the same component.
+
+---
+
+## D-033 — The `(protected)` route group is structure, and says so until Chapter 5
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 4
+
+**Context.** Chapter 4's deliverable includes a "protected layout", but authentication is Chapter 5.
+A layout that calls `getSession()` and renders looks like a security boundary whether or not one
+exists behind it.
+
+**Decision.** The session helper is named `getPlaceholderSession()`, returns a type with
+`isPlaceholder: true`, cannot fail, and carries a file-level comment saying it protects nothing. The
+layout renders a visible "mock data · no backend · not signed in" banner. Chapter 5 replaces the
+helper and adds the redirect the route group's name implies.
+
+**Why.** The alternative — a plausible-looking `getSession()` that always succeeds — is how a
+placeholder survives into a release. Making the absence of auth loud in the name, the type and the
+UI means the day it becomes real is a day someone deletes an obvious lie, not a day nobody notices.

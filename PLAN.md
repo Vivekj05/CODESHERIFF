@@ -183,7 +183,7 @@ export CODESHERIFF_TEST_DB=postgresql+psycopg://codesheriff:codesheriff@localhos
 uv run pytest packages/storage -m db
 ```
 
-## Chapter 4 — Next.js + shadcn scaffold ⬜
+## Chapter 4 — Next.js + shadcn scaffold ✅
 
 Frontend scaffold, Tailwind, shadcn components, layout shell, navigation, route structure, protected
 layout.
@@ -191,6 +191,34 @@ layout.
 Rendering layer only — no business logic, no DB access, no detection logic in TypeScript (§6).
 
 **Done when:** the shell builds and renders against mock data with no backend dependency.
+
+**Delivered.** `apps/dashboard` — Next.js 16.3.3 (App Router), React 19, TypeScript, Tailwind v4,
+shadcn/ui. D-031 through D-033:
+
+- Seven routes: `/` → `/repositories`, `/audits`, `/audits/[id]`, `/findings/[key]`, `/settings`,
+  plus `_not-found`. All render from `src/lib/mock-data.ts`; nothing fetches.
+- `src/lib/types.ts` mirrors contract v2.0.0 — the three evidence kinds, `covered_cwes`,
+  `IN_SCOPE_CWES`. It is **not** the dashboard API contract; that is Chapter 15's to define, and
+  defining it early is the mistake the original outline made.
+- **`<Posterior>` is the only way a probability reaches the screen** (D-032). While no fitted
+  calibration artifact exists it marks the number "provisional — not calibrated", so the UI cannot
+  grow a bare "87%" before Chapter 14 gives it one.
+- **Silences and abstentions render alongside detections** on the finding page, each with the
+  reason it means what it means.
+- `(protected)` is route structure, not a security boundary: `getPlaceholderSession()` cannot fail
+  and says so in its name, its types and a banner in the header (D-033). Chapter 5 replaces it.
+- Two new gates: `npm run lint` and `npm run build` in `apps/dashboard`.
+
+**Verified.** `npm run lint` clean · `npm run build` compiles and type-checks 7 routes · every route
+returns 200 against `next start` and an unknown finding key returns 404 · the rendered finding page
+contains detections, silences, abstentions and the provisional marker.
+
+**Note on the framework.** Next 16 postdates the model's training data and `create-next-app` writes
+an `AGENTS.md` saying so. Conventions that differ: typed `PageProps<'/route'>` and `LayoutProps`,
+`params` awaited, and shadcn/ui now built on **Base UI** (`render={<X/>}`) rather than Radix
+(`asChild`) — which is what the first build failed on. The bundled docs in
+`apps/dashboard/node_modules/next/dist/docs/` are authoritative; read them before writing
+components.
 
 ## Chapter 5 — GitHub OAuth, App installation, repository listing ⬜
 
