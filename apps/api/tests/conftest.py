@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import socket
+import uuid
 from collections.abc import Iterator
 
 import pytest
@@ -33,6 +34,7 @@ from codesheriff_api.github_gateway import (
     InstallationRepository,
 )
 from codesheriff_api.main import app
+from codesheriff_api.queue import QueueError, get_queue
 from codesheriff_storage.testing import migrated_engine, rollback_session, test_database_url
 
 LOOPBACK = {"127.0.0.1", "::1", "localhost", "0.0.0.0"}
@@ -118,6 +120,27 @@ class FakeGitHubGateway:
         return self.repositories.get(installation_id, [])
 
 
+WEBHOOK_SECRET = "test-webhook-secret"
+
+
+class FakeTaskQueue:
+    """A broker that records what it was asked to publish, and can refuse.
+
+    Substituted at the `TaskQueue` interface for the same reason GitHub is: a test that needed a
+    live Redis would either be skipped everywhere or would make the suite depend on a service. What
+    matters at this layer is *that* an audit id was published, and exactly once.
+    """
+
+    def __init__(self, *, failing: bool = False) -> None:
+        self.published: list[uuid.UUID] = []
+        self.failing = failing
+
+    def enqueue_audit(self, audit_id: uuid.UUID) -> None:
+        if self.failing:
+            raise QueueError("broker unreachable")
+        self.published.append(audit_id)
+
+
 @pytest.fixture
 def api_config() -> ApiConfig:
     """Configuration with credentials present but never used — the gateway is faked."""
@@ -126,9 +149,15 @@ def api_config() -> ApiConfig:
         GITHUB_APP_CLIENT_ID="Iv1.testclientid",
         GITHUB_APP_CLIENT_SECRET="test-client-secret",
         GITHUB_APP_SLUG="codesheriff-test",
+        GITHUB_WEBHOOK_SECRET=WEBHOOK_SECRET,
         API_PUBLIC_URL="http://localhost:8000",
         DASHBOARD_ORIGIN="http://localhost:3000",
     )
+
+
+@pytest.fixture
+def queue() -> FakeTaskQueue:
+    return FakeTaskQueue()
 
 
 @pytest.fixture(scope="session")
@@ -160,7 +189,12 @@ def github() -> FakeGitHubGateway:
 
 
 @pytest.fixture
-def client(db: DbSession, api_config: ApiConfig, github: FakeGitHubGateway) -> Iterator[TestClient]:
+def client(
+    db: DbSession,
+    api_config: ApiConfig,
+    github: FakeGitHubGateway,
+    queue: FakeTaskQueue,
+) -> Iterator[TestClient]:
     """The real app, with configuration, database and GitHub replaced.
 
     `get_db` yields the rollback-scoped session and swallows the commit: the fixture's transaction
@@ -173,6 +207,7 @@ def client(db: DbSession, api_config: ApiConfig, github: FakeGitHubGateway) -> I
     app.dependency_overrides[get_config] = lambda: api_config
     app.dependency_overrides[get_db] = _db_override
     app.dependency_overrides[get_github] = lambda: github
+    app.dependency_overrides[get_queue] = lambda: queue
     try:
         with TestClient(app, follow_redirects=False) as test_client:
             yield test_client

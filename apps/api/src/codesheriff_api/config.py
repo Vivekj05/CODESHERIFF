@@ -59,6 +59,21 @@ class ApiConfig(BaseSettings):
     github_app_slug: str | None = Field(default=None, alias="GITHUB_APP_SLUG")
     """The App's URL slug, used to build the install link. From the App's settings page."""
 
+    github_webhook_secret: str | None = Field(default=None, alias="GITHUB_WEBHOOK_SECRET")
+    """The shared secret GitHub signs each delivery with. Without it the webhook refuses every
+    request rather than accepting unsigned ones — an unauthenticated endpoint here lets anyone who
+    learns the URL drive analysis and post comments under the App's identity (`AUDIT.md` 0.1)."""
+
+    celery_broker_url: str = Field(default="redis://localhost:6379/0", alias="CELERY_BROKER_URL")
+    """Where the audit is handed to the worker. The API only ever writes to this."""
+
+    audit_queue_name: str = Field(default="audits", alias="AUDIT_QUEUE_NAME")
+
+    enqueue_timeout_seconds: float = 2.0
+    """A cap on the broker call, not a general timeout. GitHub abandons a delivery at 10s and this
+    endpoint is budgeted at under 3s, so a Redis that has stopped answering must fail the request
+    quickly enough that GitHub's own retry is what recovers it."""
+
     github_api_base: str = "https://api.github.com"
     github_web_base: str = "https://github.com"
 
@@ -92,6 +107,20 @@ class ApiConfig(BaseSettings):
         if not self.github_app_slug:
             return None
         return f"{self.github_web_base.rstrip('/')}/apps/{self.github_app_slug}/installations/new"
+
+    def require_webhook_secret(self) -> str:
+        """The webhook signing secret, or a clear failure naming what is missing.
+
+        Deliberately not defaulted to an empty string. A falsy secret would make
+        `hmac.compare_digest` compare against a signature of the empty key, which an attacker can
+        compute — a missing secret has to stop the request, never weaken the check.
+        """
+        if not self.github_webhook_secret:
+            raise MissingCredentialError(
+                "GITHUB_WEBHOOK_SECRET must be set to receive webhooks. It is the value entered "
+                "in the GitHub App's webhook settings; see .env.example."
+            )
+        return self.github_webhook_secret
 
     def require_oauth_app(self) -> OAuthApp:
         """The OAuth client credentials, or a clear failure naming what is missing."""

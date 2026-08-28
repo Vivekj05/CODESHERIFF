@@ -78,6 +78,9 @@ mypy_path = [
 [[tool.mypy.overrides]]
 # Third-party packages without type information.
 module = [
+    # Celery ships no py.typed marker. The API touches exactly two of its symbols and both are
+    # wrapped in `queue.py`, so the untyped surface stops at that module's boundary.
+    "celery.*",
     "networkx.*",
     "tree_sitter.*",
     "tree_sitter_language_pack.*",

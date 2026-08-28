@@ -3,14 +3,16 @@
 Replaces the previous root-level main.py, which resolved the four standalone packages by mutating
 sys.path. The uv workspace makes that unnecessary.
 
-The webhook router is deliberately NOT wired up yet: the existing implementation has no HMAC
-verification (AUDIT.md 0.1) and processes inline (AUDIT.md 4.3). Wiring it here unchanged would
-carry a live security hole into the new layout. PLAN.md Chapter 6 lands the verified, enqueueing
-version.
-
-Chapter 5 adds sign-in and repository listing. Route handlers are synchronous `def`, which FastAPI
+Chapter 5 added sign-in and repository listing; Chapter 6 adds the webhook, which is the only
+route on this app that GitHub itself calls. Route handlers are synchronous `def`, which FastAPI
 runs in a threadpool — the database session and the GitHub client are both synchronous (D-028), and
-a sync call inside an `async def` would block the event loop for the whole process.
+a sync call inside an `async def` would block the event loop for the whole process. The webhook is
+the one exception, and says why in its own module.
+
+This process performs no analysis. It verifies a signature, writes a row and publishes an id; the
+worker owns everything after that. Keeping the split means the edge holds no LLM credential and no
+agent code, and there is no function here that could tempt anyone into running a pipeline inline
+again (AUDIT.md 4.3).
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from codesheriff_api import auth, repositories
+from codesheriff_api import auth, repositories, webhooks
 from codesheriff_api.config import ApiConfig
 
 config = ApiConfig.load()
@@ -43,6 +45,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(repositories.router)
+app.include_router(webhooks.router)
 
 
 @app.get("/health")
@@ -56,5 +59,5 @@ async def root() -> dict[str, object]:
         "service": "CodeSheriff",
         "status": "online",
         "auth": "ready" if config.github_app_client_id else "unconfigured — see .env.example",
-        "webhook": "not yet mounted - see PLAN.md Chapter 6",
+        "webhook": "ready" if config.github_webhook_secret else "unconfigured — see .env.example",
     }

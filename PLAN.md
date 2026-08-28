@@ -26,16 +26,20 @@ numeric is calibrated, because no corpus exists.
 
 The test suite reports 100% and cannot detect any of this.
 
-As of Chapter 2 the workspace installs, runs and passes its four gates, and the contract every other
-component serialises is frozen at v2.0.0. **The analysis components are still the shells the audit
-described** — Chapter 2 made them speak the right contract, not do the right work. The taint engine
-still builds a def-use graph and discards it; the context agent's reasoning is still four substring
-tests; the runtime agent still does not exist; the webhook still has no HMAC verification. Each has
-a chapter.
+As of Chapter 2 the workspace installs, runs and passes its gates, and the contract every other
+component serialises is frozen at v2.0.0. As of Chapter 6 the seam around the analysis is real: a
+signature-verified delivery becomes a queued audit becomes one comment posted by a worker, and the
+unauthenticated endpoint is deleted rather than patched.
+
+**The analysis components are still the shells the audit described.** Chapters 2 and 6 made the
+system speak the right contract and run the right shape; neither made an agent do the right work.
+The taint engine still builds a def-use graph and discards it; the context agent's reasoning is
+still four substring tests; the runtime agent still does not exist. Each has a chapter, and all of
+them are in Phase B.
 
 | Version | Goal | Status |
 |---|---|---|
-| v0.1 | webhook → diff parsed → comment posted | ⚠️ posts comments; no HMAC, no queue, per-file units |
+| v0.1 | webhook → diff parsed → comment posted | ✅ **seam complete** (Ch 6) — HMAC verified before parsing, enqueued, worker posts. Extraction is still per-file diff fragments (Ch 8) |
 | v0.2 | contracts frozen + corpus with committed splits | ⚠️ contracts frozen at v2.0.0 (Ch 2); **no corpus at all** |
 | v0.3 | Semgrep backend + fusion engine | ⚠️ Semgrep runner works; fusion has 7 defects |
 | v0.4 | taint engine | ⚠️ **no taint engine** — def-use graph discarded; line cross-product |
@@ -270,10 +274,10 @@ account-owner action nobody else can do. Everything up to that point is verified
 fill five values into `.env`, install it, sign in, and confirm the repository list survives a sign-out
 and back in.
 
-## Chapter 6 — Webhook, HMAC, Celery — **the v0.1 seam** ⬜
+## Chapter 6 — Webhook, HMAC, Celery — **the v0.1 seam** ✅
 
-**Replaces** `packages/engine/src/codesheriff_engine/github/webhook.py`.
-**Closes** `AUDIT.md` 0.1 (unauthenticated endpoint), 4.3 (inline processing).
+**Replaced** `packages/engine/src/codesheriff_engine/github/webhook.py`.
+**Closes** `AUDIT.md` 0.1 (unauthenticated endpoint) and 4.3 (inline processing).
 
 Webhook registration. Verify `X-Hub-Signature-256` **before parsing the payload**. Enqueue, return
 202. Celery + Redis worker owns the pipeline. Hardcoded `Evidence` posted to a real PR — no analysis
@@ -281,6 +285,70 @@ yet.
 
 **Done when:** a forged signature is rejected 401 with no outbound call; a valid one returns 202 in
 under 3s with the job still pending; a real PR receives the comment from the worker.
+
+**Delivered.** The v0.1 seam, end to end: a signed delivery becomes a queued audit becomes one
+comment posted by the worker. D-038 through D-043.
+
+- **The signature is checked against the raw body before anything else** — before `json.loads`,
+  before a row is read or written, before the broker is touched. `hmac.compare_digest`, never `==`.
+  A missing `GITHUB_WEBHOOK_SECRET` answers **501 and accepts nothing**; it never degrades to
+  accepting unsigned payloads. The ordering is pinned by a test: malformed JSON under a *bad*
+  signature must return 401, not 400, because a 400 would prove the parser saw attacker bytes first.
+- **The edge writes one row and publishes one id.** `celery.send_task("codesheriff.run_audit")` by
+  name — `import-linter` forbids `apps/api` from importing `apps/worker`, which is what keeps the
+  agents, the LLM client and tree-sitter out of the process that must answer in 3s (D-040). The
+  message carries an audit id and nothing else (D-041); Redis holds no PR payload, and `json` is
+  the only accepted serialiser.
+- **Redelivery is designed for, not tolerated.** `audits.delivery_id` is UNIQUE (migration 0003), so
+  GitHub's at-least-once delivery cannot open a second run — the handler answers `202 duplicate`
+  (D-038). The broker being unreachable is a 503 *after* the row is committed, so the retry finds
+  the existing audit rather than duplicating it.
+- **`superseded` is a status of its own** (D-039). D-034 said a superseded audit is abandoned; this
+  says the row must not call that a failure. Pushing again is the most ordinary thing a developer
+  does, and four red audits per five-commit branch would make the real error rate unreadable. The
+  worker re-checks immediately before writing to GitHub, because the window between claiming and
+  posting is the whole pipeline.
+- **All three subscribed events now do something.** `installation` writes suspensions and removes
+  uninstalled accounts; `installation_repositories` syncs the set. A `pull_request` payload may
+  only `ensure_*` — insert-if-absent — because it carries no `suspended_at`, so an upsert would
+  clear a suspension on every push, and `analysis_enabled` is never rewritten from a webhook.
+- **A verified delivery for an unknown repository is recorded and analysed.** That is not the
+  D-037 case: `?installation_id=` in a URL is chosen by whoever clicks the link, a body carrying a
+  valid HMAC is GitHub speaking. No session gains visibility of anything — that still comes only
+  from `GET /user/installations` at sign-in (D-035).
+- **The comment says nothing it cannot support.** Five abstentions, one per backend, built through
+  `Evidence.abstention()` — the honest report of four agents that do not exist. **No probability
+  appears**, because nothing is calibrated (D-032), and the comment says why. Nothing from the pull
+  request is echoed: no title, no branch, no description, no source. The evidence is deliberately
+  not persisted — `evidence` rows hang off a `change_units` row, and inventing one would put a
+  function nobody analysed into the table that records what was analysed.
+- Storage gains `audits.py` (the lifecycle: open, claim, supersede, finish, fail) and migration
+  0003. Every state change is one conditional UPDATE, so a task delivered twice cannot run twice.
+- **Deleted, not patched:** `engine/github/webhook.py`; `engine/main.py`, a *second* FastAPI app
+  that mounted the unauthenticated webhook; the `serve` CLI command that booted it;
+  `reporter.post_pr_review_comment`, which used a personal access token over blocking `requests`
+  and **skipped silently** when the token was absent. `EngineConfig` loses `github_token`,
+  `github_webhook_secret`, `github_api_base`, `host` and `port` — `github_webhook_secret` was the
+  one `AUDIT.md` 0.1 named, defined there and read nowhere. The engine no longer depends on
+  `fastapi`, `uvicorn` or `requests`.
+
+**Verified.** 254 Python tests pass against Postgres (140 pass and 114 skip without a database) ·
+`ruff check` and `ruff format --check` clean across 134 files · `mypy --strict` clean across 81
+source files · `lint-imports` 4 contracts kept. The webhook returns 202 well inside the 3s budget,
+asserted in a test. Migration 0003 applies to a clean database and rolls back, including the data
+migration that folds `superseded` rows into `failed` — exercised with a real row, because every
+other migration test runs against an empty `audits` and cannot catch a data migration at all.
+
+**Two things worth knowing about the migration.** Postgres refuses `ALTER TYPE ... ADD VALUE` inside
+the transaction that adds it, so the enum is replaced rather than extended; and the CHECK constraint
+from 0001 has to come off first, because Postgres stores it with the literal already bound to the
+old type ("operator does not exist: audit_status_new <> audit_status").
+
+⚠️ **Not fully proven until the App is registered.** The third acceptance criterion — "a real PR
+receives the comment from the worker" — needs a GitHub App and a tunnel, which only the account
+owner can set up. Everything up to that point is verified against a real database and a real
+`githubkit` client driven through an httpx `MockTransport`. `docs/webhook-setup.md` is the
+checklist; it shares the blocker with Chapter 5.
 
 ---
 

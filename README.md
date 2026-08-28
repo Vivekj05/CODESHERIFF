@@ -112,8 +112,13 @@ agent importing a sibling, the engine, or infrastructure fails CI.
 ## Project status
 
 A full conformance audit found that the committed code does not implement the design above. Three
-of four analysis components are shells, the webhook is unauthenticated, and no corpus exists — so
-no number the system currently produces is calibrated.
+of four analysis components are shells and no corpus exists — so no number the system currently
+produces is calibrated, and it says so on every pull request it comments on.
+
+The seam around the analysis is real as of Chapter 6: a signature-verified webhook becomes a queued
+audit becomes one comment posted by the worker. The unauthenticated endpoint the audit found was
+deleted rather than patched. What is still missing is the analysis itself — the taint engine, the
+RAG reasoning, the runtime sandbox, and the corpus every fitted number depends on.
 
 The audit is in **[`AUDIT.md`](AUDIT.md)**, with a `file:line` citation for every claim. It is the
 baseline the rebuild is measured against.

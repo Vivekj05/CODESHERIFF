@@ -837,3 +837,176 @@ App the redirect is silent, so the cost is one hop.
 **Consequences.** The path that widens a session is the same path that created it, so there is one
 place to audit rather than two. The repository sync also happens there, which means no unauthenticated
 request can cause writes on behalf of an installation.
+
+---
+
+## D-038 — `X-GitHub-Delivery` is an idempotency key, stored and unique
+
+**Date:** 2026-08-28 · **Status:** ACTIVE · **Chapter:** 6
+
+**Context.** GitHub delivers webhooks *at least* once. A delivery that times out, or that answers
+with a 5xx, is redelivered — and Chapter 6 deliberately answers 503 when the broker is unreachable,
+which makes redelivery a designed-for path rather than an edge case.
+
+**Decision.** `audits.delivery_id` holds the `X-GitHub-Delivery` header and carries a UNIQUE
+constraint. The handler looks for an existing audit with that id before opening a new one and, if
+it finds one, answers 202 with `{"status": "duplicate"}` and does not enqueue again.
+
+**Why the constraint and not just the lookup.** The lookup makes the common case correct; the
+constraint makes the racing case correct. Two deliveries arriving together both find nothing and
+both insert, and only a database-level guarantee stops the second. Same reasoning as D-026: an
+invariant the application checks is an invariant until somebody adds a second writer.
+
+**Why not dedupe on `(repository_id, head_sha)` instead.** Because D-034 requires that pair *not*
+to be unique — re-analysing one commit under a new calibration artifact is how a recalibration gets
+evaluated. Delivery id is orthogonal to that: it identifies one HTTP request GitHub made, which is
+exactly the thing that must not happen twice.
+
+**Consequences.** `delivery_id` is nullable, because an audit opened by any other route — a corpus
+replay, a manual re-run in Chapter 15 — has no delivery behind it. A redelivery after a broker
+failure finds the existing row and does **not** republish it; recovering a stranded `queued` audit
+is a sweep's job, and the row is visible and diagnosable in the meantime.
+
+---
+
+## D-039 — `superseded` is a status, not a failure
+
+**Date:** 2026-08-28 · **Status:** ACTIVE · **Chapter:** 6
+
+**Context.** D-034 settled that an audit still running for a superseded head is abandoned rather
+than finished. It did not say what the row then says. The four statuses in migration 0001 were
+`queued`, `running`, `succeeded`, `failed`, so the cheap option was `failed` with an
+`error_reason` of "superseded".
+
+**Decision.** `audit_status` gains a fifth value, `superseded`, in migration 0003.
+
+**Why.** Pushing again is the single most ordinary thing a developer does to a pull request. Under
+the cheap option a five-commit branch produces four failed audits, the dashboard is mostly red, and
+the genuine failure rate — the number that says whether this system works — becomes unreadable by
+anyone who has not memorised the convention. A distinct state costs one migration and keeps
+"failed" meaning failed.
+
+**Cost, recorded honestly.** Postgres will not let `ALTER TYPE ... ADD VALUE` be used inside the
+transaction that adds it, and Alembic runs a migration in one transaction, so the enum is replaced
+rather than extended: create a new type, cast the column across, drop the old one, rename. The
+CHECK constraint from 0001 has to come off first and go back on afterwards, because Postgres stores
+it with the literal already bound to the old type — without that, the ALTER fails with "operator
+does not exist: audit_status_new <> audit_status". The downgrade folds `superseded` rows into
+`failed` with a reason, exercised by a test with a real row in it: every other migration test runs
+against an empty `audits` and cannot catch a data migration at all.
+
+**Consequences.** `fail_audit` refuses to move a superseded audit — being overtaken is not a
+failure, and a worker that crashes on an already-abandoned run must not relabel it. `claim_audit`
+refuses it too, so an in-flight task stops at the claim.
+
+---
+
+## D-040 — The API addresses the worker's task by name, never by import
+
+**Date:** 2026-08-28 · **Status:** ACTIVE · **Chapter:** 6
+
+**Decision.** `apps/api` publishes with `celery.send_task("codesheriff.run_audit", [audit_id])`. It
+does not import `codesheriff_worker`. The name is duplicated as a constant in each package, with a
+test asserting the two are equal.
+
+**Why.** The `import-linter` layers contract puts both apps on the same layer, so the import is
+already forbidden — but the contract is right rather than merely inconvenient. Importing the worker
+would pull the agents, the LLM client, `tree-sitter` and Wasmtime into the process that has to
+answer GitHub in under three seconds, and would put a directly callable pipeline function in scope
+of the request handler. That is `AUDIT.md` 4.3 with one import statement standing between it and
+recurring.
+
+**The cost, and what pays for it.** A duplicated string can drift, and drift is silent: the API
+keeps queueing audits, the worker keeps waiting for a task nobody sends, and the symptom is
+indistinguishable from a worker that is not running.
+`apps/api/tests/test_task_name_contract.py` asserts the two constants match *and* that Celery
+registered the task under that name — naming it in a constant is not the same as registering it,
+and forgetting `name=` registers it under a module path instead. A test is not part of the import
+graph the contract constrains, which is exactly why it may see both sides.
+
+---
+
+## D-041 — The queue carries an audit id and nothing else
+
+**Date:** 2026-08-28 · **Status:** ACTIVE · **Chapter:** 6
+
+**Decision.** The Celery message is a single UUID string. Repository, pull request number, head
+SHA, installation and the previous comment id are all read from Postgres by the worker.
+
+**Why.**
+
+1. **A second copy can disagree with the first.** The audit row is written before the message is
+   published. A message carrying the same facts is a snapshot that ages, and the first time the two
+   differ nothing will say which is right.
+2. **Redis is not storage.** No schema, no constraints, no retention guarantee. The `audits` table
+   has CHECK constraints enforcing contract invariants (D-026); a message body has none.
+3. **The payload is attacker-authored.** A pull request title and branch name are chosen by whoever
+   opened the PR. Serialising them into a broker puts untrusted text in a component with no
+   validation, waiting for the next consumer to trust it.
+
+Celery is configured `json`-only for serialisation and accepted content, for the same reason: a
+pickle deserialiser reachable from a queue is remote code execution for anyone who reaches Redis.
+
+**Consequences.** The worker cannot run without a database, which is correct — it cannot write its
+result anywhere else either. The order in the handler is fixed and only one order is safe: commit
+the row, then publish. Committing first can strand a queued audit nothing was told about, which is
+visible and recoverable; publishing first can hand a worker an id that a rollback removed, which
+fails forever for reasons nothing records.
+
+---
+
+## D-042 — Each process loads only the credentials it can use
+
+**Date:** 2026-08-28 · **Status:** ACTIVE · **Chapter:** 6
+
+**Context.** `apps/api` and `apps/worker` both talk to GitHub as the same App, and the obvious move
+is one settings object and one gateway shared between them.
+
+**Decision.** Two settings classes (`ApiConfig`, `WorkerConfig`) and two gateways, with disjoint
+contents. The API holds the OAuth client secret and the webhook secret; the worker holds neither.
+The worker holds the LLM credentials from Chapter 11 onward; the API holds none. The App id and
+private key are in both, because both mint installation tokens — shared as environment values, not
+as a Python object.
+
+**Why.** The union of two processes' credentials is a strictly larger blast radius than either, and
+it grows by default: the next person adding a setting adds it to the shared object, and it reaches
+a process with no use for it. The two also authenticate differently — the API acts as a *user*
+through OAuth to answer "what may this person see" (D-035), the worker acts as an *installation* to
+read a diff and write a comment — so a merged gateway would be one interface every implementation
+had to satisfy in both roles.
+
+**The duplication, stated plainly.** `require_github_app()` exists in both configs,
+near-identically: about forty lines. That is cheaper than the alternative and, unlike the
+alternative, it does not get worse as either side grows. A third consumer would be worth
+revisiting; two is not enough to justify a shared package.
+
+Also duplicated: `apps/worker/tests/payloads.py`, a copy of the API's schema-driven fixture
+generator. The two test trees cannot import each other for the same reason the two packages cannot.
+The module is generic and knows nothing about either app, so there is nothing app-specific to drift.
+
+---
+
+## D-043 — smee.io for local webhook delivery
+
+**Date:** 2026-08-28 · **Status:** ACTIVE · **Chapter:** 6
+
+Resolves the webhook-tunnelling half of `PROJECT_CONTEXT.md` §7 open question 4. The Docker Compose
+half was settled in Chapter 1: Postgres and Redis in containers, the API and worker on the host.
+
+**Decision.** Local development uses a smee.io channel, forwarded with `npx smee-client`. ngrok
+stays documented as the alternative for when raw HTTP has to be inspected.
+
+**Why smee.** The channel URL is permanent and needs no account, so the App's webhook URL is entered
+once and never again — with ngrok's free tier the URL is per-session unless an account is created
+and a static domain claimed, and a stale URL means deliveries that silently go nowhere. smee is
+also GitHub's own tool for this, and it replays past deliveries, which matters here: the signature
+is computed over exact bytes, and the cheapest way to debug a mismatch is to send the same bytes
+again.
+
+**Why ngrok is still worth naming.** It shows the full request and response, which smee does not. A
+signature that verifies in a test and fails against GitHub is almost always a body-encoding
+difference, and that is visible in ngrok's inspector and nowhere else.
+
+**Consequences.** `PUBLIC_WEBHOOK_URL` is gone from `.env.example`. Nothing in either process needs
+to know its own public address — the URL lives on the GitHub App, and the tunnel is a client the
+developer runs, not configuration the application reads.

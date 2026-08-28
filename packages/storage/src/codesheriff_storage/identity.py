@@ -269,3 +269,98 @@ def set_analysis_enabled(
     repo.analysis_enabled = enabled
     db.flush()
     return repo
+
+
+def delete_installation(db: DbSession, installation_id: int) -> bool:
+    """Remove an installation and, by cascade, its repositories. Returns whether one existed.
+
+    The App was uninstalled. Keeping the rows would mean the dashboard lists repositories the App
+    can no longer read and a webhook for which no token can be minted — and D-035 makes GitHub the
+    authority on access, so a stale local copy of a revoked grant is exactly the thing that
+    decision exists to prevent.
+
+    Audits cascade with the repository. That is deliberate: an audit records findings about a
+    repository this installation no longer grants any access to, and §6 keeps no data whose owner
+    has withdrawn the grant.
+    """
+    result = db.execute(
+        delete(Installation).where(Installation.id == installation_id),
+        execution_options={"synchronize_session": "fetch"},
+    )
+    return bool(getattr(result, "rowcount", 0) or 0)
+
+
+def delete_repositories(db: DbSession, installation_id: int, repo_ids: list[int]) -> int:
+    """Remove repositories dropped from an installation. Returns how many went.
+
+    Scoped by `installation_id` as well as by id. The caller is a webhook handler acting on a
+    payload, and a delete that trusted only the ids in that payload would be one verification bug
+    away from removing another installation's rows.
+    """
+    if not repo_ids:
+        return 0
+    result = db.execute(
+        delete(Repository).where(
+            Repository.installation_id == installation_id,
+            Repository.id.in_(repo_ids),
+        ),
+        execution_options={"synchronize_session": "fetch"},
+    )
+    return int(getattr(result, "rowcount", 0) or 0)
+
+
+def repository_by_id(db: DbSession, repo_id: int) -> Repository | None:
+    """One repository by GitHub id, unscoped.
+
+    Unscoped because its only caller is the webhook handler, which is authorised by an HMAC over
+    the request body rather than by a session. Never call this on a user-facing path: `D-035`
+    requires those to filter by the session's installation ids, and `list_repositories` and
+    `set_analysis_enabled` are the functions that do.
+    """
+    return db.execute(select(Repository).where(Repository.id == repo_id)).scalar_one_or_none()
+
+
+def ensure_installation(
+    db: DbSession,
+    installation_id: int,
+    account_login: str,
+    account_type: str,
+) -> None:
+    """Record an installation if it is not already known. Never overwrites an existing row.
+
+    The webhook path uses this rather than `upsert_installation` for one specific reason: a
+    `pull_request` payload carries only the installation's id, so the account details are inferred
+    from the repository owner and `suspended_at` is not present at all. An upsert would therefore
+    clear a suspension every time somebody pushed to a PR. Only the `installation` event itself
+    knows an installation's real state, and only it may write one.
+    """
+    db.execute(
+        pg_insert(Installation)
+        .values(id=installation_id, account_login=account_login, account_type=account_type)
+        .on_conflict_do_nothing(index_elements=[Installation.id])
+    )
+
+
+def ensure_repository(
+    db: DbSession,
+    repo_id: int,
+    installation_id: int,
+    full_name: str,
+    is_private: bool,
+) -> None:
+    """Record a repository if it is not already known. Never overwrites an existing row.
+
+    For the installation events, whose repository objects carry no `default_branch` — so a new row
+    takes the column default and a later sign-in sync corrects it. Writing a guessed branch over a
+    known one would be worse than leaving the placeholder where it can be seen.
+    """
+    db.execute(
+        pg_insert(Repository)
+        .values(
+            id=repo_id,
+            installation_id=installation_id,
+            full_name=full_name,
+            is_private=is_private,
+        )
+        .on_conflict_do_nothing(index_elements=[Repository.id])
+    )

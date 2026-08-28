@@ -1,4 +1,10 @@
-"""Command-line interface for CodeSheriff Fusion Engine."""
+"""Command-line interface for the fusion engine.
+
+No `serve` command any more. It booted `codesheriff_engine.main:app`, a second FastAPI application
+that mounted the unauthenticated webhook — worse than the webhook itself, because it was a
+supported way to start it. Both were deleted in Chapter 6. The API is
+`uvicorn codesheriff_api.main:app`.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +15,6 @@ import sys
 from pathlib import Path
 
 import typer
-import uvicorn
 
 # Ensure UTF-8 output encoding on Windows consoles
 if hasattr(sys.stdout, "reconfigure"):
@@ -103,19 +108,6 @@ def run(
             typer.secho(f"   Debate Consensus: {f.consensus_rationale}", fg=typer.colors.YELLOW)
 
     typer.echo("\n" + "=" * 60)
-
-
-@app.command()
-def serve(
-    host: str = typer.Option("0.0.0.0", help="Host address to bind"),
-    port: int = typer.Option(8000, help="Port to listen on"),
-    reload: bool = typer.Option(False, help="Enable auto-reload"),
-) -> None:
-    """Start the FastAPI GitHub Webhook server."""
-    typer.secho(
-        f"[*] Starting CodeSheriff Engine server on {host}:{port}...", fg=typer.colors.GREEN
-    )
-    uvicorn.run("codesheriff_engine.main:app", host=host, port=port, reload=reload)
 
 
 if __name__ == "__main__":

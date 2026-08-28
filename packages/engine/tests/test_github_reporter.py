@@ -2,7 +2,7 @@
 
 from codesheriff_contracts import Evidence
 from codesheriff_engine.fusion.bayes import FusionResult
-from codesheriff_engine.github.reporter import format_github_comment, post_pr_review_comment
+from codesheriff_engine.github.reporter import format_github_comment
 
 
 def test_format_clean_github_comment() -> None:
@@ -52,14 +52,3 @@ def test_format_alert_github_comment() -> None:
     assert "| `structural.taint` | ⚠️ Alert | `0.92` |" in comment
     assert "| `semantic.hosted` | ⚠️ Alert | `0.88` |" in comment
     assert "Both agents confirm direct taint into database query." in comment
-
-
-def test_post_comment_skips_when_token_is_missing() -> None:
-    res = post_pr_review_comment(
-        repo_full_name="acme/repo",
-        pr_number=42,
-        comment_body="test",
-        token=None,
-    )
-    assert res["status"] == "skipped"
-    assert res["reason"] == "missing_github_token"

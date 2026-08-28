@@ -7,6 +7,23 @@ Method: full read of all four packages' source. Contracts and agent packages aud
 subagents; the engine read directly. Every claim below carries a `file:line` citation.
 
 This document is the baseline the rebuild is measured against, and is direct report material.
+**The findings below are left exactly as audited** — they describe commit `30ce335`, and rewriting
+them as they are fixed would destroy the record of how far the implementation had drifted.
+
+---
+
+## Closure status
+
+Which entries have been closed, and by what. Anything not listed is still open.
+
+| Entry | Closed by | What replaced it |
+|---|---|---|
+| 1.1, 1.2, 1.3, 1.5, 3.10 | Chapter 2 | Contract v2.0.0 — `finding_key` without the sink expression, three evidence kinds, `covered_cwes`, `key_for()` as the only key builder (D-019 … D-024) |
+| **0.1 — unauthenticated webhook** | **Chapter 6** | `apps/api/src/codesheriff_api/webhooks.py`. `X-Hub-Signature-256` verified with `hmac.compare_digest` against the raw body **before** it is parsed and before any row is read or written. A missing secret answers 501 and accepts nothing rather than falling back to accepting everything. `packages/engine/.../github/webhook.py` and `codesheriff_engine/main.py` are deleted, along with the `serve` command that booted them |
+| **4.3 — everything runs inline; no queue** | **Chapter 6** | The API verifies, writes an `audits` row and publishes an id to Celery (D-040, D-041), then answers 202. `apps/worker` owns the pipeline. No blocking `requests` call remains anywhere in the engine, and the engine no longer depends on `fastapi`, `uvicorn` or `requests` at all |
+
+1.4 stays open **by design**: iterating all agents in fusion needs fitted ratios for SILENCE, so it
+lands with Chapter 9 and Chapter 14. The marker is in `fusion/bayes.py`.
 
 ---
 
@@ -486,6 +503,9 @@ Each of these would have caught a defect above, and none exists today:
 - `ContextAgent.analyze()` — not the internal function — returns non-empty on the bypass fixture
   (would catch 1.5)
 - A forged webhook signature is rejected before any outbound call (would catch 0.1)
+  — **exists as of Chapter 6**: `apps/api/tests/test_webhooks.py`, including the ordering case where
+  malformed JSON under a bad signature must return 401 rather than 400, since a 400 would prove the
+  parser ran on attacker bytes first
 - An agent that ran cleanly emits SILENCE, not `[]` (would catch 1.2, 3.11)
 - A sanitizer of the wrong class does not suppress a sink (would catch 3.4)
 - A sink pattern inside a comment produces no finding (would catch 3.3)

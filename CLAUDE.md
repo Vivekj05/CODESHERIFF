@@ -83,7 +83,10 @@ three of four analysis components are shells:
 - The context agent has **no RAG reasoning** — four hard-coded substring tests.
 - The semantic agent's anti-sycophancy exemplars exist on disk and are **never loaded**.
 - The runtime agent **does not exist**.
-- The webhook has **no HMAC verification**.
+
+The webhook *was* unauthenticated; Chapter 6 closed that (`AUDIT.md` 0.1 and 4.3). See "Closure
+status" at the top of `AUDIT.md` for what each chapter has actually fixed — the findings themselves
+are left as audited, because they are the record of how far the implementation had drifted.
 
 The test suite passes and reports 100%. It cannot detect any of this. `static-agent/cli.py` `bench`
 returns hard-coded `precision: 1.0, recall: 1.0`.
@@ -111,21 +114,28 @@ CODESHERIFF/
 │   └── storage/          # SQLAlchemy models, Alembic, pgvector precedent store
 ├── apps/
 │   ├── api/              # FastAPI: sign-in + repo listing (Ch 5); HMAC + enqueue (Ch 6)
-│   ├── worker/           # Celery: owns the pipeline and all agents          (stub — Ch 6)
+│   ├── worker/           # Celery: owns the pipeline and all agents. Lifecycle only — Ch 8+
 │   └── dashboard/        # Next.js 16 — rendering layer only. Shell + mock data (Ch 4)
 └── docs/history/         # Superseded specs, kept for provenance
 ```
 
-⚠️ **The layout is correct and the workspace now runs; most of the code inside it is still not.**
-Chapter 2 froze the contract at v2.0.0, rewired every package onto it, and got `uv sync`, `pytest`,
-`ruff`, `mypy --strict` and `lint-imports` green. It did **not** fix the analysis defects in
-`AUDIT.md` — it made the agents speak the right contract, not do the right work. The taint engine
-still builds a def-use graph and discards it; the context agent is still four substring tests; the
-runtime agent still does not exist.
+⚠️ **The layout is correct and the seam around the analysis now runs; the analysis itself does not.**
+Chapter 2 froze the contract at v2.0.0 and got every gate green. Chapter 6 made the pipeline real
+end to end — verified webhook, queued audit, worker-posted comment. Neither made an agent do the
+right work. The taint engine still builds a def-use graph and discards it; the context agent is
+still four substring tests; the runtime agent still does not exist.
 
-The live webhook still sits at `packages/engine/src/codesheriff_engine/github/webhook.py` and is
-**not** mounted by `apps/api` — it has no HMAC verification (`AUDIT.md` 0.1). It moves to
-`apps/api` in Chapter 6, verified and enqueueing.
+**The webhook is `apps/api/src/codesheriff_api/webhooks.py`.** It verifies `X-Hub-Signature-256`
+against the raw body *before* parsing it, writes an `audits` row, publishes the id to Celery and
+answers 202. The old `packages/engine/.../github/webhook.py` is deleted, along with
+`codesheriff_engine/main.py` — a second FastAPI app that mounted it — and the `serve` CLI command
+that booted them. If you find yourself adding an HTTP server or a GitHub client back into
+`packages/engine`, that is the mistake `AUDIT.md` 4.3 describes.
+
+**Two processes, two credential sets** (D-042). `apps/api` holds the OAuth client secret and the
+webhook secret; `apps/worker` holds neither, and holds the LLM key that the API must never have.
+The API cannot import the worker — `import-linter` puts them on the same layer — so it publishes
+the task **by name** (D-040), and the message carries an audit id and nothing else (D-041).
 
 **Persisting anything.** All database access lives in `packages/storage`, and `codesheriff_engine`
 is forbidden from importing `sqlalchemy`, `alembic`, `psycopg` or `codesheriff_storage` — enforced
@@ -224,7 +234,14 @@ uv run pytest                    # all packages
 uv run pytest packages/agent_static
 uv run ruff check . && uv run ruff format --check . && uv run mypy .
 uv run lint-imports              # agent + storage boundary enforcement — must stay green
-uv run uvicorn codesheriff_api.main:app --reload   # /health, /auth/*, /repositories
+uv run uvicorn codesheriff_api.main:app --reload   # /health, /auth/*, /repositories, /webhooks/github
+
+# The worker. Needs Redis; without it the API answers 503 on the webhook rather than losing work.
+docker compose up -d redis
+uv run celery -A codesheriff_worker.celery_app worker --loglevel=info --queues=audits
+
+# Local webhook delivery (D-043). The channel URL goes in the App's webhook settings, once.
+npx smee-client --url https://smee.io/<channel> --path /webhooks/github --port 8000
 
 # Database (Chapter 3). Alembic owns the schema; never Base.metadata.create_all.
 docker compose up -d postgres
@@ -251,12 +268,14 @@ Signing in needs a registered GitHub App — `docs/github-app-setup.md`. Without
 `501` naming the missing variable rather than failing at import, so `/health` works on a machine
 that has never seen a `.pem`.
 
-All five Python gates and both frontend gates are green as of Chapter 5. `ruff` and `mypy` are
+All five Python gates and both frontend gates are green as of Chapter 6 (254 tests with a database,
+140 + 114 skips without). `ruff` and `mypy` are
 configured **once**, in the root `pyproject.toml` — a per-package `[tool.ruff]` silently shadows it
 with a different rule set, which is how the agent packages went unlinted (D-023).
 
-**Tests must never make live API calls.** `apps/api/tests/conftest.py` fails any non-loopback socket
-connection unless `CODESHERIFF_ALLOW_LIVE_CALLS` is set — a guard at the socket layer, so a forgotten
+**Tests must never make live API calls.** `apps/api/tests/conftest.py` and
+`apps/worker/tests/conftest.py` fail any non-loopback socket connection unless
+`CODESHERIFF_ALLOW_LIVE_CALLS` is set — a guard at the socket layer, so a forgotten
 mock cannot leak a real request. GitHub is substituted at the `GitHubGateway` interface rather than
 at the HTTP layer; the real `githubkit` client is exercised separately against an httpx
 `MockTransport`, with response bodies generated from githubkit's own schemas.

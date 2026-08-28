@@ -10,9 +10,9 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "codesheriff-contracts",
-    "fastapi>=0.110.0",
-    "uvicorn[standard]>=0.28.0",
-    "requests>=2.31.0",
+    # No fastapi, no uvicorn, no requests. The engine stopped serving HTTP and stopped calling
+    # GitHub in Chapter 6: the webhook moved to apps/api and comment posting to apps/worker. A
+    # fusion package that can open a socket is one import away from being called inline again.
     "httpx>=0.27.0",
     "python-dotenv>=1.0.0",
     "pydantic>=2.7.0",

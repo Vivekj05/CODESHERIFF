@@ -13,6 +13,10 @@ dependencies = [
     "codesheriff-agent-runtime",
     "celery>=5.4.0",
     "redis>=5.0.0",
+    # auth-app brings the JWT signing needed to mint installation tokens.
+    "githubkit[auth-app]>=0.12.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.0",
 ]
 
 [build-system]

@@ -17,9 +17,9 @@ Apps → New GitHub App*).
 | **Request user authorization (OAuth) during installation** | ✅ on | Lets the install flow and the sign-in flow be the same flow |
 | **Setup URL** | `http://localhost:8000/auth/install/callback` | Where GitHub returns after an installation. It grants nothing (D-037) |
 | **Redirect on update** | ✅ on | So changing the installation returns here too |
-| **Webhook → Active** | ✅ on | Chapter 6 consumes these; leave it on now so the secret is set once |
-| **Webhook URL** | your tunnel, e.g. `https://<id>.ngrok-free.app/webhooks/github` | §7 open question 4 — smee.io vs ngrok is decided in Chapter 6 |
-| **Webhook secret** | `python -c "import secrets; print(secrets.token_hex(32))"` | Goes in `GITHUB_WEBHOOK_SECRET`. The API rejects unsigned payloads (AUDIT.md 0.1) |
+| **Webhook → Active** | ✅ on | Chapter 6 consumes these — see [`webhook-setup.md`](webhook-setup.md) |
+| **Webhook URL** | a smee.io channel, e.g. `https://smee.io/aBcDeF1234` | D-043 settled §7 open question 4: smee, because the URL is permanent and needs no account |
+| **Webhook secret** | `python -c "import secrets; print(secrets.token_hex(32))"` | Goes in `GITHUB_WEBHOOK_SECRET`. Unset, the webhook answers 501 and accepts nothing — it never falls back to accepting unsigned payloads (AUDIT.md 0.1) |
 | **Where can this App be installed?** | Only on this account | Multi-tenancy is out of scope (§6) |
 
 ## 2. Permissions — repository level only

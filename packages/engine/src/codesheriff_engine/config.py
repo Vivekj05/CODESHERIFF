@@ -33,6 +33,18 @@ DEFAULT_LIKELIHOOD_TABLE: dict[str, dict[str, float]] = {
     },
 }
 
+PROVISIONAL_PRIOR = 0.05
+"""Asserted, not fitted. A placeholder until a corpus exists (PLAN.md Chapter 7 and Chapter 14).
+
+A module constant rather than only a field default because `apps/api` has to stamp it onto every
+audit it opens, and §6 requires each audit to record the numbers it actually ran under. Importing
+one named constant keeps the edge out of the engine's configuration object, which also holds LLM
+credentials the API process must never hold."""
+
+PROVISIONAL_ALERT_THRESHOLD = 0.70
+"""Asserted, not fitted. §6 requires the threshold to be selected on the validation split, which
+does not exist yet. Nothing derived from this value may be presented as calibrated."""
+
 FALLBACK_LIKELIHOOD_TIER: dict[str, float] = {
     "high": 3.0,
     "medium": 1.5,
@@ -50,8 +62,8 @@ class EngineConfig(BaseSettings):
     )
 
     # Bayesian Math Parameters
-    prior_probability: float = Field(default=0.05, ge=0.001, le=0.999)
-    alert_threshold: float = Field(default=0.70, ge=0.0, le=1.0)
+    prior_probability: float = Field(default=PROVISIONAL_PRIOR, ge=0.001, le=0.999)
+    alert_threshold: float = Field(default=PROVISIONAL_ALERT_THRESHOLD, ge=0.0, le=1.0)
     conflict_threshold: float = Field(default=0.50, ge=0.0, le=1.0)
     likelihood_table: dict[str, dict[str, float]] = Field(
         default_factory=lambda: DEFAULT_LIKELIHOOD_TABLE
@@ -65,15 +77,13 @@ class EngineConfig(BaseSettings):
     debate_model: str = "gpt-4o-mini"
     debate_timeout_seconds: float = 15.0
 
-    # GitHub Webhook & API Integration
-    github_token: str | None = Field(default=None, alias="GITHUB_TOKEN")
-    github_webhook_secret: str | None = Field(default=None, alias="GITHUB_WEBHOOK_SECRET")
-    github_api_base: str = "https://api.github.com"
-
-    # Server Settings
-    host: str = "0.0.0.0"
-    port: int = 8000
-    reload: bool = False
+    # No GitHub settings, and no server settings. Until Chapter 6 this object carried
+    # `github_token`, `github_webhook_secret`, `github_api_base`, `host` and `port` — and
+    # `github_webhook_secret` was the one AUDIT.md 0.1 named: defined here, read nowhere, while the
+    # endpoint it was meant to protect accepted anything. The webhook secret now lives in
+    # `ApiConfig`, where the code that verifies signatures reads it, and the App credentials live
+    # in `WorkerConfig`, where the code that mints tokens reads it. A credential nothing in the
+    # package can use is not configuration; it is a claim that something is protected.
 
     @classmethod
     def load(cls) -> EngineConfig:

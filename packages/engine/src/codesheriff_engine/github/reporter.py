@@ -1,11 +1,17 @@
-"""GitHub Markdown review comment generator and API poster."""
+"""GitHub Markdown review comment rendering.
+
+Rendering only. `post_pr_review_comment` lived here until Chapter 6 and is gone: it authenticated
+with a personal access token over blocking `requests`, and skipped silently when the token was
+absent — so a misconfigured deployment analysed pull requests and told nobody. Writing to GitHub is
+now `apps/worker`'s `GitHubGateway`, which authenticates as the installation and raises.
+
+This function still renders the pre-Chapter-9 fusion shape; the findings page rewrites it in
+Chapter 16.
+"""
 
 from __future__ import annotations
 
 import logging
-from typing import Any
-
-import requests
 
 from codesheriff_contracts import EvidenceKind
 from codesheriff_engine.fusion.bayes import FusionResult
@@ -85,36 +91,3 @@ def format_github_comment(
         "Bayesian Multi-Agent Security Engine.*"
     )
     return comment
-
-
-def post_pr_review_comment(
-    repo_full_name: str,
-    pr_number: int,
-    comment_body: str,
-    token: str | None = None,
-    api_base: str = "https://api.github.com",
-) -> dict[str, Any]:
-    """Post formatted markdown review comment back to GitHub Pull Request."""
-    if not token or "your_github" in token.lower():
-        logger.warning("GITHUB_TOKEN is missing or placeholder. Skipping comment post.")
-        return {"status": "skipped", "reason": "missing_github_token"}
-
-    url = f"{api_base.rstrip('/')}/repos/{repo_full_name}/issues/{pr_number}/comments"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "CodeSheriff-Engine",
-    }
-    body = {"body": comment_body}
-
-    try:
-        response = requests.post(url, headers=headers, json=body, timeout=10.0)
-        if response.status_code == 201:
-            logger.info("Successfully posted security review comment to PR #%s", pr_number)
-            return {"status": "success", "response": response.json()}
-        else:
-            logger.error("GitHub API returned status %s: %s", response.status_code, response.text)
-            return {"status": "error", "code": response.status_code, "detail": response.text}
-    except Exception as e:
-        logger.error("Failed to post comment to GitHub: %s", e)
-        return {"status": "error", "exception": str(e)}

@@ -15,6 +15,11 @@ dependencies = [
     "python-dotenv>=1.0.0",
     # auth-app brings the JWT signing needed to mint installation tokens.
     "githubkit[auth-app]>=0.12.0",
+    # Publishes the audit task by name. The worker package is NOT a dependency and must not
+    # become one - `import-linter` puts both apps on the same layer, and importing the worker
+    # would drag the agents and the LLM client into the process that answers GitHub.
+    "celery>=5.4.0",
+    "redis>=5.0.0",
 ]
 
 [build-system]

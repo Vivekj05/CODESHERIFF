@@ -70,12 +70,24 @@ class Base(DeclarativeBase):
 
 
 class AuditStatus(StrEnum):
-    """Lifecycle of one analysis run. Set by the worker, read by the dashboard."""
+    """Lifecycle of one analysis run. Set by the worker, read by the dashboard.
+
+    `SUPERSEDED` is a terminal state distinct from `FAILED` (D-039). A push to a PR branch abandons
+    the run for the previous head — its findings would describe code no longer at the head, and
+    D-034 requires it abandoned rather than finished. Recording that as a failure would put a red
+    mark on the dashboard for the single most ordinary thing a developer does, and would make the
+    error rate unreadable.
+    """
 
     QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    SUPERSEDED = "superseded"
+
+
+OPEN_AUDIT_STATUSES = (AuditStatus.QUEUED, AuditStatus.RUNNING)
+"""The non-terminal states. An audit in one of these can still be superseded."""
 
 
 class EvidenceKindDB(StrEnum):
@@ -296,6 +308,11 @@ class Audit(Base):
     pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
     base_sha: Mapped[str] = mapped_column(String(40), nullable=False)
     head_sha: Mapped[str] = mapped_column(String(40), nullable=False)
+
+    delivery_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    """`X-GitHub-Delivery` of the webhook that created this audit. Unique, so GitHub's at-least-once
+    redelivery cannot open a second run for work already queued (D-038). Nullable: an audit created
+    by any other route — a replay from the corpus, a manual re-run — has no delivery behind it."""
     status: Mapped[AuditStatus] = mapped_column(
         _audit_status_enum, nullable=False, default=AuditStatus.QUEUED
     )
