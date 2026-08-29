@@ -12,13 +12,18 @@ rows. A message that carried them would be a second copy that can disagree with 
 supersede an audit between the enqueue and the claim. Both arrive here as `claim_audit` returning
 None, and both mean stop.
 
-**There are change units now, and still no analysis.** Chapter 8 fills in the first half: the
-pull request's changed functions are fetched, extracted and written to `change_units`, so the
-audit records what it looked at. The evidence is still five abstentions built in `comment.py` —
-the honest report of four agents that do not exist — and still not persisted. An `evidence` row
-hangs off one change unit, and these abstentions are about the pipeline rather than about any
-function; writing one against every unit would fill the table that will hold real evidence with
-`pipeline_not_implemented`. They become per-unit and persisted in Chapter 9, when they are real.
+**The analysis is wired in.** Chapter 9 closes the middle: every extracted unit goes to four
+blind agents, their statements are persisted as `evidence` rows against the unit they are about,
+and fusion turns them into posteriors. The hardcoded `pipeline_not_implemented` abstentions are
+gone — what the comment reports now is what the agents actually said. Only the structural witness
+does real work today; the other three abstain, which is the honest report of agents that are not
+built (Chapters 11 to 13) and costs the posterior exactly nothing, since an abstention is LR 1.0.
+
+**The audit row supplies the prior and the threshold, not the config (§6).** `apps/api` stamped
+both onto the row when it opened the audit, along with the calibration run they came from. Reading
+them back from configuration here would mean a worker restarted with different numbers silently
+scored an audit against values the row does not record, and a finding whose stated threshold is not
+the one it was judged by is not auditable.
 """
 
 from __future__ import annotations
@@ -30,6 +35,9 @@ from collections.abc import Callable
 from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.orm import sessionmaker
 
+from codesheriff_contracts import ChangeUnit, Evidence
+from codesheriff_engine.config import EngineConfig
+from codesheriff_engine.fusion import FusionResult, fuse_all_evidence
 from codesheriff_storage import (
     Audit,
     StorageConfig,
@@ -40,11 +48,15 @@ from codesheriff_storage import (
     finish_audit,
     is_superseded,
     latest_comment_id,
+    persistable_findings,
     session_scope,
     to_change_unit_row,
+    to_evidence_row,
+    to_finding,
 )
+from codesheriff_worker.analysis import Agent, analyse_unit, load_agents
 from codesheriff_worker.celery_app import app, config
-from codesheriff_worker.comment import pending_evidence, render
+from codesheriff_worker.comment import render
 from codesheriff_worker.github_gateway import GitHubGateway, GitHubKitGateway
 from codesheriff_worker.pipeline import fetch_and_extract
 
@@ -157,14 +169,7 @@ def _run_claimed_audit(
         base_sha=audit.base_sha,
         head_sha=audit.head_sha,
     )
-    # Written before any agent runs, and written even when the list is empty. `change_units` is
-    # the record of what this audit *looked at*; a row per unit is what later lets a finding be
-    # traced to a function, and an audit with no rows is a legible statement that a pull request
-    # touched no analysable Python.
-    db.add_all([to_change_unit_row(audit.id, unit) for unit in extraction.units])
-
-    # ---- the four agents would run here (Chapters 9-13) ----
-    evidence = pending_evidence(audit.id)
+    evidence, findings = _analyse(db, audit, extraction.units)
 
     # Checked immediately before writing to GitHub, not only at the start. The window between the
     # two is the whole pipeline, and a comment about a commit that is no longer at the head is
@@ -179,7 +184,15 @@ def _run_claimed_audit(
         installation_id=installation_id,
         repo_full_name=repository.full_name,
         pr_number=audit.pr_number,
-        body=render(audit.id, evidence, url_for(audit.id), extraction),
+        body=render(
+            audit.id,
+            evidence,
+            findings,
+            url_for(audit.id),
+            extraction,
+            prior_probability=audit.prior_probability,
+            alert_threshold=audit.alert_threshold,
+        ),
         comment_id=previous,
     )
 
@@ -193,3 +206,74 @@ def _run_claimed_audit(
         comment_id,
     )
     return "succeeded"
+
+
+def _analyse(
+    db: DbSession,
+    audit: Audit,
+    units: list[ChangeUnit],
+    agents: list[Agent] | None = None,
+) -> tuple[list[Evidence], list[FusionResult]]:
+    """Run the agents over every unit, persist what they said, and fuse it.
+
+    Returns everything the comment needs, so the caller does not read it back out of the
+    session. Rows are added but not committed: the audit commits once, immediately before it
+    checks whether it has been superseded, so an audit overtaken mid-run leaves no half-written
+    analysis behind.
+
+    **A change unit row is written even when no unit produced a finding, and even when there are
+    no units at all.** `change_units` records what this audit *looked at*; an audit with no rows
+    is a legible statement that a pull request touched no analysable Python.
+    """
+    roster = load_agents() if agents is None else agents
+    config = EngineConfig.load()
+
+    all_evidence: list[Evidence] = []
+    all_findings: list[FusionResult] = []
+
+    for unit in units:
+        unit_row = to_change_unit_row(audit.id, unit)
+        db.add(unit_row)
+        # Flushed per unit because an evidence row hangs off the change unit's generated id.
+        # This is also what keeps a statement attached to the function it was made about —
+        # the Chapter 6 abstentions were about the pipeline and had nowhere to attach.
+        db.flush()
+
+        evidence = analyse_unit(roster, unit)
+        db.add_all([to_evidence_row(unit_row.id, item) for item in evidence])
+        all_evidence.extend(evidence)
+
+        # The prior and the threshold come off the audit row, which recorded them when the
+        # audit was opened, together with the calibration run they belong to (§6).
+        results = fuse_all_evidence(
+            evidence,
+            prior_p=audit.prior_probability,
+            alert_threshold=audit.alert_threshold,
+            ratios=config.ratios,
+        )
+        for result in results:
+            result.file = unit.file
+
+        for result in persistable_findings(results):
+            db.add(
+                to_finding(
+                    audit.id,
+                    result,
+                    prior_probability=audit.prior_probability,
+                    alert_threshold=audit.alert_threshold,
+                    calibration_run_id=audit.calibration_run_id,
+                    file=unit.file,
+                    qualified_symbol=unit.qualified_symbol,
+                )
+            )
+        all_findings.extend(results)
+
+    all_findings.sort(key=lambda r: r.posterior_probability, reverse=True)
+    logger.info(
+        "Audit %s analysed %s unit(s): %s statement(s), %s finding(s)",
+        audit.id,
+        len(units),
+        len(all_evidence),
+        len(all_findings),
+    )
+    return all_evidence, all_findings

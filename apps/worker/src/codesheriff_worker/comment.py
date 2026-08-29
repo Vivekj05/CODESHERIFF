@@ -1,23 +1,29 @@
 """The pull request comment.
 
-Chapter 6 is the plumbing seam: a verified webhook becomes a queued audit becomes a comment on a
-real pull request, with no analysis in between. The evidence below is hardcoded, and every piece of
-it is an ABSTENTION — which is the truth, not a placeholder. An agent that could not run abstains
-with a reason (`CLAUDE.md`, "Agents never raise"), and four agents that do not exist yet could not
-run. Returning nothing, or rendering an empty "no vulnerabilities found", is the exact failure
-`AUDIT.md` 4.4 documents: a system that says "clean" when it has not looked.
+Chapter 6 made this the end of a real pipeline. Chapter 9 gives it something to report: the
+five hardcoded abstentions are gone, and what is rendered now is what four witnesses
+actually said about each changed function, and the posterior that came out of it.
 
-**No probability appears here.** D-032 requires a probability to arrive with its calibration state,
-and there is nothing calibrated to state: the prior and the threshold are still asserted values
-fitted against nothing, and no agent has produced a single piece of real evidence. A number
-rendered now would be exactly the unearned confidence this project exists to argue against.
+**Every number is labelled provisional, on every render (D-032, D-010).** The likelihood
+ratios, the prior and the threshold are hand-set; Chapter 14 fits them on the calibration
+split. A probability shown without its calibration state is precisely the unearned
+confidence this project exists to argue against, so the state is not a footnote here — it
+is the first line under the heading, and `apps/worker` has no way to render a posterior
+without it.
 
-**Nothing from the pull request is echoed.** No title, no branch name, no description, no file
-content — and, since Chapter 8, no file *path* either. Those are attacker-controlled, and
-`AUDIT.md` 0.4 is what happens when untrusted text reaches a markdown table unescaped. Chapter 8
-adds the one thing that can be said safely: how many functions were extracted and how many files
-were skipped, as counts. When a rationale does need rendering — Chapter 11 — it arrives screened,
-and this module stays the only place that builds the body.
+**No agent prose reaches this comment.** Everything rendered below is drawn from closed
+sets and numbers: CWE identifiers from `IN_SCOPE_CWES`, witness names from `WITNESSES`,
+stances from an enum, likelihood ratios and probabilities as floats. Agent explanations are
+free text — the semantic agent's is LLM output shaped by attacker-controlled source — and
+`AUDIT.md` 0.4 records that there is no rationale screening yet. Rationales land here when
+they arrive screened, in Chapter 11. Until then the structured breakdown carries the whole
+story, and it is the part that explains the number anyway.
+
+**Nothing from the pull request is echoed.** No title, no branch name, no description, no
+file content, and no file *path* (D-050) — a path is chosen by whoever opened the pull
+request, and a name like `` x`](javascript:…)`.py `` escapes a markdown table cell. That
+also means a finding is not located here; locations belong on the dashboard, behind
+rendering that escapes them (Chapter 16). Coverage is counts and plain words.
 """
 
 from __future__ import annotations
@@ -27,21 +33,7 @@ from collections import Counter
 
 from codesheriff_contracts import CONTRACT_VERSION, Evidence, EvidenceKind
 from codesheriff_engine.extraction import ExtractionResult, SkipReason
-
-PENDING_AGENTS: tuple[tuple[str, str, str], ...] = (
-    ("structural.taint", "0.0.0", "Chapter 10 — the taint engine"),
-    ("structural.semgrep", "0.0.0", "Chapter 9 — the Semgrep backend"),
-    ("semantic.hosted", "0.0.0", "Chapter 11 — the semantic agent"),
-    ("context.rag", "0.0.0", "Chapter 12 — the context agent"),
-    ("runtime.sfi", "0.0.0", "Chapter 13 — the runtime agent"),
-)
-"""The five backends, four agents and the chapter each one lands in.
-
-`structural.taint` and `structural.semgrep` are two backends of one agent and emit evidence
-separately, which is why there are five rows and four sources of independent failure.
-"""
-
-ABSTENTION_REASON = "pipeline_not_implemented"
+from codesheriff_engine.fusion import FusionResult, Stance
 
 SKIP_WORDING: dict[SkipReason, str] = {
     SkipReason.FILE_REMOVED: "deleted",
@@ -51,52 +43,45 @@ SKIP_WORDING: dict[SkipReason, str] = {
 }
 """Plain English for each skip reason.
 
-A reader of the comment is told what was *not* looked at, in words. The enum value is the machine
-name and belongs in the log and the database; a table cell reading `language_unsupported` asks a
-developer to learn this system's vocabulary to find out that their TypeScript was not scanned."""
+A reader of the comment is told what was *not* looked at, in words. The enum value is the
+machine name and belongs in the log and the database; a table cell reading
+`language_unsupported` asks a developer to learn this system's vocabulary to find out that
+their TypeScript was not scanned."""
+
+STANCE_WORDING: dict[Stance, str] = {
+    Stance.DETECTED: "🚨 detected",
+    Stance.SILENT: "🔇 looked, found nothing",
+    Stance.NEUTRAL: "⚪ no statement",
+}
+"""Three stances, three renderings, always.
+
+A silence that rendered like an abstention would hide the distinction D-005 exists to
+preserve — and it is the distinction that decides whether the witness pushed the number
+down or left it alone, which is the one thing a reader of this table wants to know."""
+
+PROVISIONAL_BANNER = (
+    "> ⚠️ **Provisional, not calibrated.** The likelihood ratios, the prior and the alert "
+    "threshold below are hand-set values, not measured ones. CodeSheriff's claim is that a "
+    "stated 87% means right about 87% of the time — that claim is not yet supported by these "
+    "numbers, and they should be read as a working estimate rather than a probability."
+)
 
 
 def marker_for(audit_id: uuid.UUID) -> str:
     """An HTML comment identifying which audit owns a comment.
 
-    Invisible when rendered, and the only reliable way to recognise this bot's own comment later:
-    the comment id is stored on the audit row, but a row can be lost and a comment cannot be
-    matched by its text once the text starts varying.
+    Invisible when rendered, and the only reliable way to recognise this bot's own comment
+    later: the comment id is stored on the audit row, but a row can be lost and a comment
+    cannot be matched by its text once the text starts varying.
     """
     return f"<!-- codesheriff:audit:{audit_id} -->"
 
 
-def pending_evidence(audit_id: uuid.UUID) -> list[Evidence]:
-    """One abstention per backend, built through the sanctioned constructor.
-
-    `unit_id` names the audit rather than a change unit, and still does now that Chapter 8 has
-    made change units real: these five abstentions are statements about the *pipeline*, not about
-    any one function. Writing one against every extracted unit would fill the table that will hold
-    real evidence with `pipeline_not_implemented`, at five rows per changed function. Chapter 9
-    replaces them with per-unit evidence that is worth persisting.
-    """
-    return [
-        Evidence.abstention(
-            agent_id=agent_id,
-            agent_version=version,
-            unit_id=f"audit:{audit_id}",
-            reason=ABSTENTION_REASON,
-            explanation=f"Not built yet — {chapter}.",
-        )
-        for agent_id, version, chapter in PENDING_AGENTS
-    ]
-
-
 def coverage_line(result: ExtractionResult) -> str:
-    """What this audit extracted, and what it did not look at.
+    """What this audit extracted, and what it did not look at. Counts and reasons only.
 
-    Counts and reasons only — **no file path is ever rendered here**. A path is chosen by whoever
-    opened the pull request, so it is attacker-controlled text in exactly the way `AUDIT.md` 0.4
-    describes, and a name like `` x`](javascript:…)`.py `` escapes a markdown table cell. The
-    dashboard is where paths belong, behind rendering that escapes them (Chapter 16).
-
-    Reported even when nothing was skipped, because "we analysed 4 functions" and "we analysed
-    nothing and said so quietly" have to be told apart by a reader in a hurry.
+    Reported even when nothing was skipped, because "we analysed 4 functions" and "we
+    analysed nothing and said so quietly" have to be told apart by a reader in a hurry.
     """
     units = len(result.units)
     summary = f"Extracted **{units}** changed {'function' if units == 1 else 'functions'}"
@@ -110,65 +95,102 @@ def coverage_line(result: ExtractionResult) -> str:
     return summary + "."
 
 
+def witness_table(result: FusionResult) -> list[str]:
+    """The odds product, written out one factor at a time.
+
+    Four rows, always four — one per witness, including the ones that said nothing. That
+    is the D-007 correction made visible: a reader can count the factors and see that an
+    agent which abstained contributed exactly 1.0 rather than being left out of the
+    arithmetic entirely.
+    """
+    lines = [
+        "| Witness | Stance | Likelihood ratio | Why |",
+        "| :--- | :--- | ---: | :--- |",
+    ]
+    for contribution in result.contributions:
+        agents = ", ".join(f"`{a}`" for a in contribution.agent_ids) or "—"
+        lines.append(
+            f"| **{contribution.witness}** | {STANCE_WORDING[contribution.stance]} | "
+            f"x{contribution.likelihood_ratio:.2f} | {contribution.note} {agents} |"
+        )
+    return lines
+
+
+def _evidence_summary(evidence: list[Evidence]) -> str:
+    """One line saying what the agents did across the whole audit."""
+    counts = Counter(ev.kind for ev in evidence)
+    parts = [
+        f"{counts[EvidenceKind.DETECTION]} detection(s)",
+        f"{counts[EvidenceKind.SILENCE]} silence(s)",
+        f"{counts[EvidenceKind.ABSTENTION]} abstention(s)",
+    ]
+    return ", ".join(parts)
+
+
 def render(
     audit_id: uuid.UUID,
     evidence: list[Evidence],
+    findings: list[FusionResult],
     dashboard_url: str,
     extraction: ExtractionResult | None = None,
+    prior_probability: float | None = None,
+    alert_threshold: float | None = None,
 ) -> str:
-    """The comment body: what was looked at, what ran, what did not, and why there is no number."""
-    lines = [
-        "## 🛡️ CodeSheriff",
-        "",
-        "**No analysis has run on this pull request yet.**",
-        "",
-        "The pipeline is connected end to end — this webhook delivery was signature-verified, an "
-        "audit was queued, the changed functions were extracted, and a worker posted this comment "
-        "— but the four analysis agents are not built. Every one of them abstained, which is the "
-        "honest answer: an agent that could not run reports that it could not run, and never "
-        "reports that it found nothing.",
-    ]
+    """The comment body: what was looked at, what each witness said, and what came out."""
+    lines = ["## 🛡️ CodeSheriff", "", PROVISIONAL_BANNER, ""]
 
     if extraction is not None:
-        lines += ["", coverage_line(extraction)]
+        lines += [coverage_line(extraction), ""]
+    if evidence:
+        lines += [f"Agents returned {_evidence_summary(evidence)}.", ""]
 
-    lines += [
-        "",
-        "| Backend | Evidence | Reason |",
-        "| :--- | :--- | :--- |",
-    ]
-
-    for item in evidence:
-        lines.append(
-            f"| `{item.agent_id}` | {_stance(item)} | {item.explanation} |",
+    if not findings:
+        lines += [
+            "**No finding.** No witness detected an in-scope weakness in the changed "
+            "functions. That is a result rather than an absence of one: the agents that ran "
+            "and found nothing said so, and the agents that could not run said that instead.",
+            "",
+        ]
+    else:
+        alerts = [f for f in findings if f.is_alert_worthy]
+        threshold_note = (
+            f" of which **{len(alerts)}** above the provisional alert threshold"
+            f"{f' of {alert_threshold:.0%}' if alert_threshold is not None else ''}"
+            if alerts
+            else ", none above the provisional alert threshold"
         )
+        lines += [
+            f"**{len(findings)}** finding{'s' if len(findings) != 1 else ''}{threshold_note}.",
+            "",
+        ]
+
+        for index, finding in enumerate(findings, start=1):
+            flag = "🚨" if finding.is_alert_worthy else "🔍"
+            lines += [
+                f"### {flag} #{index} — `{finding.cwe}` · "
+                f"P(vulnerable) ≈ **{finding.posterior_probability:.0%}** *(provisional)*",
+                "",
+            ]
+            if prior_probability is not None:
+                lines += [
+                    f"Starting from a prior of {prior_probability:.0%}, four witnesses "
+                    "contributed one likelihood ratio each:",
+                    "",
+                ]
+            lines += witness_table(finding)
+            lines.append("")
 
     lines += [
+        "### What this number is, and is not",
         "",
-        "### Why there is no probability here",
-        "",
-        "CodeSheriff's claim is a **calibrated** posterior — a stated 87% has to mean right about "
-        "87% of the time, measured against ground truth. The corpus that ground truth comes from "
-        "now exists, but no likelihood ratio has been fitted against it and no threshold has been "
-        "selected. Showing a number now would be the unearned confidence this project exists to "
-        "argue against.",
+        "The posterior above is a Bayesian fusion of every witness's statement — including "
+        "the ones that found nothing, which push it down, and the ones that could not run, "
+        "which leave it alone. The arithmetic is right. The *inputs* are not yet measured: "
+        "no likelihood ratio here has been fitted against ground truth, and no threshold has "
+        "been selected on a validation split. A calibrated number needs both.",
         "",
         f"[View this audit]({dashboard_url}) · contract `v{CONTRACT_VERSION}`",
         "",
         marker_for(audit_id),
     ]
     return "\n".join(lines)
-
-
-def _stance(item: Evidence) -> str:
-    """How one piece of evidence reads in the table.
-
-    Three kinds, three renderings, always — a silence that rendered like an abstention would hide
-    the distinction D-005 exists to preserve.
-    """
-    if item.kind is EvidenceKind.ABSTENTION:
-        return "⚪ Abstained"
-    if item.kind is EvidenceKind.SILENCE:
-        covered = ", ".join(sorted(item.covered_cwes))
-        return f"🔇 Silent (covers {covered})"
-    return "🚨 Detection"

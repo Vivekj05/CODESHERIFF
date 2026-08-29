@@ -1,59 +1,52 @@
-"""Configuration management for CodeSheriff Fusion Engine."""
+"""Runtime configuration for the fusion engine.
+
+The numbers themselves live in `codesheriff_engine.fusion.ratios`, which this module
+re-exports for the two callers outside the engine that need them. `apps/api` stamps the
+prior and the threshold onto every audit it opens, because §6 requires each audit to record
+the numbers it actually ran under, and it must be able to import them without importing a
+settings object that would make it load configuration it has no business holding.
+"""
 
 from __future__ import annotations
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-DEFAULT_LIKELIHOOD_TABLE: dict[str, dict[str, float]] = {
-    "structural.taint": {
-        "high": 8.5,  # score >= 0.8
-        "medium": 3.2,  # score >= 0.5
-        "low": 0.8,  # score < 0.5
-    },
-    "structural.semgrep": {
-        "high": 7.0,
-        "medium": 3.0,
-        "low": 0.9,
-    },
-    "semantic.hosted": {
-        "high": 12.0,  # score >= 0.8 (high consensus)
-        "medium": 4.5,  # score >= 0.5
-        "low": 0.5,  # score < 0.5
-    },
-    "semantic.lora": {
-        "high": 11.0,
-        "medium": 4.0,
-        "low": 0.6,
-    },
-    "context.rag": {
-        "high": 4.2,  # score >= 0.8 (direct bypass of historical control)
-        "medium": 2.1,  # score >= 0.5
-        "low": 0.9,  # score < 0.5
-    },
-}
+from codesheriff_engine.fusion.ratios import (
+    FALLBACK_RATIOS,
+    LR_MAX,
+    LR_MIN,
+    PROVISIONAL_ALERT_THRESHOLD,
+    PROVISIONAL_PRIOR,
+    PROVISIONAL_RATIOS,
+    WitnessRatios,
+)
 
-PROVISIONAL_PRIOR = 0.05
-"""Asserted, not fitted. A placeholder until a corpus exists (PLAN.md Chapter 7 and Chapter 14).
-
-A module constant rather than only a field default because `apps/api` has to stamp it onto every
-audit it opens, and §6 requires each audit to record the numbers it actually ran under. Importing
-one named constant keeps the edge out of the engine's configuration object, which also holds LLM
-credentials the API process must never hold."""
-
-PROVISIONAL_ALERT_THRESHOLD = 0.70
-"""Asserted, not fitted. §6 requires the threshold to be selected on the validation split, which
-does not exist yet. Nothing derived from this value may be presented as calibrated."""
-
-FALLBACK_LIKELIHOOD_TIER: dict[str, float] = {
-    "high": 3.0,
-    "medium": 1.5,
-    "low": 1.0,
-}
+__all__ = [
+    "FALLBACK_RATIOS",
+    "LR_MAX",
+    "LR_MIN",
+    "PROVISIONAL_ALERT_THRESHOLD",
+    "PROVISIONAL_PRIOR",
+    "PROVISIONAL_RATIOS",
+    "EngineConfig",
+    "WitnessRatios",
+]
 
 
 class EngineConfig(BaseSettings):
-    """Runtime configuration for Bayesian Fusion & Multi-Agent Engine."""
+    """Runtime configuration for fusion.
+
+    No LLM credentials, and no debate settings. Both left with `fusion/debate.py`, which
+    Chapter 9 deleted rather than ported: it overwrote the fused posterior with a magic
+    constant (`AUDIT.md` 2.2), and its default path was substring matching in which
+    `"int("` — a substring of `print(` — counted as a sanitizer (`AUDIT.md` 2.3, D-009).
+
+    No GitHub settings and no server settings either. The webhook secret lives in
+    `ApiConfig` where signatures are verified, and the App credentials in `WorkerConfig`
+    where installation tokens are minted. A credential nothing in the package can use is
+    not configuration; it is a claim that something is protected.
+    """
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -61,29 +54,9 @@ class EngineConfig(BaseSettings):
         extra="ignore",
     )
 
-    # Bayesian Math Parameters
     prior_probability: float = Field(default=PROVISIONAL_PRIOR, ge=0.001, le=0.999)
     alert_threshold: float = Field(default=PROVISIONAL_ALERT_THRESHOLD, ge=0.0, le=1.0)
-    conflict_threshold: float = Field(default=0.50, ge=0.0, le=1.0)
-    likelihood_table: dict[str, dict[str, float]] = Field(
-        default_factory=lambda: DEFAULT_LIKELIHOOD_TABLE
-    )
-
-    # Multi-Agent Debate Configuration
-    enable_debate: bool = True
-    llm_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
-    anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
-    gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
-    debate_model: str = "gpt-4o-mini"
-    debate_timeout_seconds: float = 15.0
-
-    # No GitHub settings, and no server settings. Until Chapter 6 this object carried
-    # `github_token`, `github_webhook_secret`, `github_api_base`, `host` and `port` — and
-    # `github_webhook_secret` was the one AUDIT.md 0.1 named: defined here, read nowhere, while the
-    # endpoint it was meant to protect accepted anything. The webhook secret now lives in
-    # `ApiConfig`, where the code that verifies signatures reads it, and the App credentials live
-    # in `WorkerConfig`, where the code that mints tokens reads it. A credential nothing in the
-    # package can use is not configuration; it is a claim that something is protected.
+    ratios: dict[str, WitnessRatios] = Field(default_factory=lambda: dict(PROVISIONAL_RATIOS))
 
     @classmethod
     def load(cls) -> EngineConfig:

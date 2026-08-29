@@ -4,6 +4,7 @@ from typing import Any
 
 from codesheriff_contracts import IN_SCOPE_CWES, ChangeUnit, Evidence
 from static_agent.config import StaticConfig
+from static_agent.emission import with_residual_silence
 from static_agent.scoring import calculate_raw_score
 from static_agent.taint.catalog import Catalog, RuleSink
 from static_agent.taint.defuse import build_defuse_graph
@@ -211,18 +212,14 @@ def analyze_taint(unit: ChangeUnit, config: StaticConfig) -> list[Evidence]:
                     by_key[f_key] = evidence
 
         evidence_list = sorted(by_key.values(), key=lambda e: e.raw_score, reverse=True)
-        if not evidence_list:
-            return [
-                Evidence.silence(
-                    agent_id=AGENT_ID,
-                    agent_version=AGENT_VERSION,
-                    unit_id=unit.unit_id,
-                    covered_cwes=_covered_cwes(catalog, lang_key),
-                    explanation="Sources and sinks present, but no unsanitised path between them.",
-                )
-            ]
-
-        return evidence_list[: config.max_evidence_per_unit]
+        return with_residual_silence(
+            evidence_list[: config.max_evidence_per_unit],
+            agent_id=AGENT_ID,
+            agent_version=AGENT_VERSION,
+            unit_id=unit.unit_id,
+            covered_cwes=_covered_cwes(catalog, lang_key),
+            silent_explanation=("Sources and sinks present, but no unsanitised path between them."),
+        )
 
     except Exception as e:
         return [

@@ -16,7 +16,6 @@ from semantic_agent.llm.base import LLMClient
 from semantic_agent.llm.budget import BudgetTracker
 from semantic_agent.llm.cache import LLMCache
 from semantic_agent.llm.hosted import HostedLLMClient
-from semantic_agent.llm.stub import StubLLMClient
 from semantic_agent.mapping import HallucinationGate
 from semantic_agent.retrieval.base import Retriever
 from semantic_agent.retrieval.null import NullRetriever
@@ -38,6 +37,19 @@ class SemanticAgent:
         self.agent_id = self.config.agent_id
         self.agent_version = self.config.agent_version
 
+        # A missing API key leaves this None, and `analyze` abstains. It used to fall back to
+        # `StubLLMClient`, whose answer to anything but one demo fixture is `{"findings": []}` —
+        # which this agent then reported as SILENCE across all ten in-scope CWEs (AUDIT.md 3.12).
+        #
+        # That was survivable while fusion ignored silence. It is not now: a silence carries a
+        # likelihood ratio below 1.0, so an unconfigured agent that had looked at nothing was
+        # actively arguing every change safe, and its vote was indistinguishable from a real
+        # model's. It is the exact failure D-005 exists to prevent — an agent that could not look
+        # voting the code innocent — and the stub made it the default deployment.
+        #
+        # An explicitly injected client is a deliberate script and still honoured; that is how the
+        # tests drive this agent. What is gone is the silent substitution nobody asked for.
+        self.llm_client: LLMClient | None
         if llm_client:
             self.llm_client = llm_client
         elif self.config.api_key:
@@ -46,7 +58,11 @@ class SemanticAgent:
                 model=self.config.model,
             )
         else:
-            self.llm_client = StubLLMClient()
+            logger.warning(
+                "semantic.hosted has no API key and no injected client; it will abstain on every "
+                "unit. Set the API key, or expect one fewer witness."
+            )
+            self.llm_client = None
 
         self.retriever = retriever or NullRetriever()
         self.cache = LLMCache(self.config.cache_path) if self.config.enable_cache else None
@@ -81,6 +97,22 @@ class SemanticAgent:
         Guarantees zero unhandled exceptions.
         """
         try:
+            # 0. No model, no opinion. Checked before anything else, because every path below
+            #    this point ends in a statement about the code, and this agent has not read any.
+            if self.llm_client is None:
+                return [
+                    Evidence.abstention(
+                        agent_id=self.agent_id,
+                        agent_version=self.agent_version,
+                        unit_id=unit.unit_id,
+                        reason="llm_unavailable",
+                        explanation=(
+                            "No API key is configured and no client was supplied, so no model "
+                            "examined this unit."
+                        ),
+                    )
+                ]
+
             # 1. Budget check
             if self.budget_tracker.is_exceeded():
                 return [

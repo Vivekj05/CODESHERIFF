@@ -1,14 +1,25 @@
 """Command-line interface for the fusion engine.
 
-No `serve` command any more. It booted `codesheriff_engine.main:app`, a second FastAPI application
+Two commands, and neither runs an agent. Running agents is `apps/worker`'s job — see the
+package docstring — so what is left here is the arithmetic: hand it evidence, and it shows
+you the posterior and the factor each witness contributed to it.
+
+That is the useful thing to have at a prompt anyway. "Why is this 31% and not 96%" is
+answered by the breakdown below, and answering it needed a full analysis run before.
+
+No `serve` command. It booted `codesheriff_engine.main:app`, a second FastAPI application
 that mounted the unauthenticated webhook — worse than the webhook itself, because it was a
 supported way to start it. Both were deleted in Chapter 6. The API is
 `uvicorn codesheriff_api.main:app`.
+
+No `--markdown` either. `codesheriff_engine.reporting` rendered a second pull request
+comment, complete with the file path that D-050 keeps out of one, and diverging from the
+comment the worker actually posts. `apps/worker/comment.py` is the only place a comment
+body is built.
 """
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import json
 import sys
@@ -21,16 +32,21 @@ if hasattr(sys.stdout, "reconfigure"):
     with contextlib.suppress(Exception):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from codesheriff_contracts import CONTRACT_VERSION, ChangeUnit, EvidenceKind
+from codesheriff_contracts import CONTRACT_VERSION, Evidence, EvidenceKind
 from codesheriff_engine.config import EngineConfig
-from codesheriff_engine.orchestrator import Orchestrator
-from codesheriff_engine.reporting import format_github_comment
+from codesheriff_engine.fusion import Stance, fuse_all_evidence
 
 app = typer.Typer(
     name="codesheriff-engine",
-    help="CodeSheriff Bayesian Fusion & Multi-Agent Integration Engine CLI",
+    help="CodeSheriff Bayesian fusion engine CLI",
     add_completion=False,
 )
+
+_STANCE_TAG = {
+    Stance.DETECTED: "DETECTED",
+    Stance.SILENT: "SILENT",
+    Stance.NEUTRAL: "neutral",
+}
 
 
 @app.command()
@@ -40,74 +56,83 @@ def version() -> None:
 
 
 @app.command()
-def run(
-    unit_path: Path = typer.Argument(..., help="Path to ChangeUnit JSON file"),
-    debate: bool = typer.Option(True, help="Enable multi-agent debate on conflicting scores"),
-    output_markdown: bool = typer.Option(
-        False, "--markdown", "-m", help="Output formatted GitHub Markdown"
-    ),
+def fuse(
+    evidence_path: Path = typer.Argument(..., help="JSON file holding a list of Evidence"),
+    prior: float = typer.Option(None, help="Override the provisional prior"),
+    threshold: float = typer.Option(None, help="Override the provisional alert threshold"),
 ) -> None:
-    """Run full multi-agent Bayesian security audit on a ChangeUnit JSON."""
-    if not unit_path.exists():
-        typer.secho(f"Error: File not found at '{unit_path}'", fg=typer.colors.RED, err=True)
+    """Fuse one unit's evidence and show every witness's contribution to the posterior."""
+    if not evidence_path.exists():
+        typer.secho(f"Error: file not found at '{evidence_path}'", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
     try:
-        raw_data = json.loads(unit_path.read_text(encoding="utf-8"))
-        unit = ChangeUnit.model_validate(raw_data)
-    except Exception as e:
-        typer.secho(f"Error: Failed to parse ChangeUnit JSON: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1) from e
+        raw = json.loads(evidence_path.read_text(encoding="utf-8"))
+        evidence = [Evidence.model_validate(item) for item in raw]
+    except Exception as exc:
+        typer.secho(f"Error: could not parse evidence: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
 
     config = EngineConfig.load()
-    orchestrator = Orchestrator(config=config)
+    prior_p = config.prior_probability if prior is None else prior
+    alert_threshold = config.alert_threshold if threshold is None else threshold
 
-    typer.secho(f"[*] Analyzing unit '{unit.unit_id}' in {unit.file}...", fg=typer.colors.CYAN)
-    results = asyncio.run(orchestrator.analyze_change_unit(unit, run_debate=debate))
+    results = fuse_all_evidence(
+        evidence, prior_p=prior_p, alert_threshold=alert_threshold, ratios=config.ratios
+    )
 
-    if output_markdown:
-        comment = format_github_comment(results, pr_title=f"Unit {unit.unit_id}")
-        try:
-            typer.echo(comment)
-        except UnicodeEncodeError:
-            sys.stdout.buffer.write((comment + "\n").encode("utf-8", errors="replace"))
+    typer.secho(
+        f"\nPROVISIONAL — ratios, prior ({prior_p}) and threshold ({alert_threshold}) are "
+        "asserted, not fitted (D-010).",
+        fg=typer.colors.YELLOW,
+    )
+
+    if not results:
+        kinds = {ev.kind for ev in evidence}
+        typer.secho(
+            f"\nNo finding. {len(evidence)} statement(s), none of them a detection "
+            f"({', '.join(sorted(k.value for k in kinds)) or 'nothing at all'}).",
+            fg=typer.colors.GREEN,
+        )
+        typer.echo(
+            "A unit nobody detected anything in produces evidence and no finding — there is "
+            "no synthetic 'all agents abstained' key any more."
+        )
         return
 
-    typer.echo("\n" + "=" * 60)
-    typer.secho(
-        f"[+] BAYESIAN FUSION AUDIT REPORT ({len(results)} findings)",
-        fg=typer.colors.BRIGHT_WHITE,
-        bold=True,
-    )
-    typer.echo("=" * 60)
-
-    for idx, f in enumerate(results, start=1):
-        alert_tag = "[ALERT]" if f.is_alert_worthy else "[SAFE]"
-        color = typer.colors.RED if f.is_alert_worthy else typer.colors.GREEN
-
+    for idx, result in enumerate(results, start=1):
+        tag = "[ALERT]" if result.is_alert_worthy else "[below threshold]"
+        colour = typer.colors.RED if result.is_alert_worthy else typer.colors.GREEN
         typer.secho(
-            f"\n#{idx} {alert_tag} {f.title or 'Security Finding'} | "
-            f"Posterior P(V): {f.posterior_probability * 100:.1f}%",
-            fg=color,
+            f"\n#{idx} {tag} {result.cwe}  P(vulnerable) = "
+            f"{result.posterior_probability * 100:.1f}%",
+            fg=colour,
             bold=True,
         )
-        typer.echo(f"   Finding Key : {f.finding_key}")
-        typer.echo(f"   CWE         : {f.cwe or 'N/A'}")
-        typer.echo(f"   Severity    : {f.severity or 'N/A'}")
-        typer.echo("   Agent Breakdown:")
+        typer.echo(f"   finding_key : {result.finding_key}")
+        typer.echo(f"   severity    : {result.severity}")
+        typer.echo(f"\n   prior {prior_p:.4f}  (odds {prior_p / (1 - prior_p):.4f})")
 
-        for ev in f.evidence_list:
-            ev_status = (
-                f"Score: {ev.raw_score:.2f}"
-                if ev.kind is EvidenceKind.DETECTION
-                else f"[{ev.kind.value.upper()}]"
+        for contribution in result.contributions:
+            typer.echo(
+                f"     x {contribution.likelihood_ratio:>6.2f}  "
+                f"{contribution.witness:<11} {_STANCE_TAG[contribution.stance]:<9} "
+                f"{contribution.note}"
             )
-            typer.echo(f"     - {ev.agent_id:<18} : {ev_status:<12} | {ev.explanation[:70]}")
 
-        if f.consensus_rationale:
-            typer.secho(f"   Debate Consensus: {f.consensus_rationale}", fg=typer.colors.YELLOW)
-
-    typer.echo("\n" + "=" * 60)
+        typer.echo(f"   = {result.posterior_probability:.4f}\n")
+        typer.echo("   Statements:")
+        for ev in result.evidence_list:
+            detail = (
+                f"score {ev.raw_score:.2f}"
+                if ev.kind is EvidenceKind.DETECTION
+                else f"covers {', '.join(sorted(ev.covered_cwes))}"
+                if ev.kind is EvidenceKind.SILENCE
+                else f"reason {ev.reason}"
+            )
+            typer.echo(
+                f"     - {ev.agent_id:<20} {ev.kind.value:<10} {detail:<28} {ev.explanation[:60]}"
+            )
 
 
 if __name__ == "__main__":

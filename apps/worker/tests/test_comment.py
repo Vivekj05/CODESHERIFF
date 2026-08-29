@@ -4,77 +4,210 @@ No database and no GitHub, so these run in every suite. They are assertions abou
 comment makes, which is the thing this project is actually about — a tool that says "clean" when it
 has not looked, or shows a number nothing has calibrated, has failed at its one job regardless of
 whether the plumbing works.
+
+Chapter 9 changed what there is to say. The comment reported five hardcoded abstentions and no
+number; it now reports what four witnesses said and the posterior that came out. The tests that
+mattered did not change: no path, no unescaped prose, and no probability without its calibration
+state.
 """
 
 from __future__ import annotations
 
 import uuid
 
-from codesheriff_contracts import CONTRACT_VERSION, ChangeUnit, EvidenceKind
+from codesheriff_contracts import CONTRACT_VERSION, ChangeUnit, Evidence
 from codesheriff_engine.extraction import ExtractionResult, SkippedFile, SkipReason
+from codesheriff_engine.fusion import fuse_all_evidence
 from codesheriff_worker.comment import (
-    ABSTENTION_REASON,
-    PENDING_AGENTS,
     SKIP_WORDING,
+    STANCE_WORDING,
     marker_for,
-    pending_evidence,
     render,
 )
 
 AUDIT_ID = uuid.UUID("11111111-2222-3333-4444-555555555555")
 DASHBOARD_URL = "http://localhost:3000/audits/11111111-2222-3333-4444-555555555555"
 
+UNIT = ChangeUnit(
+    unit_id="u1",
+    repo="acme/payments-api",
+    language="python",
+    file="pkg/mod.py",
+    symbol="charge",
+    post_src="def charge(): ...",
+    base_sha="b" * 40,
+    head_sha="h" * 40,
+)
+SQLI_KEY = UNIT.key_for("CWE-89")
 
-def body() -> str:
-    return render(AUDIT_ID, pending_evidence(AUDIT_ID), DASHBOARD_URL)
+
+def detection(agent_id: str, score: float = 0.95, explanation: str = "taint path") -> Evidence:
+    return Evidence.detection(
+        agent_id=agent_id,
+        agent_version="0.1.0",
+        unit_id=UNIT.unit_id,
+        finding_key=SQLI_KEY,
+        cwe="CWE-89",
+        raw_score=score,
+        explanation=explanation,
+    )
 
 
-def test_every_backend_abstains_rather_than_reporting_nothing_found() -> None:
-    """The distinction D-005 exists for. An agent that could not run is not evidence of safety."""
-    evidence = pending_evidence(AUDIT_ID)
+def abstention(agent_id: str, reason: str = "agent_unavailable") -> Evidence:
+    return Evidence.abstention(
+        agent_id=agent_id,
+        agent_version="0.0.0",
+        unit_id=UNIT.unit_id,
+        reason=reason,
+    )
 
-    assert len(evidence) == len(PENDING_AGENTS)
-    assert all(item.kind is EvidenceKind.ABSTENTION for item in evidence)
-    assert all(item.reason == ABSTENTION_REASON for item in evidence)
+
+ALL_ABSTAINED = [
+    abstention("structural.taint"),
+    abstention("semantic.hosted"),
+    abstention("context.rag"),
+    abstention("runtime.sfi"),
+]
 
 
-def test_abstentions_carry_no_finding_key() -> None:
-    """D-019 enforces it in the contract; asserting it here is what catches a hand-built one."""
-    assert all(item.finding_key is None for item in pending_evidence(AUDIT_ID))
+def body(
+    evidence: list[Evidence] | None = None,
+    extraction: ExtractionResult | None = None,
+) -> str:
+    statements = ALL_ABSTAINED if evidence is None else evidence
+    return render(
+        AUDIT_ID,
+        statements,
+        fuse_all_evidence(statements, prior_p=0.05, alert_threshold=0.70),
+        DASHBOARD_URL,
+        extraction,
+        prior_probability=0.05,
+        alert_threshold=0.70,
+    )
+
+
+# -- the claim ---------------------------------------------------------------------------------
 
 
 def test_the_comment_never_says_the_code_is_clean() -> None:
     """AUDIT.md 4.4: the old orchestrator posted "No security vulnerabilities detected" when its
-    agents had failed to load."""
+    agents had failed to load. Here every agent has abstained, which is that exact situation."""
     rendered = body().lower()
 
     assert "no security vulnerabilities detected" not in rendered
     assert "no vulnerabilities" not in rendered
-    assert "no analysis has run" in rendered
+    assert "no finding" in rendered
 
 
-def test_the_comment_carries_no_probability() -> None:
-    """D-032. There is no fitted likelihood ratio and no selected threshold to derive one from."""
+def test_a_finding_never_appears_without_its_calibration_state() -> None:
+    """D-032, and the one assertion in this file that must never be relaxed."""
+    rendered = body([detection("structural.taint")])
+
+    assert "%" in rendered, "sanity: this render does contain a probability"
+    assert "Provisional, not calibrated" in rendered
+    assert "provisional" in rendered.lower()
+    # Stated beside the number itself, not only in a footer a reader can scroll past.
+    heading = next(line for line in rendered.splitlines() if "P(vulnerable)" in line)
+    assert "provisional" in heading.lower()
+
+
+def test_a_quiet_audit_carries_no_probability_at_all() -> None:
+    """Nothing was detected, so there is no posterior to state — not a reassuring one either."""
     rendered = body()
 
-    assert "0.05" not in rendered
-    assert "0.70" not in rendered
-    # The label the old reporter used for a per-finding number. The word "posterior" does appear,
-    # in the paragraph explaining what a calibrated one would mean — which is the opposite of
-    # asserting one.
-    assert "Probability" not in rendered
+    assert "P(vulnerable)" not in rendered
+    assert "result rather than an absence of one" in rendered
 
 
-def test_the_comment_says_why_there_is_no_probability() -> None:
-    """Silence about the absence would read as the tool having nothing to say."""
-    assert "calibrated" in body().lower()
+def test_the_comment_explains_what_the_number_is_not() -> None:
+    assert "not yet measured" in body([detection("structural.taint")])
 
 
-def test_every_backend_is_named() -> None:
-    rendered = body()
+# -- the witness table -------------------------------------------------------------------------
 
-    for agent_id, _, _ in PENDING_AGENTS:
-        assert f"`{agent_id}`" in rendered
+
+def test_every_witness_gets_a_row_including_the_ones_that_said_nothing() -> None:
+    """D-007 made visible: a reader can count four factors and see the abstentions at 1.0."""
+    rendered = body([detection("structural.taint")])
+    rows = [line for line in rendered.splitlines() if line.startswith("| **")]
+
+    assert len(rows) == 4
+    assert [row.split("**")[1] for row in rows] == ["structural", "semantic", "context", "runtime"]
+    assert rendered.count("x1.00") == 3
+
+
+def test_silence_and_abstention_render_differently() -> None:
+    """The distinction D-005 exists for, at the only place a developer will ever see it."""
+    silence = Evidence.silence(
+        agent_id="semantic.hosted",
+        agent_version="0.1.0",
+        unit_id=UNIT.unit_id,
+        covered_cwes={"CWE-89"},
+    )
+    rendered = body([detection("structural.taint"), silence, abstention("context.rag")])
+
+    assert "looked, found nothing" in rendered
+    assert "no statement" in rendered
+    assert "Could not run" in rendered
+
+
+def test_a_silence_is_shown_pulling_the_number_down() -> None:
+    """The witness table has to explain the number, and a ratio below 1.0 is how it does."""
+    silence = Evidence.silence(
+        agent_id="semantic.hosted",
+        agent_version="0.1.0",
+        unit_id=UNIT.unit_id,
+        covered_cwes={"CWE-89"},
+    )
+    rendered = body([detection("structural.taint"), silence])
+    row = next(line for line in rendered.splitlines() if line.startswith("| **semantic**"))
+
+    ratio = float(row.split("x")[1].split(" ")[0].strip("| "))
+    assert ratio < 1.0
+
+
+def test_every_stance_has_words_for_it() -> None:
+    """A stance added to the enum without a phrase here would raise a KeyError while rendering a
+    comment, which is the worst place to find out."""
+    from codesheriff_engine.fusion import Stance
+
+    assert set(STANCE_WORDING) == set(Stance)
+
+
+# -- what must never reach the comment ---------------------------------------------------------
+
+
+def test_no_agent_prose_reaches_the_comment() -> None:
+    """AUDIT.md 0.4: there is no rationale screening yet, and the semantic agent's explanation
+    is LLM output shaped by attacker-controlled source. Rationales land here screened, Ch 11."""
+    rendered = body(
+        [detection("structural.taint", explanation="x](javascript:alert(1)) | injected | row")]
+    )
+
+    assert "javascript:" not in rendered
+    assert "injected" not in rendered
+
+
+def test_no_file_path_ever_reaches_the_comment() -> None:
+    """A path is chosen by whoever opened the pull request, so it is attacker-controlled text in
+    exactly the way AUDIT.md 0.4 describes. Paths belong on the dashboard, behind escaping."""
+    result = extraction(units=1)
+    result.skipped.append(
+        SkippedFile(path="x](javascript:alert(1)).ts", reason=SkipReason.LANGUAGE_UNSUPPORTED)
+    )
+
+    rendered = body([detection("structural.taint")], result)
+
+    assert "javascript:" not in rendered
+    assert "pkg/mod.py" not in rendered
+
+
+def test_no_symbol_name_reaches_the_comment() -> None:
+    """The same argument as D-050: a function name is chosen by the pull request author too."""
+    assert "charge" not in body([detection("structural.taint")])
+
+
+# -- provenance --------------------------------------------------------------------------------
 
 
 def test_the_comment_states_the_contract_version() -> None:
@@ -96,31 +229,19 @@ def test_the_comment_links_to_the_audit() -> None:
     assert DASHBOARD_URL in body()
 
 
-def test_the_table_has_one_row_per_backend() -> None:
-    """Five rows for four agents: the static agent has two backends that emit separately."""
-    rows = [line for line in body().splitlines() if line.startswith("| `")]
+def test_the_comment_reports_what_the_agents_did() -> None:
+    rendered = body([detection("structural.taint"), *ALL_ABSTAINED[1:]])
 
-    assert len(rows) == len(PENDING_AGENTS) == 5
+    assert "1 detection(s)" in rendered
+    assert "3 abstention(s)" in rendered
 
 
-# -- what the audit looked at (Chapter 8) -----------------------------------------------------
+# -- what the audit looked at (Chapter 8) ------------------------------------------------------
 
 
 def extraction(units: int = 0, skipped: list[SkipReason] | None = None) -> ExtractionResult:
     return ExtractionResult(
-        units=[
-            ChangeUnit(
-                unit_id=f"f{i}",
-                repo="acme/payments-api",
-                language="python",
-                file="pkg/mod.py",
-                symbol=f"f{i}",
-                post_src="def f(): ...",
-                base_sha="b" * 40,
-                head_sha="h" * 40,
-            )
-            for i in range(units)
-        ],
+        units=[UNIT.model_copy(update={"unit_id": f"f{i}"}) for i in range(units)],
         skipped=[SkippedFile(path=f"f{i}.x", reason=r) for i, r in enumerate(skipped or [])],
     )
 
@@ -128,55 +249,27 @@ def extraction(units: int = 0, skipped: list[SkipReason] | None = None) -> Extra
 def test_the_comment_reports_how_many_functions_were_extracted() -> None:
     """ "We analysed 4 functions" and "we analysed nothing and said so quietly" have to be
     distinguishable by a reader in a hurry."""
-    assert "Extracted **4** changed functions" in render(
-        AUDIT_ID, pending_evidence(AUDIT_ID), DASHBOARD_URL, extraction(units=4)
-    )
+    assert "Extracted **4** changed functions" in body(None, extraction(units=4))
 
 
 def test_a_single_function_is_not_reported_in_the_plural() -> None:
-    assert "**1** changed function." in render(
-        AUDIT_ID, pending_evidence(AUDIT_ID), DASHBOARD_URL, extraction(units=1)
-    )
+    assert "**1** changed function." in body(None, extraction(units=1))
 
 
 def test_skipped_files_are_counted_and_explained_in_words() -> None:
     """A cell reading `language_unsupported` asks a developer to learn this system's vocabulary
     to find out their TypeScript was not scanned."""
-    body_text = render(
-        AUDIT_ID,
-        pending_evidence(AUDIT_ID),
-        DASHBOARD_URL,
-        extraction(units=1, skipped=[SkipReason.LANGUAGE_UNSUPPORTED] * 2),
-    )
+    rendered = body(None, extraction(units=1, skipped=[SkipReason.LANGUAGE_UNSUPPORTED] * 2))
 
-    assert "2 not Python" in body_text
-    assert "language_unsupported" not in body_text
-
-
-def test_no_file_path_ever_reaches_the_comment() -> None:
-    """A path is chosen by whoever opened the pull request, so it is attacker-controlled text in
-    exactly the way AUDIT.md 0.4 describes. Paths belong on the dashboard, behind escaping."""
-    result = extraction(units=1)
-    result.skipped.append(
-        SkippedFile(path="x](javascript:alert(1)).ts", reason=SkipReason.LANGUAGE_UNSUPPORTED)
-    )
-
-    body_text = render(AUDIT_ID, pending_evidence(AUDIT_ID), DASHBOARD_URL, result)
-
-    assert "javascript:" not in body_text
-    assert "pkg/mod.py" not in body_text
+    assert "2 not Python" in rendered
+    assert "language_unsupported" not in rendered
 
 
 def test_an_audit_that_extracted_nothing_says_so_rather_than_staying_silent() -> None:
-    body_text = render(
-        AUDIT_ID,
-        pending_evidence(AUDIT_ID),
-        DASHBOARD_URL,
-        extraction(units=0, skipped=[SkipReason.FILE_REMOVED]),
-    )
+    rendered = body(None, extraction(units=0, skipped=[SkipReason.FILE_REMOVED]))
 
-    assert "Extracted **0** changed functions" in body_text
-    assert "1 deleted" in body_text
+    assert "Extracted **0** changed functions" in rendered
+    assert "1 deleted" in rendered
 
 
 def test_every_skip_reason_has_words_for_it() -> None:

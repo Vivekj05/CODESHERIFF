@@ -5,11 +5,17 @@ Two rules are enforced here rather than left to callers.
 **Source never reaches a row.** `to_change_unit_row` hashes `post_src` and `pre_src` and keeps the
 metadata; there is no code path from a `ChangeUnit` to a stored function body (§6, D-027).
 
-**A `finding_key` that no agent could have produced is never persisted.** `fuse_all_evidence`
-synthesises `finding_key="abstention:all_agents"` when nothing detected — a raw string key, the
-AUDIT.md 1.1 bypass one layer up in `FusionResult`, where the Evidence validator cannot reach. It
-is a marker for "the unit sits at the prior", not a finding, and `persistable_findings` drops it.
-Chapter 9 removes the marker at its source; until then this is the wall.
+**A `finding_key` that no agent could have produced is never persisted.** Until Chapter 9
+`fuse_all_evidence` synthesised `finding_key="abstention:all_agents"` when nothing was detected —
+a raw string in the key space `contracts.finding_key()` owns, and the AUDIT.md 1.1 bypass one layer
+up in `FusionResult`, where the Evidence validator cannot reach. Chapter 9 removed it at source: a
+unit nobody detected anything in now yields no `FusionResult` at all, and what records that the
+unit was looked at is its evidence rows.
+
+`persistable_findings` stays anyway. It is cheap, it is the only thing standing between a
+hand-built key and the `findings` table, and the mechanism it guards against is one this repository
+has already reintroduced once by another route (AUDIT.md 1.1). A wall is not made redundant by
+nothing currently running into it.
 """
 
 from __future__ import annotations
@@ -138,10 +144,9 @@ def to_finding(
 def persistable_findings(results: list[FusionResult]) -> list[FusionResult]:
     """Drop fusion results that are not findings.
 
-    Two kinds are dropped: the `abstention:all_agents` marker, and anything else whose key did not
-    come from `contracts.finding_key()`. Both are logged at WARNING — silently discarding a result
-    is how evidence goes missing without trace, which is the one thing a calibration claim cannot
-    survive (AUDIT.md 2.7).
+    Anything whose key did not come from `contracts.finding_key()`, and anything carrying no CWE.
+    Both are logged at WARNING — silently discarding a result is how evidence goes missing without
+    trace, which is the one thing a calibration claim cannot survive (AUDIT.md 2.6).
     """
     keepers: list[FusionResult] = []
     for result in results:

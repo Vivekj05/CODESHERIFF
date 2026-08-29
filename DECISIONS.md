@@ -1297,3 +1297,176 @@ package §6 wants reproducible, at the cost of a sixth workspace member and a ne
 layer. PLAN.md Chapter 8 names the engine, the layering already permits it, and the boundary that
 actually matters — extraction cannot reach the network or the database — is enforced by the
 existing "Fusion and calibration cannot reach the database" contract either way.
+
+---
+
+## D-052 — The witness, not the agent, is the unit of fusion
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 9 · **Implements** D-007, D-011
+
+**Decision.** `codesheriff_engine.fusion.witnesses` holds a fixed roster of four witnesses and a
+registry mapping every backend `agent_id` to one of them. Fusion multiplies exactly one likelihood
+ratio per witness, per finding — four factors, always four, whatever the agents did or did not say.
+
+Within a witness, backends combine by **plain max**, and this resolves the question D-011 left open
+*provisionally*. Max never exceeds what a single backend claimed alone, so it cannot inflate; two
+silences stay one silence rather than squaring; and a detection is the witness's statement even when
+its sibling backend was silent. Chapter 14 replaces the rule with one chosen on corpus data.
+
+An `agent_id` in no registry entry **raises**. `apps/worker` catches this at agent load instead, so
+a mis-declared id costs one log line at start-up rather than every audit.
+
+**Rationale.** Two defects, one cause. `AUDIT.md` 1.4: iterating only the agents that emitted made
+the posterior monotonically non-decreasing in the number of agents that alerted, because every
+detection tier exceeds 1.0 — an agent that looked and found nothing could not lower a number, and an
+agent that could not look was indistinguishable from one that had. `AUDIT.md` 2.4: `structural.taint`
+and `structural.semgrep` had separate table rows, so two "high" hits multiplied to **8.5 x 7.0 =
+59.5x** out of one rule-based analysis of one source text.
+
+Both are the same mistake — counting statements instead of witnesses — and both inflate the
+posterior exactly where the project claims rigor.
+
+**Consequences.** `DEFAULT_LIKELIHOOD_TABLE` is gone; `PROVISIONAL_RATIOS` is keyed by witness and
+holds a `silence` ratio the old table had no place for. There is deliberately **no** table entry for
+an abstention: it is exactly 1.0 by definition, and a fitted number there would mean the act of
+failing carried information about the code.
+
+The likelihood ratios are clamped and the posterior is not, reversing `AUDIT.md` 2.7. Bounding each
+witness's claim bounds a quantity that has a meaning; clamping the posterior at 0.9999 merely hid an
+unbounded odds product behind a number shaped like a probability.
+
+**A property of the provisional table worth keeping when the fitted one lands:** no single witness
+can reach the alert threshold alone. The strongest structural detection takes a 0.05 prior to 0.31,
+against a threshold of 0.70. One mechanical witness proving reachability is a weaker claim than four
+witnesses agreeing, and the threshold should be able to tell them apart.
+
+---
+
+## D-053 — Debate is deleted rather than ported
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 9 · **Implements** D-009
+
+**Decision.** `packages/engine/fusion/debate.py` and its tests are deleted, along with every
+setting that served it: `enable_debate`, `conflict_threshold`, `debate_model`,
+`debate_timeout_seconds`, and the three LLM API keys on `EngineConfig`. `httpx` is dropped from the
+engine's dependencies. Debate returns as a witness that **emits its own evidence** — never as a step
+that overwrites a posterior — with the LLM client that runs it, in Chapter 11.
+
+`debate.synth` is deliberately absent from `WITNESS_OF_AGENT`. It reads what the other witnesses
+said, so it is maximally dependent on all of them; registering it as an independent witness would be
+the D-008 anchoring violation wearing a different hat. Where its contribution belongs is Chapter 11's
+to decide.
+
+**Rationale.** `AUDIT.md` 2.2: it assigned `fusion.posterior_probability` directly, which destroys
+calibration on precisely the contested cases the debate exists for and makes the step unmeasurable.
+`AUDIT.md` 2.3: because no LLM key is configured by default, the *normal* path was
+`_heuristic_debate_resolution` — substring matching over lowercased source, returning a hard-coded
+0.25 or 0.85, in which `"int("` counted as a sanitizer and `"int("` is a substring of `print(`. Any
+code containing a print statement was classified sanitised and its posterior forced to 0.25.
+
+There is no version of that function worth keeping, and no version of the module worth keeping
+around it.
+
+**Consequences.** `EngineConfig` now holds no credential of any kind, which is the state
+`CLAUDE.md` describes for it. `FusionResult.consensus_rationale` survives as an unset field, because
+`findings.consensus_rationale` is NOT NULL and dropping it would mean a migration for a column
+Chapter 11 will fill.
+
+---
+
+## D-054 — Running agents belongs to `apps/worker`; the engine keeps extraction and fusion
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 9
+
+**Decision.** `codesheriff_engine.orchestrator` moves to `apps/worker/analysis.py` and is deleted
+from the engine, along with `codesheriff_engine.reporting`. The engine CLI loses `run` and gains
+`fuse`, which takes a JSON list of `Evidence` and prints the posterior with the factor each witness
+contributed.
+
+**Rationale.** `CLAUDE.md` already says `apps/worker` "owns the pipeline and all agents", and the
+worker is the only process that declares the four agent packages as dependencies. The engine reached
+them by `try: import static_agent` — an *undeclared* runtime dependency, which meant a fusion package
+could pull in an LLM client, and which made the layering the `import-linter` contracts describe true
+only by accident.
+
+`reporting.py` was a second pull request comment renderer, complete with the file path D-050 keeps
+out of one, diverging from the comment the worker actually posts. `apps/worker/comment.py` says it
+is "the only place that builds the body"; now it is.
+
+**Consequences.** There is no longer any way to run a full analysis from `codesheriff-engine`. That
+is the point — the arithmetic is what is worth having at a prompt, and "why is this 31% and not 96%"
+is answered by the per-witness breakdown `fuse` prints, which previously required a full run to see.
+
+---
+
+## D-055 — A unit nobody detected anything in yields evidence and no finding
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 9
+
+**Decision.** `fuse_all_evidence` returns `[]` when no detection was made. The synthetic
+`finding_key="abstention:all_agents"` is deleted at its source. `compute_bayesian_fusion` raises if
+asked for a key no detection carries.
+
+**Rationale.** That marker was a raw string in the key space `contracts.finding_key()` owns — the
+`AUDIT.md` 1.1 bypass one layer above where the `Evidence` validator can reach, since a
+`FusionResult` is not an `Evidence`. `codesheriff_storage.persistable_findings` had to be built as a
+wall against a value the engine itself minted.
+
+A finding is something an agent found. What records that a quiet unit was looked at is its evidence
+rows, which `apps/worker` persists whether or not anything was detected — including the silences,
+which are the statement that makes "we analysed this and found nothing" a result rather than an
+absence of one.
+
+**`persistable_findings` stays.** It is cheap, it is the only thing between a hand-built key and the
+`findings` table, and this repository has already reintroduced that class of bug once by another
+route. A wall is not made redundant by nothing currently running into it.
+
+---
+
+## D-056 — A backend states coverage over what it did *not* find, alongside what it did
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 9
+
+**Decision.** `static_agent.emission.with_residual_silence` appends one SILENCE over
+`covered_cwes - detected_cwes` to a backend's detections. Both static backends use it. A backend
+that detects everything it can reach emits no silence, because a silence over an empty set is not
+expressible and would not mean anything if it were.
+
+**Rationale.** A backend that reaches ten CWEs and detects one has learned two things, and used to
+report only the first: `analyze_taint` and `run_semgrep` each returned *either* detections *or* a
+silence, so the moment a backend detected anything, its coverage of every other CWE went unstated.
+
+That has a cost now that fusion consumes silence. A unit where the taint engine finds SQL injection
+and the semantic agent claims command injection should have the taint engine's silence on CWE-78
+pulling that second finding down; with no silence emitted it contributed exactly nothing.
+
+The contract always permitted this — a SILENCE and a DETECTION are separate statements about the
+same unit. Nothing built them together, which is the ordinary way a contract goes unused. Subtracting
+the detected CWEs is what keeps the pair coherent: a witness must not both alert on a finding and
+vouch for it.
+
+---
+
+## D-057 — An agent with no model abstains; the implicit stub is removed
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 9 · **Partially closes** `AUDIT.md` 3.12
+
+**Decision.** `SemanticAgent` no longer falls back to `StubLLMClient` when no API key is configured.
+It sets `llm_client = None`, logs a warning at construction, and abstains with reason
+`llm_unavailable` on every unit. An explicitly injected client is still honoured — that is a
+deliberate script, and it is how the tests drive the agent.
+
+**Rationale.** Found by running the pipeline end to end after fusion started consuming silence.
+`StubLLMClient` answers anything but one demo fixture with `{"findings": []}`, which the agent
+correctly turned into SILENCE across all ten in-scope CWEs — so an unconfigured deployment had a
+witness that had read nothing arguing, at a likelihood ratio of 0.50, that every change was safe.
+Its vote was indistinguishable from a real model's.
+
+This is `AUDIT.md` 3.12 ("a missing API key reports clean"), and it is the exact failure D-005 exists
+to prevent: an agent that could not look voting the code innocent. It was survivable while fusion
+ignored silence. Chapter 9 made it harmful, so Chapter 9 fixes it rather than leaving it for Chapter
+11, which owns the rest of that agent.
+
+**Consequences.** On a machine with no LLM key — including this one — the semantic witness
+contributes exactly 1.0 rather than 0.50. That is a *higher* posterior on quiet units than before,
+and it is the correct one: nothing looked, so nothing was learned.

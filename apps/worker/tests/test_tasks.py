@@ -27,7 +27,14 @@ from codesheriff_storage import (
     upsert_installation,
     upsert_repository,
 )
-from codesheriff_storage.models import Audit, AuditStatus, ChangeUnitRow
+from codesheriff_storage.models import (
+    Audit,
+    AuditStatus,
+    ChangeUnitRow,
+    EvidenceKindDB,
+    EvidenceRow,
+    Finding,
+)
 from codesheriff_worker.github_gateway import PullRequestFile
 from codesheriff_worker.tasks import _run_claimed_audit, execute_audit
 
@@ -113,24 +120,22 @@ def test_the_audit_is_closed_with_the_comment_it_owns(
     assert row.github_comment_id is not None and row.github_comment_id > 0
 
 
-def test_no_probability_reaches_the_comment(
+def test_no_number_reaches_the_comment_without_its_calibration_state(
     db: DbSession,
     factory: sessionmaker[DbSession],
     gateway: FakeGitHubGateway,
     audit: Audit,
 ) -> None:
-    """D-032. Nothing is calibrated yet, so there is nothing a number could honestly mean."""
+    """D-032. Chapter 9 gave the comment numbers; it did not give them a warrant.
+
+    This pull request changes nothing analysable, so there is no posterior at all — and the
+    banner still states what the numbers would be worth if there were.
+    """
     execute_audit(audit.id, factory, gateway, url_for)
 
     body = gateway.posted[0].body
-    assert "No analysis has run" in body
-    # Not the prior, not the threshold, and no per-finding probability label of the kind the old
-    # reporter emitted. The one "87%" in the body is the explanation of what calibration means,
-    # which is the opposite of a claim about this pull request.
-    assert "0.05" not in body
-    assert "0.70" not in body
-    assert "Probability" not in body
-    assert "posterior" not in body.lower() or "calibrated" in body.lower()
+    assert "P(vulnerable)" not in body
+    assert "Provisional, not calibrated" in body
 
 
 def test_nothing_from_the_pull_request_is_echoed(
@@ -151,26 +156,18 @@ def test_nothing_from_the_pull_request_is_echoed(
     assert audit.head_sha not in body
 
 
-def test_every_backend_is_reported_as_having_abstained(
+def test_a_pull_request_with_nothing_to_analyse_is_never_called_clean(
     db: DbSession,
     factory: sessionmaker[DbSession],
     gateway: FakeGitHubGateway,
     audit: Audit,
 ) -> None:
-    """Four agents that do not exist could not run. Reporting "clean" is AUDIT.md 4.4."""
+    """Reporting "clean" for work that was never done is AUDIT.md 4.4."""
     execute_audit(audit.id, factory, gateway, url_for)
 
     body = gateway.posted[0].body
-    for agent_id in (
-        "structural.taint",
-        "structural.semgrep",
-        "semantic.hosted",
-        "context.rag",
-        "runtime.sfi",
-    ):
-        assert agent_id in body
-    assert "Abstained" in body
     assert "No security vulnerabilities detected" not in body
+    assert "Extracted **0** changed functions" in body
 
 
 def test_a_second_delivery_of_the_same_task_does_nothing(
@@ -438,3 +435,176 @@ def test_a_failure_while_fetching_is_recorded_on_the_row_and_raised(
 
     db.expire_all()
     assert db.get(Audit, audit.id).status is AuditStatus.FAILED
+
+
+SAFE_BEFORE_SRC = """def total(items):
+    return 0
+"""
+
+SAFE_AFTER_SRC = """def total(items):
+    return sum(items)
+"""
+
+
+# -- the analysis reaches the database (Chapter 9) ---------------------------------------------
+#
+# `AFTER_SRC` is a real vulnerability, not a mock: `request.args["scope"]` reaches
+# `subprocess.run(..., shell=True)`, and `EXPORT_KEY` is a hardcoded credential at module scope.
+# The structural witness is the only one built, so these assert what one witness produces and
+# what the other three contribute while they do not exist — which is nothing, at LR 1.0.
+
+
+def evidence_of(db: DbSession, audit_id: uuid.UUID) -> list[EvidenceRow]:
+    return list(
+        db.execute(
+            select(EvidenceRow)
+            .join(ChangeUnitRow, EvidenceRow.change_unit_id == ChangeUnitRow.id)
+            .where(ChangeUnitRow.audit_id == audit_id)
+        ).scalars()
+    )
+
+
+def findings_of(db: DbSession, audit_id: uuid.UUID) -> list[Finding]:
+    return list(
+        db.execute(
+            select(Finding)
+            .where(Finding.audit_id == audit_id)
+            .order_by(Finding.posterior_probability.desc())
+        ).scalars()
+    )
+
+
+def test_every_agent_statement_is_persisted_against_the_unit_it_is_about(
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    analysing_gateway: FakeGitHubGateway,
+    audit: Audit,
+) -> None:
+    """Chapter 6 wrote five abstentions about the *pipeline*, attached to nothing.
+
+    An evidence row hangs off a change unit, and that is what later lets a finding be traced to a
+    function — and what makes "this agent was silent about this function" a fact on the record
+    rather than an inference.
+    """
+    execute_audit(audit.id, factory, analysing_gateway, url_for)
+
+    rows = evidence_of(db, audit.id)
+    assert rows, "the agents ran and nothing was written"
+    assert all(row.change_unit_id is not None for row in rows)
+    assert "pipeline_not_implemented" not in {row.reason for row in rows}
+
+
+def test_the_agents_that_do_not_exist_abstain_rather_than_going_missing(
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    analysing_gateway: FakeGitHubGateway,
+    audit: Audit,
+) -> None:
+    """AUDIT.md 4.4: a missing agent must not read as an agent that found nothing."""
+    execute_audit(audit.id, factory, analysing_gateway, url_for)
+
+    rows = evidence_of(db, audit.id)
+    for agent_id in ("semantic.hosted", "context.rag", "runtime.sfi"):
+        theirs = [row for row in rows if row.agent_id == agent_id]
+        assert theirs, f"{agent_id} said nothing at all"
+        assert all(row.kind is EvidenceKindDB.ABSTENTION for row in theirs)
+        assert all(row.finding_key is None for row in theirs)
+
+
+def test_the_structural_witness_actually_finds_the_planted_vulnerability(
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    analysing_gateway: FakeGitHubGateway,
+    audit: Audit,
+) -> None:
+    """`request.args["scope"]` reaching `subprocess.run(shell=True)` is CWE-78."""
+    execute_audit(audit.id, factory, analysing_gateway, url_for)
+
+    detections = [row for row in evidence_of(db, audit.id) if row.kind is EvidenceKindDB.DETECTION]
+    assert detections, "the taint engine found nothing in a function with a taint path"
+    assert all(row.agent_id.startswith("structural.") for row in detections)
+
+
+def test_a_finding_records_the_numbers_it_was_judged_by(
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    analysing_gateway: FakeGitHubGateway,
+    audit: Audit,
+) -> None:
+    """§6: a threshold selected later must not retroactively change which past runs alerted."""
+    execute_audit(audit.id, factory, analysing_gateway, url_for)
+
+    findings = findings_of(db, audit.id)
+    assert findings, "detections were persisted but no finding was"
+    for finding in findings:
+        assert finding.prior_probability == audit.prior_probability
+        assert finding.alert_threshold == audit.alert_threshold
+        assert finding.calibration_run_id == audit.calibration_run_id
+        assert 0.0 < finding.posterior_probability < 1.0
+
+
+def test_a_finding_is_traceable_to_the_function_it_is_about(
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    analysing_gateway: FakeGitHubGateway,
+    audit: Audit,
+) -> None:
+    """The path and the qualified symbol belong here, where they are behind escaping — and
+    nowhere near the pull request comment (D-050)."""
+    execute_audit(audit.id, factory, analysing_gateway, url_for)
+
+    findings = findings_of(db, audit.id)
+    symbols = {f.qualified_symbol for f in findings}
+    assert symbols <= {"<module>", "Orders.export"}
+    assert all(f.file == "orders/api.py" for f in findings)
+
+
+def test_no_synthetic_key_is_ever_persisted(
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    analysing_gateway: FakeGitHubGateway,
+    audit: Audit,
+) -> None:
+    """AUDIT.md 1.1. `abstention:all_agents` is gone at source, and this is the second wall."""
+    execute_audit(audit.id, factory, analysing_gateway, url_for)
+
+    for finding in findings_of(db, audit.id):
+        assert len(finding.finding_key) == 16
+        assert ":" not in finding.finding_key
+
+
+def test_a_unit_nobody_detected_anything_in_still_leaves_a_record(
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    audit: Audit,
+) -> None:
+    """A quiet unit produces evidence and no finding — that is a result, not an absence of one."""
+    gateway = FakeGitHubGateway(
+        files=[PullRequestFile("orders/api.py", "modified")],
+        blobs={
+            ("a" * 40, "orders/api.py"): SAFE_AFTER_SRC,
+            ("b" * 40, "orders/api.py"): SAFE_BEFORE_SRC,
+        },
+    )
+    execute_audit(audit.id, factory, gateway, url_for)
+
+    assert units_of(db, audit.id), "the unit was analysed"
+    assert evidence_of(db, audit.id), "and what the agents said was recorded"
+    assert findings_of(db, audit.id) == []
+    assert "No finding" in gateway.posted[0].body
+
+
+def test_the_comment_shows_one_row_per_witness_for_a_real_finding(
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    analysing_gateway: FakeGitHubGateway,
+    audit: Audit,
+) -> None:
+    """D-007, at the far end of the pipeline: four factors, not one per agent that alerted."""
+    execute_audit(audit.id, factory, analysing_gateway, url_for)
+
+    body = analysing_gateway.posted[0].body
+    assert "P(vulnerable)" in body
+    assert "Provisional, not calibrated" in body
+    for witness in ("structural", "semantic", "context", "runtime"):
+        assert f"| **{witness}** |" in body

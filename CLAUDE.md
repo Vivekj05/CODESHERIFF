@@ -66,6 +66,9 @@ odd choice and is load-bearing:
 | Three evidence kinds, not two | `abstained: bool` seems sufficient | SILENCE (ran, found nothing) gets LR < 1.0; ABSTENTION (could not run) gets exactly 1.0. Conflating them means an agent that *could not look* penalises the finding |
 | SILENCE carries `covered_cwes` | Extra field for little gain | Without it, the taint engine's silence on CWE-862 (which it has no rules for) systematically suppresses every semantic-only finding |
 | Fusion iterates **all** agents, not just those that emitted | Wasteful loop | Otherwise odds can only ever increase |
+| Fusion multiplies one LR per **witness**, not per agent | Four backends, four factors seems natural | `structural.taint` and `structural.semgrep` analyse the same source text with the same technique. Two "high" hits multiplied to 8.5 x 7.0 = **59.5x** out of one witness (D-052) |
+| ABSTENTION has no entry in the ratio table | An unfitted constant looks like an oversight | It is exactly 1.0 *by definition*. A fitted number there would mean the act of failing carried information about the code |
+| An unregistered `agent_id` raises in fusion | Harsh; a warning would do | It would otherwise become a fifth witness and multiply in a factor nobody calibrated. `apps/worker` catches it at agent load, so the cost is one log line at start-up |
 | Agents run **blind** — no anchors | Anchoring is obviously more efficient | It correlates the agents and breaks the conditional independence the fusion math assumes |
 | Debate emits its own evidence, never overwrites the posterior | Overwriting is simpler | Overwriting destroys calibration exactly on the contested cases and makes the debate step unmeasurable |
 | Oversized units **abstain**, never truncate | Truncating gets partial signal | Truncated analysis produces confident findings from half-read code, biased toward over-reporting, and silently invalidates calibration |
@@ -76,7 +79,7 @@ odd choice and is load-bearing:
 ## Current state — read `AUDIT.md` before writing code
 
 **The committed code does not implement the design above.** A full conformance audit found that
-three of four analysis components are shells:
+three of four analysis components are shells, and three of them still are:
 
 - The static agent has **no taint engine** — the def-use graph is built and discarded; "taint
   paths" are a line-number cross-product.
@@ -85,12 +88,14 @@ three of four analysis components are shells:
 - The runtime agent **does not exist**.
 
 The extraction *was* per-file diff fragments; Chapter 8 closed that (`AUDIT.md` 4.1 and 4.2). The
-webhook *was* unauthenticated; Chapter 6 closed that (`AUDIT.md` 0.1 and 4.3). See "Closure status"
-at the top of `AUDIT.md` for what each chapter has actually fixed — the findings themselves are left
-as audited, because they are the record of how far the implementation had drifted.
+webhook *was* unauthenticated; Chapter 6 closed that (`AUDIT.md` 0.1 and 4.3). The fusion engine
+*was* seven defects; Chapter 9 closed all of them (`AUDIT.md` 1.4, 2.2, 2.3, 2.4, 2.6, 2.7). See
+"Closure status" at the top of `AUDIT.md` for what each chapter has actually fixed — the findings
+themselves are left as audited, because they are the record of how far the implementation had
+drifted.
 
-The test suite passes and reports 100%. It cannot detect any of this. `static-agent/cli.py` `bench`
-returns hard-coded `precision: 1.0, recall: 1.0`.
+The test suite passes and reports 100%. It could not detect any of this. `static-agent/cli.py`
+`bench` returns hard-coded `precision: 1.0, recall: 1.0`.
 
 **Do not assume a component works because it has a plausible filename or a passing test.** Read
 the implementation.
@@ -111,25 +116,30 @@ CODESHERIFF/
 │   ├── agent_semantic/   # semantic.hosted
 │   ├── agent_context/    # context.rag
 │   ├── agent_runtime/    # runtime.sfi                                  (empty — Ch 13)
-│   ├── engine/           # ChangeUnit extraction, fusion, calibration. May NOT import a DB client.
+│   ├── engine/           # ChangeUnit extraction, fusion, calibration. No DB client, no agents.
 │   └── storage/          # SQLAlchemy models, Alembic, pgvector precedent store
 ├── apps/
 │   ├── api/              # FastAPI: sign-in + repo listing (Ch 5); HMAC + enqueue (Ch 6)
-│   ├── worker/           # Celery: owns the pipeline and all agents. Fetch + extract (Ch 8)
+│   ├── worker/           # Celery: owns the pipeline and all agents. Runs them + fuses (Ch 9)
 │   └── dashboard/        # Next.js 16 — rendering layer only. Shell + mock data (Ch 4)
 └── docs/history/         # Superseded specs, kept for provenance
 ```
 
-⚠️ **The layout is correct and the seam around the analysis now runs; the analysis itself does not.**
-Chapter 2 froze the contract at v2.0.0 and got every gate green. Chapter 6 made the pipeline real
-end to end — verified webhook, queued audit, worker-posted comment. Chapter 7 built the ground truth
-every number will be fitted against. Chapter 8 made the pipeline hand over the right objects. None
-of them made an agent do the right work. The taint engine still builds a def-use graph and discards
-it; the context agent is still four substring tests; the runtime agent still does not exist.
+⚠️ **The pipeline runs end to end; three of the four agents still do not do the right work.**
+Chapter 2 froze the contract at v2.0.0 and got every gate green. Chapter 6 made the plumbing real —
+verified webhook, queued audit, worker-posted comment. Chapter 7 built the ground truth every number
+will be fitted against. Chapter 8 made the pipeline hand over the right objects. Chapter 9 closed
+the seam: agents run per unit, their statements are persisted against the function they are about,
+and fusion turns them into a posterior that can go down as well as up.
 
-There is now a corpus to measure that against and units of the same shape to measure it on, which
-is a change in kind: before Chapter 7 the agents were unmeasured, and the passing test suite said
-nothing either way.
+What Chapter 9 did **not** do is make an agent analyse better. The taint engine still builds a
+def-use graph and discards it; the context agent is still four substring tests; the runtime agent
+still does not exist. What changed is that each of them now abstains under its own name, at a
+likelihood ratio of exactly 1.0, on the record, per unit — so a missing witness costs the posterior
+nothing and hides from nobody.
+
+Every number is **provisional**. The ratios, the prior and the threshold are hand-set, and D-010
+requires them presented as such until Chapter 14 fits them on the calibration split.
 
 **The webhook is `apps/api/src/codesheriff_api/webhooks.py`.** It verifies `X-Hub-Signature-256`
 against the raw body *before* parsing it, writes an `audits` row, publishes the id to Celery and
@@ -186,6 +196,24 @@ because CWE-798 lives at module scope more often than not (D-049). One unit per 
 definition winning: `@overload` stubs would otherwise apply one agent's ratio twice to one
 `finding_key`. A file that yields no unit is recorded with a `SkipReason`, never dropped silently,
 and `MAX_BLOB_BYTES` skips an oversized file *whole* — capping the fetch is not truncating a unit.
+
+**Fusing evidence.** `codesheriff_engine.fusion` multiplies one likelihood ratio per **witness**
+— four factors, always four, whatever the agents said. `fusion/witnesses.py` is the only place that
+decides how many witnesses there are, and an `agent_id` it does not know raises rather than becoming
+a fifth (D-052). Backends inside a witness combine by plain max, which is D-011's open question
+answered provisionally. The ratios are clamped; the posterior is not. A unit nobody detected anything
+in yields evidence rows and **no** `FusionResult` — there is no `abstention:all_agents` marker any
+more (D-055).
+
+There is no debate module. It overwrote the posterior it was meant to explain, and its default path
+was substring matching in which `"int("` — a substring of `print(` — counted as a sanitizer. It
+returns as a witness that emits its own evidence in Chapter 11 (D-053).
+
+**Running agents is `apps/worker`'s job, never the engine's** (D-054). `apps/worker/analysis.py`
+holds four slots, fills every one of them, and guarantees at least one statement per agent per unit:
+an agent that will not import, raises, hangs or returns `[]` becomes an abstention with a distinct
+reason. If you find yourself adding `import static_agent` to `packages/engine`, that is the
+undeclared dependency Chapter 9 removed — and it is what let a fusion package pull in an LLM client.
 
 **No file path reaches the pull request comment** (D-050). A path is chosen by whoever opened the
 pull request; coverage is reported as counts and plain words. Paths belong on the dashboard, behind
@@ -286,6 +314,8 @@ uv run codesheriff-corpus validate   # loads every case; prints corpus_hash and 
 uv run codesheriff-corpus stats      # coverage by CWE, split and agent
 uv run codesheriff-corpus show cwe-862-admin-export-vuln
 
+uv run codesheriff-engine fuse evidence.json       # posterior + one row per witness. No agents.
+
 uv run uvicorn codesheriff_api.main:app --reload   # /health, /auth/*, /repositories, /webhooks/github
 
 # The worker. Needs Redis; without it the API answers 503 on the webhook rather than losing work.
@@ -320,8 +350,14 @@ Signing in needs a registered GitHub App — `docs/github-app-setup.md`. Without
 `501` naming the missing variable rather than failing at import, so `/health` works on a machine
 that has never seen a `.pem`.
 
-All five Python gates and both frontend gates are green as of Chapter 8 (618 tests with a database,
-498 + 120 skips without). `ruff` and `mypy` are
+All five Python gates and both frontend gates are green as of Chapter 9 (663 tests with a database,
+535 + 128 skips without).
+
+**Semgrep has no Windows build**, so `structural.semgrep` abstains with `tool_unavailable` on a
+Windows dev machine and the structural witness is the taint engine alone. That is a correctly
+handled abstention, not a defect — but it means the SARIF mapping is exercised only against fixture
+SARIF. Chapter 14 must run the corpus on Linux or CI, or its fitted structural ratios will describe
+a one-backend witness. `ruff` and `mypy` are
 configured **once**, in the root `pyproject.toml` — a per-package `[tool.ruff]` silently shadows it
 with a different rule set, which is how the agent packages went unlinted (D-023).
 

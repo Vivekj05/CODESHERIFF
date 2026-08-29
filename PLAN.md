@@ -33,21 +33,27 @@ unauthenticated endpoint is deleted rather than patched. As of Chapter 7 there i
 measure against, and as of Chapter 8 the pipeline hands over the right objects: one `ChangeUnit`
 per changed function, cut from the real file at real line numbers.
 
-**The analysis components are still the shells the audit described.** Chapters 2, 6 and 8 made the
-system speak the right contract, run the right shape and produce the right input; none of them made
-an agent do the right work. The taint engine still builds a def-use graph and discards it; the
-context agent's reasoning is still four substring tests; the runtime agent still does not exist.
-Each has a chapter, and all of them are in Phase B.
+As of Chapter 9 the seam is **closed**: every extracted unit reaches four blind agents, what each
+one says is persisted against the function it is about, and fusion turns it into a posterior that
+can go down as well as up. The pipeline is end to end for the first time.
 
-What has changed is that the shells are now **measurable**. Chapter 7 supplied the labels and
-Chapter 8 supplies units of the same shape the corpus holds, so from Chapter 9 on, "this agent
-found nothing" is a result rather than an absence of one.
+**Three of the four analysis components are still the shells the audit described.** The taint
+engine still builds a def-use graph and discards it; the context agent's reasoning is still four
+substring tests; the runtime agent still does not exist. Each has a chapter, and all of them are in
+Phase B. What Chapter 9 changed is the frame around them: an agent that is not built now abstains
+under its own name, at a likelihood ratio of exactly 1.0, on the record, per unit — so a missing
+witness costs the posterior nothing and hides from nobody.
+
+The shells are also **measurable** now. Chapter 7 supplied the labels, Chapter 8 supplies units of
+the same shape the corpus holds, and Chapter 9 supplies the arithmetic that turns their statements
+into a number. "This agent found nothing" is a result rather than an absence of one — and it is a
+result with a price, since a silence carries a likelihood ratio below 1.0.
 
 | Version | Goal | Status |
 |---|---|---|
 | v0.1 | webhook → diff parsed → comment posted | ✅ **complete** (Ch 6, Ch 8) — HMAC verified before parsing, enqueued, worker posts. Extraction is one unit per changed function, from fetched blobs |
 | v0.2 | contracts frozen + corpus with committed splits | ⚠️ contracts frozen at v2.0.0 (Ch 2); corpus 60 units / 30 pairs with committed splits (Ch 7); **cross-PR scenarios pending Ch 12** |
-| v0.3 | Semgrep backend + fusion engine | ⚠️ Semgrep runner works; fusion has 7 defects |
+| v0.3 | Semgrep backend + fusion engine | ✅ **complete** (Ch 9) — all 7 fusion defects closed; four witnesses, one factor each. Ratios still asserted until Ch 14 |
 | v0.4 | taint engine | ⚠️ **no taint engine** — def-use graph discarded; line cross-product |
 | v0.5 | semantic agent | ⚠️ runs; exemplars never loaded, gate incomplete, no size check |
 | v0.6 | empirical calibration | ⬜ blocked on corpus |
@@ -511,10 +517,10 @@ its `ChangeUnit` directly and does not go through extraction.
 skip rather than a unit nothing can analyse. JS/TS stays unscheduled (§6), and tree-sitter reaches
 it through the same API when it is scheduled.
 
-## Chapter 9 — Static agent I: Semgrep backend + fusion skeleton (v0.3) ⬜
+## Chapter 9 — Static agent I: Semgrep backend + fusion skeleton (v0.3) ✅
 
-**Replaces** `packages/engine/src/codesheriff_engine/fusion/`.
-**Closes** `AUDIT.md` 1.4, 2.2, 2.3, 2.4, 2.6, 2.7.
+**Replaced** `packages/engine/src/codesheriff_engine/fusion/`.
+**Closes** `AUDIT.md` 1.4, 2.2, 2.3, 2.4, 2.6, 2.7. **Partially closes** 3.12, 4.4.
 
 Semgrep `--sarif` backend — the existing runner is sound, port it. Fusion with **hand-set** ratios,
 explicitly marked provisional until Chapter 14:
@@ -528,6 +534,81 @@ explicitly marked provisional until Chapter 14:
 
 **Done when:** the fusion identity test passes — static and semantic evidence for the same bug land
 under one `finding_key` and produce **one** posterior, not two singletons.
+
+**Delivered.** The analysis seam is closed: extraction → four blind agents → per-unit evidence rows
+→ fused posteriors → findings → one comment. D-052 through D-057. The "Done when" criterion holds,
+and so does the stronger property it stands for — a posterior that can go *down*.
+
+- **The witness, not the agent, is the unit of fusion (D-052).** A fixed roster of four, and a
+  registry mapping every backend `agent_id` to one of them. Four factors, always four. The two
+  defects this closes are the same mistake twice: iterating only agents that spoke made the
+  posterior monotonically non-decreasing (`AUDIT.md` 1.4), and giving the two static backends
+  separate table rows multiplied 8.5 × 7.0 = **59.5×** out of one witness (`AUDIT.md` 2.4).
+  Backends inside a witness combine by plain max — D-011's open question, answered provisionally.
+- **Silence now costs something, and coverage now bounds it.** `PROVISIONAL_RATIOS` is keyed by
+  witness and carries a `silence` ratio the old table had no place for, constrained below 1.0 by
+  the type rather than by convention. It applies only when the witness's `covered_cwes` contains
+  the finding's CWE, so the taint engine's silence cannot suppress a CWE-862 finding it never had
+  a rule for (D-006).
+- **There is no ratio for an abstention**, and there must never be one. Exactly 1.0, by definition
+  — a fitted number there would mean the act of failing carried information about the code.
+- **The ratios are clamped; the posterior is not** (`AUDIT.md` 2.7, reversed). Bounding each
+  witness's claim bounds a quantity that means something. The old 0.9999 posterior clamp merely hid
+  an unbounded odds product behind a number shaped like a probability.
+- **Debate is deleted, not ported (D-053).** With it went `enable_debate`, `conflict_threshold`,
+  three LLM API keys and `httpx` from the engine's dependencies. `EngineConfig` now holds no
+  credential of any kind. Debate returns as a witness that emits its own evidence in Chapter 11;
+  `debate.synth` is deliberately unregistered, because it reads what the others said and would be
+  the D-008 anchoring violation under another name.
+- **`abstention:all_agents` is gone at source (D-055).** A unit nobody detected anything in yields
+  evidence rows and no finding. `codesheriff_storage.persistable_findings` stays as the second wall.
+- **Running agents moved to `apps/worker` (D-054).** `codesheriff_engine` reached the agents by
+  `try: import static_agent` — an undeclared runtime dependency that let a fusion package pull in an
+  LLM client. `reporting.py` went with it: a second comment renderer, complete with the file path
+  D-050 keeps out of one. The engine CLI's `run` becomes `fuse`, which prints the posterior and the
+  factor each witness contributed to it.
+- **Every seat speaks, every audit.** An agent that will not import, raises, hangs or returns `[]`
+  becomes an abstention with a distinct reason. `AUDIT.md` 4.4 is what the alternative looks like.
+- **Backends now state coverage over what they did *not* find (D-056).** Both static backends
+  emit detections *and* a residual SILENCE over `covered_cwes - detected_cwes`. Previously a
+  backend that detected anything went silent about the other nine CWEs, so its silence contributed
+  nothing to any other finding in the same unit.
+- **The comment reports what the witnesses said and what came out**, with a provisional banner above
+  every number (D-032) and a four-row breakdown per finding. No agent prose reaches it — rationales
+  arrive screened in Chapter 11 (`AUDIT.md` 0.4) — and still no path, no symbol, no title (D-050).
+
+**One defect found by running the pipeline end to end** (D-057, `AUDIT.md` 3.12). `SemanticAgent`
+fell back to `StubLLMClient` when no API key was configured, and that stub answers anything but one
+demo fixture with `{"findings": []}` — which the agent correctly reported as SILENCE across all ten
+in-scope CWEs. So an unconfigured deployment had a witness that had read nothing arguing, at a
+likelihood ratio of 0.50, that every change was safe, indistinguishable from a real model's vote.
+
+Harmless while fusion ignored silence. **This chapter is what made it harmful**, so this chapter
+fixes it rather than leaving it to Chapter 11: no key and no injected client means `llm_unavailable`,
+every unit. The fix raises quiet-unit posteriors rather than lowering them, which is the correct
+direction — nothing looked, so nothing was learned.
+
+**Verified.** 663 Python tests pass against Postgres (535 + 128 skips without one); 45 of them are
+new · `ruff check` and `ruff format --check` clean across 150 files · `mypy --strict` clean across
+90 source files · `lint-imports` 5 contracts kept. End to end on the Chapter 8 fixture — a method
+where `request.args["scope"]` reaches `subprocess.run(..., shell=True)` — the taint engine detects
+CWE-78 at 0.31 posterior with three witnesses abstaining at 1.0, below the provisional 0.70
+threshold. That number is provisional and says so on every surface that renders it.
+
+⚠️ **Semgrep does not run on this machine.** It has no Windows build, so `structural.semgrep`
+abstains with `tool_unavailable` and the structural witness is the taint engine alone. That is a
+correctly-handled abstention rather than a defect — and it is exactly why the abstention path is
+tested — but it means the SARIF mapping is exercised only by `test_semgrep_mapping.py` against
+fixture SARIF, never against Semgrep's real output. **Chapter 14 must run the corpus on Linux/CI**,
+or its fitted structural ratios will describe a one-backend witness.
+
+⚠️ **The ratios remain asserted.** Every number in `PROVISIONAL_RATIOS`, the prior and the threshold
+are hand-set, and D-010 requires them presented as such until Chapter 14. Nothing derived from them
+may be called calibrated.
+
+```bash
+uv run codesheriff-engine fuse evidence.json    # posterior, with one row per witness
+```
 
 ## Chapter 10 — Static agent II: the taint engine ⬜
 
