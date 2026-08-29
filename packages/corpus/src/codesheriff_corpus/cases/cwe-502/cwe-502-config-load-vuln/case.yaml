@@ -1,0 +1,14 @@
+case_id: cwe-502-config-load-vuln
+pair_id: cwe-502-config-load
+label: vulnerable
+cwe: CWE-502
+file: app/config/loader.py
+symbol: load_config
+start_line: 15
+imports: [yaml]
+detectable_by: [structural.semgrep, semantic.hosted, runtime.sfi]
+rationale: >-
+  yaml.Loader resolves the python/object tags, which construct arbitrary objects and can
+  call arbitrary callables. The path is a per-tenant overrides file uploaded through the
+  dashboard, so the document is not trusted. Naming the Loader explicitly reads as
+  deliberate, which is why this belongs in the corpus rather than a bare yaml.load.

@@ -1,0 +1,14 @@
+case_id: cwe-502-cache-get-vuln
+pair_id: cwe-502-cache-get
+label: vulnerable
+cwe: CWE-502
+file: app/cache/store.py
+symbol: get
+enclosing_class: ResponseCache
+start_line: 38
+imports: [pickle]
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted, runtime.sfi]
+rationale: >-
+  Unpickling whatever the cache returns makes the cache a code-execution channel: anyone
+  who can write a key in shared Redis obtains execution inside the application. Trusting
+  an unauthenticated network store is the same mistake as trusting a client.

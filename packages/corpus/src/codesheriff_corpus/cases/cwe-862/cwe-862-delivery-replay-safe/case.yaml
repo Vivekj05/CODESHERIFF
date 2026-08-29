@@ -1,0 +1,11 @@
+case_id: cwe-862-delivery-replay-safe
+pair_id: cwe-862-delivery-replay
+label: safe
+cwe: CWE-862
+file: app/webhooks/admin.py
+symbol: replay_delivery
+start_line: 63
+imports: [flask.jsonify, flask.abort]
+rationale: >-
+  The same endpoint, gated on an explicit named permission before any work is done. The
+  check is first in the body, so there is no partial effect for a caller who fails it.

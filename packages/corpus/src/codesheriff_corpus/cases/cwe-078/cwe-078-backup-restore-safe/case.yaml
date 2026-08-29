@@ -1,0 +1,12 @@
+case_id: cwe-078-backup-restore-safe
+pair_id: cwe-078-backup-restore
+label: safe
+cwe: CWE-78
+file: ops/backup/restore.py
+symbol: restore_backup
+start_line: 61
+imports: [subprocess]
+rationale: >-
+  The same migration to tar, in list form. shell=True is absent, so no shell is created
+  and the two untrusted values remain single argv entries. Worth keeping as a twin
+  because a rule keyed on "subprocess plus untrusted input" fires on both.

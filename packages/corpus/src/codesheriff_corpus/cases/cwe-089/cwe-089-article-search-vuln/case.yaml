@@ -1,0 +1,14 @@
+case_id: cwe-089-article-search-vuln
+pair_id: cwe-089-article-search
+label: vulnerable
+cwe: CWE-89
+file: app/repositories/articles.py
+symbol: search
+enclosing_class: ArticleRepository
+start_line: 54
+imports: [sqlalchemy.text]
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted]
+rationale: >-
+  Using an ORM is not itself protective. text() takes raw SQL, and the search term is
+  formatted into it before the ORM ever sees it, inside a quoted LIKE pattern that a
+  single quote closes. The method is on a class, so the key is ArticleRepository.search.

@@ -1,0 +1,14 @@
+case_id: cwe-918-link-preview-vuln
+pair_id: cwe-918-link-preview
+label: vulnerable
+cwe: CWE-918
+file: app/previews/fetcher.py
+symbol: fetch
+enclosing_class: LinkPreview
+start_line: 41
+imports: [urllib.request]
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted, runtime.sfi]
+rationale: >-
+  urlopen on a URL pasted into a message. urlopen additionally accepts file:// and ftp://,
+  so the reachable surface is wider than HTTP alone. The byte cap bounds the response
+  size and does nothing about where the request goes. Keyed on LinkPreview.fetch.

@@ -1,0 +1,13 @@
+case_id: cwe-078-backup-restore-vuln
+pair_id: cwe-078-backup-restore
+label: vulnerable
+cwe: CWE-78
+file: ops/backup/restore.py
+symbol: restore_backup
+start_line: 61
+imports: [subprocess]
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted, runtime.sfi]
+rationale: >-
+  shell=True is passed explicitly, so the formatted string is parsed by /bin/sh. Both
+  archive_name and target_dir originate from an operator-facing restore form. This is
+  the shell=True flag doing the damage, not the command itself.

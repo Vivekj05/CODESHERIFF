@@ -1,0 +1,13 @@
+case_id: cwe-078-host-ping-vuln
+pair_id: cwe-078-host-ping
+label: vulnerable
+cwe: CWE-78
+file: app/diagnostics/network.py
+symbol: check_host
+start_line: 23
+imports: [os]
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted, runtime.sfi]
+rationale: >-
+  A query parameter is interpolated into a string handed to os.system, which always runs
+  its argument through a shell. A host of "x; id" runs id. os.system has no non-shell
+  mode, so there is no configuration under which this call is safe.

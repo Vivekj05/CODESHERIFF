@@ -1,0 +1,13 @@
+case_id: cwe-089-order-sort-vuln
+pair_id: cwe-089-order-sort
+label: vulnerable
+cwe: CWE-89
+file: app/api/orders.py
+symbol: list_orders
+start_line: 77
+imports: [flask.request, flask.abort, app.db.cursor]
+detectable_by: [structural.taint, semantic.hosted]
+rationale: >-
+  Partially parameterised, and that is the trap. customer_id is correctly bound, which
+  makes the call look safe, while the sort column is concatenated into the statement.
+  An identifier cannot be bound as a parameter, so the safe-looking call does not help it.

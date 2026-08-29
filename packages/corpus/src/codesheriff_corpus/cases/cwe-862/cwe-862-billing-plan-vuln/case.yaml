@@ -1,0 +1,14 @@
+case_id: cwe-862-billing-plan-vuln
+pair_id: cwe-862-billing-plan
+label: vulnerable
+cwe: CWE-862
+file: app/billing/api.py
+symbol: post
+enclosing_class: BillingView
+start_line: 27
+imports: [rest_framework.response.Response]
+detectable_by: [semantic.hosted, context.rag]
+rationale: >-
+  The account is the caller's own, so this is not an ownership bug: any member of an
+  account can change its billing plan, and only billing admins should. Distinct from
+  CWE-639 for that reason. The missing check is on the role, not on the key.

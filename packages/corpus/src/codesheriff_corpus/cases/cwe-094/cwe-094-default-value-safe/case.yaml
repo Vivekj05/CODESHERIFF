@@ -1,0 +1,12 @@
+case_id: cwe-094-default-value-safe
+pair_id: cwe-094-default-value
+label: safe
+cwe: CWE-94
+file: app/forms/fields.py
+symbol: parse_default_value
+start_line: 19
+imports: [ast]
+rationale: >-
+  ast.literal_eval parses the source and walks the tree, rejecting anything that is not a
+  literal container, string, number, or constant. No call, attribute access, or name
+  lookup survives the walk, so nothing can execute. The purpose of the function is met.

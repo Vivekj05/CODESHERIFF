@@ -1010,3 +1010,168 @@ difference, and that is visible in ngrok's inspector and nowhere else.
 **Consequences.** `PUBLIC_WEBHOOK_URL` is gone from `.env.example`. Nothing in either process needs
 to know its own public address — the URL lives on the GitHub App, and the tunnel is a client the
 developer runs, not configuration the application reads.
+
+---
+
+## D-044 — The corpus is 60 hand-written units in 30 twin pairs; cross-PR scenarios wait for Chapter 12
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 7
+
+**Decision.** `packages/corpus` ships 60 units: three twin pairs for each of the ten CWEs in
+`IN_SCOPE_CWES`. Every pair is the same function, in the same file, under the same symbol, once
+vulnerable and once safe. The ~15 cross-PR scenarios that `PROJECT_CONTEXT.md` §5 also names are
+**not** in this chapter; they land with the context agent in Chapter 12.
+
+**Why 60 and not 20.** The chapter's stated bar is one vulnerable case and one safe twin per CWE,
+which is 20 units. Twenty cannot carry a 60/20/20 split: validation and test would hold four units
+each, and an ECE computed on four items is not a measurement. Three pairs per CWE is the smallest
+number that leaves every split non-trivial.
+
+**Why the cases are hand-written.** §5 already settled this — at this size every label must be
+certain, and clean twins cannot be reliably extracted from real commits. Writing them also forced
+the twins to be *near*: the safe member of `cwe-089-order-sort` still builds its query with an
+f-string, and the safe member of `cwe-798-warehouse-connect` still passes a string literal to
+`psycopg.connect`. A twin that differs only in the presence of the bug is what makes a false
+positive measurable; a twin that also differs in style measures style.
+
+**Why cross-PR scenarios wait.** A cross-PR scenario is a case plus a precedent history for the
+context agent to retrieve against. §5 fixes that the agent indexes *per-symbol documents*, not
+per-PR ones, but the document shape itself is Chapter 12's to design. Authoring fifteen histories
+against a guessed schema now would mean rewriting them later, and a corpus rewritten after it has
+been used to fit anything is worse than a corpus that arrives late.
+
+**Consequences.** `corpus_hash` changes when they land. That is safe *only* because Chapter 14
+fits the ratios and Chapter 12 precedes it — no calibration artifact will exist yet to invalidate.
+If the order of those chapters ever changes, this becomes a real problem and the scenarios must be
+authored first. `context.rag` is listed on only 6 of the 30 vulnerable cases (the CWE-862 and
+CWE-639 ones) until then, which is the smallest positive count of any agent and is expected: it is
+a corroborating witness, not a soloist.
+
+**Also decided here.** One vulnerability per vulnerable case, never two. A unit carrying two
+findings would need two labels and two keys, and the "did the agent find it" question would stop
+being a lookup.
+
+---
+
+## D-045 — Splits are assigned by twin pair, and immutability is made detectable rather than claimed
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 7
+
+**Decision.** `splits.json` assigns **`pair_id`**, never `case_id`, at 60/20/20 —
+18 / 6 / 6 pairs, 36 / 12 / 12 units. Assignment is stratified by CWE from a recorded seed
+(`20260829`). `codesheriff-corpus assign` will place unassigned pairs and **refuses to move a pair
+that already has a split**.
+
+**Why by pair.** PLAN.md asks for a test that fails if a twin pair is split. Assigning the pair
+makes that unrepresentable rather than merely tested: twins differ by a sanitizer call, so a
+vulnerable member in calibration and its safe twin in test would mean a ratio fitted on all but a
+few characters of the case it is later scored against. The test exists anyway, because the
+construction is a choice a later change could reverse while the other tests kept passing.
+
+**Why 60/20/20.** Calibration has twelve cells to fill — four agents times three evidence kinds —
+and a cell with two observations in it produces a ratio that Laplace smoothing is holding up
+unaided. Validation and test each answer one scalar question and can afford to be smaller.
+
+**Immutability is not enforced, and saying so matters.** The obvious mechanism is a committed
+checksum verified by a test. That is precisely the mechanism this repository already defeated:
+`AUDIT.md` 4.8 records the expected SHA-256 being rewritten to make the test pass. A guard whose
+cheapest bypass is editing the guard is not a guard. What exists instead:
+
+- `assign` will not move a settled pair, so growing the corpus cannot silently rebalance it;
+- `split_hash` is recorded on every `calibration_runs` row, so a run fitted before an edit no
+  longer matches the splits it claims to have been fitted on.
+
+The property is **detection after the fact**, not prevention. That is honest and it is enough:
+the failure this guards against is drift, not sabotage.
+
+**The limitation, stated rather than engineered away.** Six pairs cannot cover ten CWEs. Every CWE
+has at least one calibration pair — asserted by a test — but the validation and test splits each
+reach only six of ten, and under this seed CWE-89 falls entirely inside calibration. So the final
+ECE and Brier numbers are **aggregate claims across CWEs, not per-CWE claims**, and the paper must
+report them that way. The seed was fixed before the draw was inspected and has not been rerolled;
+reseeding until the distribution looked better is the exact behaviour §6 exists to prevent.
+
+**Consequences.** `calibration_runs.corpus_hash` and `.split_hash` — nullable since Chapter 3 with
+nothing to put in them — now have computable values. Both are defined over the *canonical loaded
+form*, not raw file bytes: reflowing a comment in a `case.yaml` is not a change to the corpus and
+must not invalidate a fitted run, while a line of `post.py`, a label, or a `detectable_by` entry is
+and does. Both are independent of git, so they can be recomputed from an installed wheel.
+
+
+**One defect found by running the CLI twice.** `corpus_hash` was different on every invocation.
+`CorpusCase.detectable_by` is a `frozenset`, a frozenset iterates in an order derived from its
+members' hashes, and Python randomises string hashing per process — so the serialised case, and the
+hash over it, changed run to run. A calibration run could never have been shown to match the corpus
+it was fitted on, which is the hash's only job.
+
+Fixed with a field serialiser that sorts, which is the identical mechanism and identical reason
+`Evidence.covered_cwes` carries one (D-024) — the contract had already solved this exact problem and
+the corpus reintroduced it. No in-process test could catch it: `corpus_hash() == corpus_hash()` is
+true within one interpreter. `test_hashes_are_stable_across_processes` runs the hash in subprocesses
+under fixed and random `PYTHONHASHSEED` values, and produces five distinct hashes if the serialiser
+is removed.
+
+---
+
+## D-046 — Corpus case sources are real `.py` files, and are data rather than code
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 7
+
+**Decision.** A case is a directory holding `case.yaml`, `post.py`, and optionally `pre.py`, inside
+the package so it ships in the wheel. `packages/corpus/src/codesheriff_corpus/cases/` is excluded
+from `ruff` and from `mypy` in the root `pyproject.toml`.
+
+**Why not source embedded in YAML.** The alternative was one YAML file per case with the code as a
+block scalar. The code is the case: it has to survive tree-sitter, carry honest line numbers, and
+be reviewable in a diff. Indentation inside a block scalar is none of those, and an indentation
+error in a corpus case is a mislabelled case rather than a syntax error someone notices.
+
+**Why excluded from the linters.** These files are deliberately vulnerable by construction.
+Linting them either fails the gate or — much worse — creates steady pressure to fix the
+vulnerability the case exists to contain. `ruff` would rewrite `os.system(f"ping {host}")` given
+the chance, and that case would then be silently mislabelled.
+
+Excluding them costs a real check, so `test_case_sources_are_valid_python` compiles every `pre.py`
+and `post.py` instead. It only parses; nothing executes. That check matters more here than
+elsewhere: tree-sitter tolerates broken syntax by design, so a stray indent would not fail the
+static agent — it would quietly analyse a fragment.
+
+**Directory names are hyphenated** (`cwe-089-user-lookup-vuln`), which is how every Python tool is
+told a directory is not a package. Verified: `grimp` walks the tree for `lint-imports` without
+attempting to import them.
+
+---
+
+## D-047 — `detectable_by` is authored from a pre-registered rule, before any agent runs
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 7
+
+**Decision.** Every vulnerable case names the agents that could in principle find it. The field is
+assigned at authoring time from the rule below, and is **not** revised after seeing what an agent
+actually did. Safe twins carry the field empty, and the schema rejects a safe case that sets it.
+
+| Agent | Listed when |
+|---|---|
+| `structural.taint` | a source reaches a modelled sink through the function, so a path exists to prove |
+| `structural.semgrep` | a syntactic pattern identifies it without needing a path |
+| `semantic.hosted` | always, on every vulnerable case — it reasons about intent |
+| `context.rag` | repository precedent is the signal: the CWE-862 and CWE-639 cases |
+| `runtime.sfi` | a sandbox could *observe* it — a process spawned, a file opened outside the root, a network attempt, code compiled. Not XSS (no browser), not SQL injection (no database), not a hardcoded credential (nothing happens) |
+
+**Why this is the most dangerous field in the schema.** It exists for a good reason — §5 requires
+that a static miss on a semantic-only case not be scored as a failure — and it is exactly the field
+that could excuse any miss whatsoever if it were edited after the fact. Widening one entry after a
+disappointing run is a single-word change that no test would catch and that would raise a measured
+number. Writing the rule down first is what makes that edit visible as a deviation rather than
+invisible as a judgement call.
+
+**Enforced mechanically where it can be.** `lint-imports` forbids every agent package from
+importing `codesheriff_corpus` — a separate contract from the layering one, because the reason is
+different in kind. An agent that can read `label` is being told the answer rather than measured; an
+agent that can read `detectable_by` can be excused by the field designed to excuse it fairly. The
+leak would not look like cheating; it would look like a convenient import in a test helper that
+someone later reached for from the agent itself.
+
+`test_the_authorisation_cwes_have_no_static_path` additionally pins the heterogeneity claim: no
+CWE-862 or CWE-639 case may ever list a static backend. That claim is the clearest evidence the
+four-agent argument has, and it would be lost to a single well-meaning edit.

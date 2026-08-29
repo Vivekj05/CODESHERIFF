@@ -1,0 +1,14 @@
+case_id: cwe-918-link-preview-safe
+pair_id: cwe-918-link-preview
+label: safe
+cwe: CWE-918
+file: app/previews/fetcher.py
+symbol: fetch
+enclosing_class: LinkPreview
+start_line: 41
+imports: [urllib.request]
+rationale: >-
+  The target is resolved to an address and rejected unless that address is publicly
+  routable, which excludes loopback, link-local and the private ranges where metadata
+  services live. The same urlopen call remains, so a rule keyed on the sink alone fires
+  on both twins.

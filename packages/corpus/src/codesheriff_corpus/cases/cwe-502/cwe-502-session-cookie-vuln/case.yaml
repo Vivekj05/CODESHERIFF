@@ -1,0 +1,13 @@
+case_id: cwe-502-session-cookie-vuln
+pair_id: cwe-502-session-cookie
+label: vulnerable
+cwe: CWE-502
+file: app/auth/session.py
+symbol: load_session
+start_line: 24
+imports: [base64, pickle]
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted, runtime.sfi]
+rationale: >-
+  pickle.loads executes the reduce instructions embedded in its input, so unpickling a
+  cookie is running code the client sent. Base64 is an encoding, not a signature, and
+  there is no integrity check anywhere in the function.

@@ -1,0 +1,13 @@
+case_id: cwe-798-warehouse-connect-vuln
+pair_id: cwe-798-warehouse-connect
+label: vulnerable
+cwe: CWE-798
+file: analytics/warehouse.py
+symbol: connect
+start_line: 8
+imports: [psycopg]
+detectable_by: [structural.semgrep, semantic.hosted]
+rationale: >-
+  The password is embedded in a connection string literal. That it points at an internal
+  host is not mitigation: source is read by everyone with repository access, and an
+  internal warehouse credential is exactly what an attacker inside the perimeter wants.

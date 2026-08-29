@@ -105,7 +105,7 @@ CODESHERIFF/
 ├── pyproject.toml        # uv workspace + ruff/mypy/import-linter config
 ├── packages/
 │   ├── contracts/        # THE single shared contract. Never vendored.
-│   ├── corpus/           # Labelled cases + committed immutable splits  (empty — Ch 7)
+│   ├── corpus/           # 60 labelled units, 30 twin pairs, committed splits (Ch 7)
 │   ├── agent_static/     # structural.taint + structural.semgrep
 │   ├── agent_semantic/   # semantic.hosted
 │   ├── agent_context/    # context.rag
@@ -121,9 +121,13 @@ CODESHERIFF/
 
 ⚠️ **The layout is correct and the seam around the analysis now runs; the analysis itself does not.**
 Chapter 2 froze the contract at v2.0.0 and got every gate green. Chapter 6 made the pipeline real
-end to end — verified webhook, queued audit, worker-posted comment. Neither made an agent do the
-right work. The taint engine still builds a def-use graph and discards it; the context agent is
-still four substring tests; the runtime agent still does not exist.
+end to end — verified webhook, queued audit, worker-posted comment. Chapter 7 built the ground truth
+every number will be fitted against. None of them made an agent do the right work. The taint engine
+still builds a def-use graph and discards it; the context agent is still four substring tests; the
+runtime agent still does not exist.
+
+There is now a corpus to measure that against, which is a change in kind: before Chapter 7 the
+agents were unmeasured, and the passing test suite said nothing either way.
 
 **The webhook is `apps/api/src/codesheriff_api/webhooks.py`.** It verifies `X-Hub-Signature-256`
 against the raw body *before* parsing it, writes an `audits` row, publishes the id to Celery and
@@ -143,6 +147,24 @@ by `import-linter` (D-025). Fitted numbers must be reproducible from the calibra
 recorded corpus hash; a fusion module that can open a session makes that unverifiable. Never write a
 row by hand: `mapping.py` is the only writer, it hashes source rather than storing it, and it drops
 fusion results whose key no agent could have produced (D-026, D-027).
+
+**Ground truth.** `packages/corpus` holds 60 hand-written units in 30 twin pairs — the same
+function, once vulnerable and once safe, sharing a `finding_key` so a false positive is a lookup.
+No agent may import it, enforced by a dedicated `import-linter` contract (D-047): an agent that can
+read `label` is being told the answer, and one that can read `detectable_by` can be excused by the
+field that exists to excuse it fairly. `detectable_by` is authored from a pre-registered rule before
+any agent runs and is never widened afterwards.
+
+Splits are assigned by **`pair_id`**, never `case_id`, so a twin cannot straddle a split (D-045).
+Immutability is **detectable, not prevented**: `assign` refuses to move a settled pair, and
+`split_hash` on each `calibration_runs` row makes a later edit show up as a stale fit. A committed
+checksum verified by a test is deliberately *not* used — that is the mechanism `AUDIT.md` 4.8 records
+being defeated by rewriting the expected hash.
+
+Case sources are real `.py` files and are **data, not code**: `cases/` is excluded from `ruff` and
+`mypy`, because linting deliberately vulnerable samples pressures you into fixing the very thing the
+case exists to contain (D-046). A test compiles every one instead — tree-sitter tolerates broken
+syntax, so a stray indent would silently analyse a fragment rather than fail.
 
 **Building evidence.** Never construct `Evidence(...)` directly — use `Evidence.detection()`,
 `.silence()` or `.abstention()`. Never build a `finding_key` by hand — use `unit.key_for(cwe)`. Both
@@ -233,7 +255,12 @@ uv sync --all-packages           # install the workspace  (--all-packages, or me
 uv run pytest                    # all packages
 uv run pytest packages/agent_static
 uv run ruff check . && uv run ruff format --check . && uv run mypy .
-uv run lint-imports              # agent + storage boundary enforcement — must stay green
+uv run lint-imports              # agent + storage + corpus boundary enforcement — must stay green
+
+uv run codesheriff-corpus validate   # loads every case; prints corpus_hash and split_hash
+uv run codesheriff-corpus stats      # coverage by CWE, split and agent
+uv run codesheriff-corpus show cwe-862-admin-export-vuln
+
 uv run uvicorn codesheriff_api.main:app --reload   # /health, /auth/*, /repositories, /webhooks/github
 
 # The worker. Needs Redis; without it the API answers 503 on the webhook rather than losing work.
@@ -268,8 +295,8 @@ Signing in needs a registered GitHub App — `docs/github-app-setup.md`. Without
 `501` naming the missing variable rather than failing at import, so `/health` works on a machine
 that has never seen a `.pem`.
 
-All five Python gates and both frontend gates are green as of Chapter 6 (254 tests with a database,
-140 + 114 skips without). `ruff` and `mypy` are
+All five Python gates and both frontend gates are green as of Chapter 7 (540 tests with a database,
+426 + 114 skips without). `ruff` and `mypy` are
 configured **once**, in the root `pyproject.toml` — a per-package `[tool.ruff]` silently shadows it
 with a different rule set, which is how the agent packages went unlinted (D-023).
 

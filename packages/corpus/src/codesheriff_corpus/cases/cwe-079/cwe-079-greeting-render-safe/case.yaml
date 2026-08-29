@@ -1,0 +1,12 @@
+case_id: cwe-079-greeting-render-safe
+pair_id: cwe-079-greeting-render
+label: safe
+cwe: CWE-79
+file: app/web/pages.py
+symbol: render_greeting
+start_line: 12
+imports: [flask.Response, markupsafe.escape]
+rationale: >-
+  The same hand-built HTML response, but the untrusted value passes through escape()
+  first, which replaces the five HTML-significant characters. The f-string is still
+  present, so a rule keyed on "f-string producing HTML" fires on this twin too.

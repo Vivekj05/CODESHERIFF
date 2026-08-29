@@ -1,0 +1,13 @@
+case_id: cwe-094-default-value-vuln
+pair_id: cwe-094-default-value
+label: vulnerable
+cwe: CWE-94
+file: app/forms/fields.py
+symbol: parse_default_value
+start_line: 19
+imports: []
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted, runtime.sfi]
+rationale: >-
+  eval compiles and runs its argument as Python. The expression is a form-builder field
+  written by whoever configured the form, which in a multi-tenant product is not the
+  operator. Any expression, including one that imports os, executes with full privileges.

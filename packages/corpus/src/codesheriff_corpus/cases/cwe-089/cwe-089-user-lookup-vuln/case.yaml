@@ -1,0 +1,13 @@
+case_id: cwe-089-user-lookup-vuln
+pair_id: cwe-089-user-lookup
+label: vulnerable
+cwe: CWE-89
+file: app/api/users.py
+symbol: get_user
+start_line: 42
+imports: [flask.request, app.db.cursor]
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted]
+rationale: >-
+  A query parameter is interpolated into SQL with an f-string and executed. The value is
+  a string with no coercion, so it is not even accidentally constrained to digits. The
+  textbook case, kept in the corpus precisely because every agent should find it.

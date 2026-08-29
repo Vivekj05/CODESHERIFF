@@ -1,0 +1,12 @@
+case_id: cwe-502-session-cookie-safe
+pair_id: cwe-502-session-cookie
+label: safe
+cwe: CWE-502
+file: app/auth/session.py
+symbol: load_session
+start_line: 24
+imports: [base64, hashlib, hmac, json]
+rationale: >-
+  The format the cookie deserialises to is JSON, which constructs only data, and the
+  payload is rejected before parsing unless it carries a valid HMAC over the server
+  secret. compare_digest is used rather than == so the check is not timing-distinguishable.

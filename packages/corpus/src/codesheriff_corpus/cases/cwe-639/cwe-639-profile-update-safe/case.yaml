@@ -1,0 +1,12 @@
+case_id: cwe-639-profile-update-safe
+pair_id: cwe-639-profile-update
+label: safe
+cwe: CWE-639
+file: app/accounts/profile.py
+symbol: update_profile
+start_line: 58
+imports: [flask.jsonify]
+rationale: >-
+  The record is selected by the authenticated session's own id, which the client cannot
+  influence. The body still supplies the new display name, so untrusted data still
+  reaches the write; what it cannot choose is which row is written.

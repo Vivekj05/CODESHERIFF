@@ -1,0 +1,12 @@
+case_id: cwe-918-avatar-import-safe
+pair_id: cwe-918-avatar-import
+label: safe
+cwe: CWE-918
+file: app/accounts/avatars.py
+symbol: import_avatar
+start_line: 19
+imports: [requests, urllib.parse.urlparse]
+rationale: >-
+  The scheme must be https and the host must be one of a small set of known avatar
+  providers, checked on the parsed URL rather than by substring. An arbitrary internal
+  address is not in the set, so the request is never made.

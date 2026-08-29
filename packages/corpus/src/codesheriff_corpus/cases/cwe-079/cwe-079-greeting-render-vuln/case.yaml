@@ -1,0 +1,13 @@
+case_id: cwe-079-greeting-render-vuln
+pair_id: cwe-079-greeting-render
+label: vulnerable
+cwe: CWE-79
+file: app/web/pages.py
+symbol: render_greeting
+start_line: 12
+imports: [flask.Response]
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted]
+rationale: >-
+  A query parameter is interpolated into an HTML document served as text/html with no
+  escaping. Building the response by hand bypasses Jinja autoescaping, which is what the
+  pre-image relied on. Reflected XSS, directly attacker-controlled.

@@ -1,0 +1,13 @@
+case_id: cwe-798-payment-client-vuln
+pair_id: cwe-798-payment-client
+label: vulnerable
+cwe: CWE-798
+file: app/payments/client.py
+symbol: build_payment_client
+start_line: 11
+imports: []
+detectable_by: [structural.semgrep, semantic.hosted]
+rationale: >-
+  A live secret key is a literal in the source. Committing it publishes it to every clone
+  and to the whole history, so rotation is the only remedy. No taint path exists; the
+  vulnerability is the literal itself. The key shown is syntactically shaped but invalid.

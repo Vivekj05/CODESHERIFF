@@ -1,0 +1,13 @@
+case_id: cwe-862-admin-export-safe
+pair_id: cwe-862-admin-export
+label: safe
+cwe: CWE-862
+file: app/admin/exports.py
+symbol: export_users
+start_line: 44
+decorators: ['@app.route("/admin/users/export")', '@admin_required']
+imports: [flask.Response]
+rationale: >-
+  The same route changed in the same PR, with @admin_required kept. The edit is an
+  ordering clause in the query. The twin exists so that "this function changed and is
+  named admin" cannot on its own be what fires the vulnerable member.

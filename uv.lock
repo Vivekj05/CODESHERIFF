@@ -536,12 +536,16 @@ source = { editable = "packages/corpus" }
 dependencies = [
     { name = "codesheriff-contracts" },
     { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "typer" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "codesheriff-contracts", editable = "packages/contracts" },
     { name = "pydantic", specifier = ">=2.7.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "typer", specifier = ">=0.12.0" },
 ]
 
 [[package]]

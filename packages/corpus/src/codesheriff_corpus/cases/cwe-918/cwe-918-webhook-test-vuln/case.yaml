@@ -1,0 +1,14 @@
+case_id: cwe-918-webhook-test-vuln
+pair_id: cwe-918-webhook-test
+label: vulnerable
+cwe: CWE-918
+file: app/integrations/webhooks.py
+symbol: test_webhook
+start_line: 52
+imports: [requests, flask.abort]
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted, runtime.sfi]
+rationale: >-
+  A URL from the request body is fetched by the server, which reaches anything the server
+  can reach: cloud metadata endpoints, internal admin panels, services bound to
+  localhost. Redirects are followed by default, so even a validated host would be
+  insufficient on its own here.

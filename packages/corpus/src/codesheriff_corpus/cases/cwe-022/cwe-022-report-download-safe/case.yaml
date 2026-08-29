@@ -1,0 +1,12 @@
+case_id: cwe-022-report-download-safe
+pair_id: cwe-022-report-download
+label: safe
+cwe: CWE-22
+file: app/reports/views.py
+symbol: download_report
+start_line: 48
+imports: [os, pathlib.Path, flask.Response, flask.abort]
+rationale: >-
+  Same move to a caller-supplied filename, but the joined path is resolved and tested
+  for containment before it is opened. resolve() collapses ../ and absorbs symlinks, so
+  is_relative_to is decided on the real target rather than on the spelling of the input.

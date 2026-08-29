@@ -1,0 +1,12 @@
+case_id: cwe-078-git-checkout-safe
+pair_id: cwe-078-git-checkout
+label: safe
+cwe: CWE-78
+file: ci/runner/workspace.py
+symbol: checkout_branch
+start_line: 35
+imports: [re, subprocess]
+rationale: >-
+  Two independent reasons this is safe: the branch name must match a restrictive pattern
+  before it is used, and the command is invoked in list form with no shell. Either alone
+  would suffice; both are present because the input is attacker-chosen.

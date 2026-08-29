@@ -1,0 +1,12 @@
+case_id: cwe-502-config-load-safe
+pair_id: cwe-502-config-load
+label: safe
+cwe: CWE-502
+file: app/config/loader.py
+symbol: load_config
+start_line: 15
+imports: [yaml]
+rationale: >-
+  safe_load resolves only the standard YAML tags, which build dicts, lists, strings,
+  numbers, booleans and null. No constructor can be reached, so a hostile document is at
+  worst malformed data. The same file is read from the same untrusted path.

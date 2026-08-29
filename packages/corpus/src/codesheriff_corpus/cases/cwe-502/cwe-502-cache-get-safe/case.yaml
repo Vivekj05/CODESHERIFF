@@ -1,0 +1,13 @@
+case_id: cwe-502-cache-get-safe
+pair_id: cwe-502-cache-get
+label: safe
+cwe: CWE-502
+file: app/cache/store.py
+symbol: get
+enclosing_class: ResponseCache
+start_line: 38
+imports: [json]
+rationale: >-
+  The cached value is decoded as JSON, which constructs only data. A hostile cache entry
+  can produce wrong values but not execution. Same method, same store, same untrusted
+  bytes; only the deserialiser differs.

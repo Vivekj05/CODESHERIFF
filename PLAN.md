@@ -40,7 +40,7 @@ them are in Phase B.
 | Version | Goal | Status |
 |---|---|---|
 | v0.1 | webhook → diff parsed → comment posted | ✅ **seam complete** (Ch 6) — HMAC verified before parsing, enqueued, worker posts. Extraction is still per-file diff fragments (Ch 8) |
-| v0.2 | contracts frozen + corpus with committed splits | ⚠️ contracts frozen at v2.0.0 (Ch 2); **no corpus at all** |
+| v0.2 | contracts frozen + corpus with committed splits | ⚠️ contracts frozen at v2.0.0 (Ch 2); corpus 60 units / 30 pairs with committed splits (Ch 7); **cross-PR scenarios pending Ch 12** |
 | v0.3 | Semgrep backend + fusion engine | ⚠️ Semgrep runner works; fusion has 7 defects |
 | v0.4 | taint engine | ⚠️ **no taint engine** — def-use graph discarded; line cross-product |
 | v0.5 | semantic agent | ⚠️ runs; exemplars never loaded, gate incomplete, no size check |
@@ -357,7 +357,7 @@ checklist; it shares the blocker with Chapter 5.
 Goal: four heterogeneous agents producing evidence that fuses into a calibrated posterior. This is
 the contribution — protect this phase from schedule pressure.
 
-## Chapter 7 — Corpus and committed splits ⬜
+## Chapter 7 — Corpus and committed splits ⚠️
 
 **Gates every numeric claim the project makes.** Fitting likelihood ratios, the prior, or the
 threshold without this means asserting them — precisely the failure the paper criticises.
@@ -372,6 +372,76 @@ deliberately have no static path — they exist to prove heterogeneity.
 
 **Done when:** every in-scope CWE has ≥1 vulnerable case and ≥1 safe twin, and a test fails if a twin
 pair is split across splits.
+
+**Delivered.** `packages/corpus` (`codesheriff_corpus`), D-044 through D-047. Both "Done when"
+criteria hold, asserted by tests over the whole corpus rather than a sample.
+
+- **60 units in 30 twin pairs** — three pairs for each of the ten in-scope CWEs. Each pair is one
+  function, one file, one symbol, once vulnerable and once safe. A case is a directory of
+  `case.yaml` + `post.py` + optional `pre.py`, shipped inside the wheel and read through
+  `importlib.resources`, so an installed corpus loads the same as a checkout (D-046).
+- **Twins share a `finding_key` by construction** and a test proves it. Fusion groups by key; twins
+  that keyed differently would make "the agent fired on the safe twin" and "the agent found the bug"
+  statements about different findings, and precision uncomputable by lookup.
+- **The twins are deliberately near.** The safe member of `cwe-089-order-sort` still builds its
+  query with an f-string; the safe `cwe-798-warehouse-connect` still passes a string literal to
+  `psycopg.connect`; the safe `cwe-918-link-preview` still calls `urlopen`. Each is there so a rule
+  keyed on the shape rather than the flaw fires on both members and is measured for it.
+- **Splits assigned by `pair_id`, 60/20/20** — 18/6/6 pairs, seed recorded, stratified by CWE. A
+  twin cannot straddle a split because the pair is the unit of assignment; the test PLAN.md asks
+  for exists anyway (D-045).
+- **`corpus_hash` and `split_hash` now have a definition.** `calibration_runs` has held both columns
+  since Chapter 3 with nothing to put in them, which made §6's reproducibility requirement a
+  sentence rather than a check. Both are computed over the canonical loaded form and are independent
+  of git, so they can be recomputed from a wheel.
+- **A fifth import-linter contract**: no agent may import `codesheriff_corpus`. Separate from the
+  layering contract because the reason differs in kind — an agent that can read `label` is being
+  told the answer, and one that can read `detectable_by` can be excused by the field that exists to
+  excuse it fairly (D-047).
+
+**Closes** `AUDIT.md` 4.7. **Partially closes** 2.1: the corpus, the splits and the hashes now
+exist, so the artifacts §6 requires are present. The ratios, prior and threshold are still the
+hardcoded values in `engine/config.py` — fitting them is Chapter 14, and until then D-010 requires
+they be presented as provisional.
+
+**Verified.** 540 Python tests pass against Postgres (426 pass and 114 skip without one); 286 of
+them are new · `ruff check`
+and `ruff format --check` clean across 144 files · `mypy --strict` clean across 86 source files ·
+`lint-imports` 5 contracts kept, with a deliberate `static_agent -> codesheriff_corpus` import added,
+correctly broken, and removed.
+
+⚠️ **Not ✅ — the ~15 cross-PR scenarios are not here.** A cross-PR scenario is a case plus a
+precedent history, and the shape of a precedent document is Chapter 12's to design (§5 fixes only
+that indexing is per-symbol, not per-PR). Authoring fifteen histories against a guessed schema now
+would mean rewriting them later. They land with the context agent; `corpus_hash` changes when they
+do, which is safe only because Chapter 12 precedes Chapter 14 and no calibration artifact exists
+yet. **If those two chapters are ever reordered, the scenarios must be authored first.**
+
+**One defect found by running the CLI twice** (D-045). `corpus_hash` differed on every invocation:
+`detectable_by` is a `frozenset`, and Python randomises string hashing per process, so it serialised
+in a different order each run. The contract had already solved this for `Evidence.covered_cwes`
+(D-024) and the corpus reintroduced it. No in-process assertion can catch it —
+`test_hashes_are_stable_across_processes` runs the hash in subprocesses under fixed and random
+`PYTHONHASHSEED`, and yields five distinct hashes if the sort is removed.
+
+**Two limitations recorded rather than engineered away** (D-045):
+
+- Six pairs cannot cover ten CWEs. Every CWE has a calibration pair, asserted by a test, but the
+  validation and test splits reach six of ten each, and under this seed CWE-89 falls entirely inside
+  calibration. Final ECE and Brier are therefore **aggregate claims across CWEs, not per-CWE
+  claims**, and the paper must report them as such. The seed was fixed before the draw was inspected
+  and has not been rerolled.
+- Immutability is **detectable, not prevented**. The obvious mechanism — a committed checksum
+  verified by a test — is the one this repository already defeated (`AUDIT.md` 4.8, where the
+  expected hash was rewritten to make the test pass). Instead `assign` refuses to move a settled
+  pair, and `split_hash` on each calibration run makes a later edit show up as a run that no longer
+  matches the splits it claims.
+
+```bash
+uv run codesheriff-corpus validate    # loads every case, prints both hashes
+uv run codesheriff-corpus stats       # coverage by CWE, split and agent
+uv run codesheriff-corpus show cwe-862-admin-export-vuln
+```
 
 ## Chapter 8 — ChangeUnit extraction ⬜
 

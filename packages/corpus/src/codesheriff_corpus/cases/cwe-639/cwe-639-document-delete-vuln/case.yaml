@@ -1,0 +1,14 @@
+case_id: cwe-639-document-delete-vuln
+pair_id: cwe-639-document-delete
+label: vulnerable
+cwe: CWE-639
+file: app/documents/views.py
+symbol: delete
+enclosing_class: DocumentView
+start_line: 84
+imports: [django.http.HttpResponse]
+detectable_by: [semantic.hosted, context.rag]
+rationale: >-
+  A primary key from the URL selects the row to delete, with no owner predicate. The
+  operation is destructive and unauthenticated as to ownership. Keyed on
+  DocumentView.delete, so the finding names the method rather than the bare verb.

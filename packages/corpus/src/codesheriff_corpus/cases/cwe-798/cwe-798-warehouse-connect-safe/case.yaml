@@ -1,0 +1,12 @@
+case_id: cwe-798-warehouse-connect-safe
+pair_id: cwe-798-warehouse-connect
+label: safe
+cwe: CWE-798
+file: analytics/warehouse.py
+symbol: connect
+start_line: 8
+imports: [os, psycopg]
+rationale: >-
+  The whole DSN, credential included, comes from the environment. The literal that
+  remains is a non-secret connection option. A rule keyed on "string literal passed to
+  psycopg.connect" fires on this twin and would be wrong to.

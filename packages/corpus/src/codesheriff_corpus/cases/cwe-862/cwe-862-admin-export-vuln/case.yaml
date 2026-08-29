@@ -1,0 +1,15 @@
+case_id: cwe-862-admin-export-vuln
+pair_id: cwe-862-admin-export
+label: vulnerable
+cwe: CWE-862
+file: app/admin/exports.py
+symbol: export_users
+start_line: 44
+decorators: ['@app.route("/admin/users/export")']
+imports: [flask.Response]
+detectable_by: [semantic.hosted, context.rag]
+rationale: >-
+  The PR removes @admin_required from a route that exports every user record. The body is
+  untouched, so the entire signal is a decorator that is present in pre_src and absent
+  from post_src. This is the case D-013 put decorators on ChangeUnit for; a diff that
+  only deletes a line is invisible to any analysis that looks at post_src alone.

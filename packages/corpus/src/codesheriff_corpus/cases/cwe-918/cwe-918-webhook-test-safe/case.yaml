@@ -1,0 +1,12 @@
+case_id: cwe-918-webhook-test-safe
+pair_id: cwe-918-webhook-test
+label: safe
+cwe: CWE-918
+file: app/integrations/webhooks.py
+symbol: test_webhook
+start_line: 52
+imports: [requests, flask.abort]
+rationale: >-
+  The URL is required to be public HTTPS before the request is made, and redirects are
+  disabled so the check cannot be bypassed by a 302 into the internal range. Both are
+  needed: validating the first hop alone leaves the redirect route open.

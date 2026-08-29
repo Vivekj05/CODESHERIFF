@@ -1,0 +1,12 @@
+case_id: cwe-079-search-summary-safe
+pair_id: cwe-079-search-summary
+label: safe
+cwe: CWE-79
+file: app/search/summary.py
+symbol: search_summary
+start_line: 28
+imports: [django.utils.html.format_html]
+rationale: >-
+  format_html escapes every interpolated argument and treats only the literal format
+  string as trusted, which is the correct inversion of the vulnerable version. The result
+  is still a safe-marked string, so the returned type is identical to the twin's.

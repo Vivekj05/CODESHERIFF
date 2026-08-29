@@ -1,0 +1,14 @@
+case_id: cwe-639-invoice-fetch-vuln
+pair_id: cwe-639-invoice-fetch
+label: vulnerable
+cwe: CWE-639
+file: app/billing/views.py
+symbol: get_invoice
+start_line: 30
+imports: [flask.jsonify]
+detectable_by: [semantic.hosted, context.rag]
+rationale: >-
+  The invoice is fetched by an id taken straight from the URL and returned with no test
+  that it belongs to the caller's account. Every operation here is individually
+  legitimate; what is missing is a comparison that no data flow can be missing. No taint
+  path exists, by construction. This case exists to prove agent heterogeneity.
