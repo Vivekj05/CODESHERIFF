@@ -12,9 +12,13 @@ rows. A message that carried them would be a second copy that can disagree with 
 supersede an audit between the enqueue and the claim. Both arrive here as `claim_audit` returning
 None, and both mean stop.
 
-**Nothing is analysed yet.** The evidence is five abstentions built in `comment.py`, which is the
-honest report of four agents that do not exist. It is deliberately not persisted: `evidence` rows
-hang off a `change_units` row, and there are no change units until Chapter 8.
+**There are change units now, and still no analysis.** Chapter 8 fills in the first half: the
+pull request's changed functions are fetched, extracted and written to `change_units`, so the
+audit records what it looked at. The evidence is still five abstentions built in `comment.py` —
+the honest report of four agents that do not exist — and still not persisted. An `evidence` row
+hangs off one change unit, and these abstentions are about the pipeline rather than about any
+function; writing one against every unit would fill the table that will hold real evidence with
+`pipeline_not_implemented`. They become per-unit and persisted in Chapter 9, when they are real.
 """
 
 from __future__ import annotations
@@ -37,10 +41,12 @@ from codesheriff_storage import (
     is_superseded,
     latest_comment_id,
     session_scope,
+    to_change_unit_row,
 )
 from codesheriff_worker.celery_app import app, config
 from codesheriff_worker.comment import pending_evidence, render
 from codesheriff_worker.github_gateway import GitHubGateway, GitHubKitGateway
+from codesheriff_worker.pipeline import fetch_and_extract
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +149,21 @@ def _run_claimed_audit(
     repository = audit.repository
     installation_id = repository.installation_id
 
-    # ---- analysis would happen here (Chapters 8-14) ----
+    extraction = fetch_and_extract(
+        gateway,
+        installation_id=installation_id,
+        repo_full_name=repository.full_name,
+        pr_number=audit.pr_number,
+        base_sha=audit.base_sha,
+        head_sha=audit.head_sha,
+    )
+    # Written before any agent runs, and written even when the list is empty. `change_units` is
+    # the record of what this audit *looked at*; a row per unit is what later lets a finding be
+    # traced to a function, and an audit with no rows is a legible statement that a pull request
+    # touched no analysable Python.
+    db.add_all([to_change_unit_row(audit.id, unit) for unit in extraction.units])
+
+    # ---- the four agents would run here (Chapters 9-13) ----
     evidence = pending_evidence(audit.id)
 
     # Checked immediately before writing to GitHub, not only at the start. The window between the
@@ -159,7 +179,7 @@ def _run_claimed_audit(
         installation_id=installation_id,
         repo_full_name=repository.full_name,
         pr_number=audit.pr_number,
-        body=render(audit.id, evidence, url_for(audit.id)),
+        body=render(audit.id, evidence, url_for(audit.id), extraction),
         comment_id=previous,
     )
 

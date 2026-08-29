@@ -10,14 +10,20 @@ No database, so they run in every suite, not only under `-m db`.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
 import pytest
-from githubkit_schemas.latest.models import IssueComment
+from githubkit_schemas.latest.models import DiffEntry, IssueComment
 
 from codesheriff_worker.config import WorkerConfig
-from codesheriff_worker.github_gateway import GitHubError, GitHubKitGateway
+from codesheriff_worker.github_gateway import (
+    MAX_BLOB_BYTES,
+    PER_PAGE,
+    GitHubError,
+    GitHubKitGateway,
+)
 
 from .payloads import payload_for
 
@@ -143,6 +149,159 @@ def test_a_malformed_repository_name_is_refused_before_any_call(config: WorkerCo
 
     with pytest.raises(GitHubError):
         gateway.post_or_update_comment(9001, "payments-api", 7, "body")
+
+
+def token_response() -> httpx.Response:
+    return httpx.Response(
+        201, json={"token": "ghs_installation", "expires_at": "2099-01-01T00:00:00Z"}
+    )
+
+
+def diff_entry(filename: str, status: str = "modified", **extra: object) -> dict[str, object]:
+    return payload_for(DiffEntry, filename=filename, status=status, **extra)
+
+
+# -- listing the files of a pull request ------------------------------------------------------
+
+
+def test_the_file_list_is_paged_to_the_end(config: WorkerConfig) -> None:
+    """GitHub caps a page at 100 and reports no usable total, so a short page is the only end
+    marker. Stopping after one page would analyse the first hundred files of a large pull request
+    and call the rest clean."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == INSTALLATION_TOKEN_PATH:
+            return token_response()
+        if request.url.path == "/repos/acme/payments-api/pulls/7/files":
+            if request.url.params["page"] == "1":
+                return httpx.Response(
+                    200, json=[diff_entry(f"pkg/mod{i}.py") for i in range(PER_PAGE)]
+                )
+            return httpx.Response(200, json=[diff_entry("pkg/last.py", status="added")])
+        raise AssertionError(f"unexpected request to {request.url}")
+
+    gateway = GitHubKitGateway(config, transport=httpx.MockTransport(handler))
+    files = gateway.list_pull_request_files(9001, "acme/payments-api", 7)
+
+    assert len(files) == PER_PAGE + 1
+    assert (files[-1].path, files[-1].status) == ("pkg/last.py", "added")
+    assert [r.url.params["page"] for r in seen if "files" in r.url.path] == ["1", "2"]
+
+
+def test_a_rename_carries_the_path_its_pre_image_lives_at(config: WorkerConfig) -> None:
+    """Reading the new path on the base commit would 404, the file would look new, and the audit
+    would report a rename as a rewrite of every line."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == INSTALLATION_TOKEN_PATH:
+            return token_response()
+        return httpx.Response(
+            200,
+            json=[diff_entry("new/name.py", status="renamed", previous_filename="old/name.py")],
+        )
+
+    gateway = GitHubKitGateway(config, transport=httpx.MockTransport(handler))
+
+    assert gateway.list_pull_request_files(9001, "acme/payments-api", 7)[0].previous_path == (
+        "old/name.py"
+    )
+
+
+def test_the_file_list_never_carries_the_patch(config: WorkerConfig) -> None:
+    """GitHub omits `patch` on a large diff, and the superseded parser both reconstructed source
+    from it and skipped the files that lacked it (AUDIT.md 4.1, 4.2). There is no field on
+    `PullRequestFile` for a later caller to reach for."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == INSTALLATION_TOKEN_PATH:
+            return token_response()
+        return httpx.Response(200, json=[diff_entry("a.py", patch="@@ -1 +1 @@")])
+
+    gateway = GitHubKitGateway(config, transport=httpx.MockTransport(handler))
+    entry = gateway.list_pull_request_files(9001, "acme/payments-api", 7)[0]
+
+    assert not hasattr(entry, "patch")
+
+
+# -- fetching one blob ------------------------------------------------------------------------
+
+CONTENTS_PATH = "/repos/acme/payments-api/contents/pkg/mod.py"
+
+
+def serving(body: bytes, status: int = 200) -> Callable[[httpx.Request], httpx.Response]:
+    """A transport that answers the contents endpoint with `body`, or fails with `status`."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == INSTALLATION_TOKEN_PATH:
+            return token_response()
+        if request.url.path == CONTENTS_PATH:
+            if status != 200:
+                return httpx.Response(status, json={"message": "Refused"})
+            return httpx.Response(200, content=body)
+        raise AssertionError(f"unexpected request to {request.url}")
+
+    return handler
+
+
+def fetching(
+    config: WorkerConfig,
+    body: bytes,
+    status: int = 200,
+    ref: str = "h" * 40,
+) -> str | None:
+    gateway = GitHubKitGateway(config, transport=httpx.MockTransport(serving(body, status)))
+    return gateway.get_file_at_ref(9001, "acme/payments-api", "pkg/mod.py", ref)
+
+
+def test_a_blob_is_fetched_raw_at_the_requested_ref(config: WorkerConfig) -> None:
+    """The raw media type rather than the default JSON representation, which base64-encodes the
+    body and inflates a source file by a third for metadata nothing here reads."""
+    seen: list[httpx.Request] = []
+    inner = serving(b"def f():\n    return 1\n")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return inner(request)
+
+    gateway = GitHubKitGateway(config, transport=httpx.MockTransport(handler))
+    source = gateway.get_file_at_ref(9001, "acme/payments-api", "pkg/mod.py", "h" * 40)
+
+    assert source == "def f():\n    return 1\n"
+    fetched = next(r for r in seen if r.url.path == CONTENTS_PATH)
+    assert fetched.url.params["ref"] == "h" * 40
+    assert fetched.headers["accept"] == "application/vnd.github.raw"
+
+
+def test_a_file_absent_at_that_ref_is_none_rather_than_an_error(config: WorkerConfig) -> None:
+    """Ordinary, not exceptional: an added file has no image on the base commit."""
+    assert fetching(config, b"", status=404, ref="b" * 40) is None
+
+
+def test_a_blob_over_the_budget_is_not_analysed(config: WorkerConfig) -> None:
+    """A cap on the fetch, which is a different thing from truncating a unit: the file is skipped
+    whole, so no agent is ever handed part of one."""
+    assert fetching(config, b"x" * (MAX_BLOB_BYTES + 1)) is None
+
+
+def test_a_blob_at_the_budget_is_analysed(config: WorkerConfig) -> None:
+    assert fetching(config, b"x" * MAX_BLOB_BYTES) is not None
+
+
+def test_a_binary_blob_is_skipped_rather_than_mangled(config: WorkerConfig) -> None:
+    """Decoding with errors="replace" would hand an agent a file of substitution characters and
+    let it report findings about bytes that were never there."""
+    assert fetching(config, b"\x89PNG\r\n\x1a\n\xff\xfe") is None
+
+
+def test_an_unexpected_refusal_raises_rather_than_reading_as_a_new_file(
+    config: WorkerConfig,
+) -> None:
+    """A 403 answered with None would make an unreadable file indistinguishable from an added
+    one, and every line of it would then be reported as changed."""
+    with pytest.raises(GitHubError):
+        fetching(config, b"", status=403)
 
 
 # A throwaway 2048-bit RSA key, generated for the test suite and used nowhere else. It exists so

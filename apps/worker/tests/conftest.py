@@ -36,6 +36,7 @@ from sqlalchemy.orm import sessionmaker
 from codesheriff_storage import build_session_factory
 from codesheriff_storage.models import Audit, CalibrationRun, Installation, Repository
 from codesheriff_storage.testing import migrated_engine, test_database_url
+from codesheriff_worker.github_gateway import PullRequestFile
 
 LOOPBACK = {"127.0.0.1", "::1", "localhost", "0.0.0.0"}
 
@@ -70,12 +71,52 @@ class PostedComment:
 
 
 class FakeGitHubGateway:
-    """A GitHub that records every comment it was asked to write."""
+    """A GitHub that serves the blobs it was given and records every comment it was asked for.
 
-    def __init__(self, *, failing: bool = False, next_id: int = 5100) -> None:
+    `blobs` is keyed by `(ref, path)` so a test can give a file a different body on the base and
+    head commits, which is the only way to exercise extraction's diffing. A key that is absent
+    returns None, exactly as the real gateway does for a file that is not at that ref — so an
+    added file needs no special setup beyond leaving its base key out.
+    """
+
+    def __init__(
+        self,
+        *,
+        failing: bool = False,
+        next_id: int = 5100,
+        files: list[PullRequestFile] | None = None,
+        blobs: dict[tuple[str, str], str] | None = None,
+    ) -> None:
         self.posted: list[PostedComment] = []
         self.failing = failing
         self._next_id = next_id
+        self.files = files or []
+        self.blobs = blobs or {}
+        self.fetched: list[tuple[str, str]] = []
+        """Every (ref, path) asked for, in order. A test asserts on what was *not* fetched: a
+        deleted or non-Python file must cost no API call."""
+
+    def list_pull_request_files(
+        self,
+        installation_id: int,
+        repo_full_name: str,
+        pr_number: int,
+    ) -> list[PullRequestFile]:
+        if self.failing:
+            raise RuntimeError("GitHub is unreachable")
+        return list(self.files)
+
+    def get_file_at_ref(
+        self,
+        installation_id: int,
+        repo_full_name: str,
+        path: str,
+        ref: str,
+    ) -> str | None:
+        if self.failing:
+            raise RuntimeError("GitHub is unreachable")
+        self.fetched.append((ref, path))
+        return self.blobs.get((ref, path))
 
     def post_or_update_comment(
         self,

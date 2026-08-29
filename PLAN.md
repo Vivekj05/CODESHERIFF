@@ -29,17 +29,23 @@ The test suite reports 100% and cannot detect any of this.
 As of Chapter 2 the workspace installs, runs and passes its gates, and the contract every other
 component serialises is frozen at v2.0.0. As of Chapter 6 the seam around the analysis is real: a
 signature-verified delivery becomes a queued audit becomes one comment posted by a worker, and the
-unauthenticated endpoint is deleted rather than patched.
+unauthenticated endpoint is deleted rather than patched. As of Chapter 7 there is ground truth to
+measure against, and as of Chapter 8 the pipeline hands over the right objects: one `ChangeUnit`
+per changed function, cut from the real file at real line numbers.
 
-**The analysis components are still the shells the audit described.** Chapters 2 and 6 made the
-system speak the right contract and run the right shape; neither made an agent do the right work.
-The taint engine still builds a def-use graph and discards it; the context agent's reasoning is
-still four substring tests; the runtime agent still does not exist. Each has a chapter, and all of
-them are in Phase B.
+**The analysis components are still the shells the audit described.** Chapters 2, 6 and 8 made the
+system speak the right contract, run the right shape and produce the right input; none of them made
+an agent do the right work. The taint engine still builds a def-use graph and discards it; the
+context agent's reasoning is still four substring tests; the runtime agent still does not exist.
+Each has a chapter, and all of them are in Phase B.
+
+What has changed is that the shells are now **measurable**. Chapter 7 supplied the labels and
+Chapter 8 supplies units of the same shape the corpus holds, so from Chapter 9 on, "this agent
+found nothing" is a result rather than an absence of one.
 
 | Version | Goal | Status |
 |---|---|---|
-| v0.1 | webhook → diff parsed → comment posted | ✅ **seam complete** (Ch 6) — HMAC verified before parsing, enqueued, worker posts. Extraction is still per-file diff fragments (Ch 8) |
+| v0.1 | webhook → diff parsed → comment posted | ✅ **complete** (Ch 6, Ch 8) — HMAC verified before parsing, enqueued, worker posts. Extraction is one unit per changed function, from fetched blobs |
 | v0.2 | contracts frozen + corpus with committed splits | ⚠️ contracts frozen at v2.0.0 (Ch 2); corpus 60 units / 30 pairs with committed splits (Ch 7); **cross-PR scenarios pending Ch 12** |
 | v0.3 | Semgrep backend + fusion engine | ⚠️ Semgrep runner works; fusion has 7 defects |
 | v0.4 | taint engine | ⚠️ **no taint engine** — def-use graph discarded; line cross-product |
@@ -443,7 +449,7 @@ uv run codesheriff-corpus stats       # coverage by CWE, split and agent
 uv run codesheriff-corpus show cwe-862-admin-export-vuln
 ```
 
-## Chapter 8 — ChangeUnit extraction ⬜
+## Chapter 8 — ChangeUnit extraction ✅
 
 **Replaces** `packages/engine/src/codesheriff_engine/github/parser.py`.
 **Closes** `AUDIT.md` 4.1, 4.2.
@@ -454,6 +460,56 @@ wrong line numbers, and no structural analysis can be correct on that input.
 
 **Done when:** units carry a qualified symbol and valid `post_src` with correct absolute line
 numbers; large-diff files (no `patch` from GitHub) are fetched rather than silently skipped.
+
+**Delivered.** Both criteria hold, asserted by tests. D-048 through D-051.
+
+- **`codesheriff_engine.extraction`** — pure, with no HTTP client, no GitHub client and no database
+  session. `python.py` walks one whole file with tree-sitter; `diffing.py` derives `changed_lines`;
+  `units.py` assembles `ChangeUnit`s. The split is what lets Chapter 14 run extraction over corpus
+  cases with no credentials (D-051).
+- **GitHub's `patch` is read nowhere, and `PullRequestFile` has no field for it** (D-048).
+  `changed_lines` comes from `difflib` over the two fetched blobs. The large-diff skip at
+  `parser.py:102` is gone *structurally* — there is no branch that can behave differently for a file
+  with no patch. It is also the same derivation `CorpusCase.changed_lines` already used, so a corpus
+  unit and a production unit are built the same way; every ratio fitted on the first and applied to
+  the second depends on that.
+- **The unit is the outermost function** — a top-level `def` or a method, never a nested closure,
+  whose free variables are bound outside it. A change with no enclosing function produces one
+  `<module>` unit carrying the whole file, because CWE-798 sits at module scope more often than not
+  and that unit is the only way an agent ever sees one (D-049).
+- **One unit per qualified name.** `@overload` stubs and conditional redefinitions name the same
+  function twice; two units would apply one agent's likelihood ratio twice to a single
+  `finding_key`, and would collide on `change_units`' UNIQUE (audit_id, unit_id). The last
+  definition wins — the one Python binds.
+- **A removed decorator survives the diff.** A deletion is anchored to the nearest line of *code*,
+  including the `replace`-with-a-blank-line form, which is how a dropped `@login_required` usually
+  appears. That deletion is the whole D-013 signal for CWE-862 and CWE-639.
+- **Every file that yields no unit is recorded with a reason** — deleted, not Python, unreadable or
+  over the fetch budget, unchanged in content. The old parser dropped each with a bare `continue`
+  (D-050). The comment reports coverage as **counts and words, never paths**: a path is chosen by
+  whoever opened the pull request, which is `AUDIT.md` 0.4's attacker-controlled text.
+- **`MAX_BLOB_BYTES` skips a file whole, never part of one.** A cap on the *fetch* is a different
+  thing from truncating a unit; oversized units are for the agent to abstain on.
+- The worker gains `list_pull_request_files` and `get_file_at_ref` (raw media type, not the
+  base64 JSON representation) and `pipeline.py`, which fetches both images of every changed file —
+  one call for an added file, none for a deleted or non-Python one, and a rename's pre-image from
+  its *old* path. Extracted units are written to `change_units` through `to_change_unit_row`, so the
+  audit now records what it looked at.
+- **Deleted, not patched:** `engine/github/parser.py` and its tests. `reporter.py` moved up to
+  `codesheriff_engine/reporting.py` and the `github/` package is gone — after Chapter 6 it held only
+  markdown rendering, and a directory named `github` inside the component forbidden from touching
+  GitHub is the invitation `AUDIT.md` 4.3 describes.
+
+**Verified.** 618 Python tests pass against Postgres (498 pass and 120 skip without one); 78 of them
+are new · `ruff check` and `ruff format --check` clean across 150 files · `mypy --strict` clean
+across 89 source files · `lint-imports` 5 contracts kept, with a deliberate `codesheriff_engine.extraction -> sqlalchemy` import added, correctly broken, and removed. Extraction was additionally run over all
+60 corpus cases: the 48 whose source is a whole module extract with the case's own qualified symbol,
+and the 12 method cases store a bare `def` with `enclosing_class` as metadata — the corpus supplies
+its `ChangeUnit` directly and does not go through extraction.
+
+⚠️ **Python only.** `.py` and `.pyi`; every other language is a recorded `language_unsupported`
+skip rather than a unit nothing can analyse. JS/TS stays unscheduled (§6), and tree-sitter reaches
+it through the same API when it is scheduled.
 
 ## Chapter 9 — Static agent I: Semgrep backend + fusion skeleton (v0.3) ⬜
 

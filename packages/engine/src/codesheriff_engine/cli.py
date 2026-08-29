@@ -23,8 +23,8 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from codesheriff_contracts import CONTRACT_VERSION, ChangeUnit, EvidenceKind
 from codesheriff_engine.config import EngineConfig
-from codesheriff_engine.github.reporter import format_github_comment
 from codesheriff_engine.orchestrator import Orchestrator
+from codesheriff_engine.reporting import format_github_comment
 
 app = typer.Typer(
     name="codesheriff-engine",

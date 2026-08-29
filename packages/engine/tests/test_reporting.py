@@ -2,7 +2,7 @@
 
 from codesheriff_contracts import Evidence
 from codesheriff_engine.fusion.bayes import FusionResult
-from codesheriff_engine.github.reporter import format_github_comment
+from codesheriff_engine.reporting import format_github_comment
 
 
 def test_format_clean_github_comment() -> None:

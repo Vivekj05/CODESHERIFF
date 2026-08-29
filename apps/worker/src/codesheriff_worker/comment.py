@@ -8,21 +8,25 @@ run. Returning nothing, or rendering an empty "no vulnerabilities found", is the
 `AUDIT.md` 4.4 documents: a system that says "clean" when it has not looked.
 
 **No probability appears here.** D-032 requires a probability to arrive with its calibration state,
-and there is nothing calibrated to state: no corpus exists, the prior and the threshold are
-asserted values, and no agent has produced a single piece of real evidence. A number rendered now
-would be exactly the unearned confidence this project exists to argue against.
+and there is nothing calibrated to state: the prior and the threshold are still asserted values
+fitted against nothing, and no agent has produced a single piece of real evidence. A number
+rendered now would be exactly the unearned confidence this project exists to argue against.
 
 **Nothing from the pull request is echoed.** No title, no branch name, no description, no file
-content. Those are attacker-controlled, and `AUDIT.md` 0.4 is what happens when untrusted text
-reaches a markdown table unescaped. When a rationale does need rendering — Chapter 11 — it arrives
-screened, and this module stays the only place that builds the body.
+content — and, since Chapter 8, no file *path* either. Those are attacker-controlled, and
+`AUDIT.md` 0.4 is what happens when untrusted text reaches a markdown table unescaped. Chapter 8
+adds the one thing that can be said safely: how many functions were extracted and how many files
+were skipped, as counts. When a rationale does need rendering — Chapter 11 — it arrives screened,
+and this module stays the only place that builds the body.
 """
 
 from __future__ import annotations
 
 import uuid
+from collections import Counter
 
 from codesheriff_contracts import CONTRACT_VERSION, Evidence, EvidenceKind
+from codesheriff_engine.extraction import ExtractionResult, SkipReason
 
 PENDING_AGENTS: tuple[tuple[str, str, str], ...] = (
     ("structural.taint", "0.0.0", "Chapter 10 — the taint engine"),
@@ -39,6 +43,18 @@ separately, which is why there are five rows and four sources of independent fai
 
 ABSTENTION_REASON = "pipeline_not_implemented"
 
+SKIP_WORDING: dict[SkipReason, str] = {
+    SkipReason.FILE_REMOVED: "deleted",
+    SkipReason.LANGUAGE_UNSUPPORTED: "not Python",
+    SkipReason.CONTENT_UNAVAILABLE: "unreadable or over the size budget",
+    SkipReason.NO_CHANGED_LINES: "unchanged in content",
+}
+"""Plain English for each skip reason.
+
+A reader of the comment is told what was *not* looked at, in words. The enum value is the machine
+name and belongs in the log and the database; a table cell reading `language_unsupported` asks a
+developer to learn this system's vocabulary to find out that their TypeScript was not scanned."""
+
 
 def marker_for(audit_id: uuid.UUID) -> str:
     """An HTML comment identifying which audit owns a comment.
@@ -53,10 +69,11 @@ def marker_for(audit_id: uuid.UUID) -> str:
 def pending_evidence(audit_id: uuid.UUID) -> list[Evidence]:
     """One abstention per backend, built through the sanctioned constructor.
 
-    `unit_id` names the audit rather than a change unit because there are no change units yet —
-    extraction is Chapter 8. This evidence is deliberately never persisted for the same reason:
-    `evidence` rows hang off a `change_units` row, and inventing one to hold an abstention would
-    put a function nobody analysed into the table that records what was analysed.
+    `unit_id` names the audit rather than a change unit, and still does now that Chapter 8 has
+    made change units real: these five abstentions are statements about the *pipeline*, not about
+    any one function. Writing one against every extracted unit would fill the table that will hold
+    real evidence with `pipeline_not_implemented`, at five rows per changed function. Chapter 9
+    replaces them with per-unit evidence that is worth persisting.
     """
     return [
         Evidence.abstention(
@@ -70,17 +87,52 @@ def pending_evidence(audit_id: uuid.UUID) -> list[Evidence]:
     ]
 
 
-def render(audit_id: uuid.UUID, evidence: list[Evidence], dashboard_url: str) -> str:
-    """The comment body: what ran, what did not, and why there is no number."""
+def coverage_line(result: ExtractionResult) -> str:
+    """What this audit extracted, and what it did not look at.
+
+    Counts and reasons only — **no file path is ever rendered here**. A path is chosen by whoever
+    opened the pull request, so it is attacker-controlled text in exactly the way `AUDIT.md` 0.4
+    describes, and a name like `` x`](javascript:…)`.py `` escapes a markdown table cell. The
+    dashboard is where paths belong, behind rendering that escapes them (Chapter 16).
+
+    Reported even when nothing was skipped, because "we analysed 4 functions" and "we analysed
+    nothing and said so quietly" have to be told apart by a reader in a hurry.
+    """
+    units = len(result.units)
+    summary = f"Extracted **{units}** changed {'function' if units == 1 else 'functions'}"
+
+    if result.skipped:
+        counts = Counter(skipped.reason for skipped in result.skipped)
+        detail = ", ".join(
+            f"{count} {SKIP_WORDING[reason]}" for reason, count in sorted(counts.items())
+        )
+        summary += f". Not analysed: {detail}"
+    return summary + "."
+
+
+def render(
+    audit_id: uuid.UUID,
+    evidence: list[Evidence],
+    dashboard_url: str,
+    extraction: ExtractionResult | None = None,
+) -> str:
+    """The comment body: what was looked at, what ran, what did not, and why there is no number."""
     lines = [
         "## 🛡️ CodeSheriff",
         "",
         "**No analysis has run on this pull request yet.**",
         "",
         "The pipeline is connected end to end — this webhook delivery was signature-verified, an "
-        "audit was queued, and a worker posted this comment — but the four analysis agents are "
-        "not built. Every one of them abstained, which is the honest answer: an agent that could "
-        "not run reports that it could not run, and never reports that it found nothing.",
+        "audit was queued, the changed functions were extracted, and a worker posted this comment "
+        "— but the four analysis agents are not built. Every one of them abstained, which is the "
+        "honest answer: an agent that could not run reports that it could not run, and never "
+        "reports that it found nothing.",
+    ]
+
+    if extraction is not None:
+        lines += ["", coverage_line(extraction)]
+
+    lines += [
         "",
         "| Backend | Evidence | Reason |",
         "| :--- | :--- | :--- |",
@@ -96,9 +148,10 @@ def render(audit_id: uuid.UUID, evidence: list[Evidence], dashboard_url: str) ->
         "### Why there is no probability here",
         "",
         "CodeSheriff's claim is a **calibrated** posterior — a stated 87% has to mean right about "
-        "87% of the time, measured against ground truth. No corpus exists yet, so no likelihood "
-        "ratio has been fitted and no threshold has been selected. Showing a number now would be "
-        "the unearned confidence this project exists to argue against.",
+        "87% of the time, measured against ground truth. The corpus that ground truth comes from "
+        "now exists, but no likelihood ratio has been fitted against it and no threshold has been "
+        "selected. Showing a number now would be the unearned confidence this project exists to "
+        "argue against.",
         "",
         f"[View this audit]({dashboard_url}) · contract `v{CONTRACT_VERSION}`",
         "",

@@ -19,6 +19,12 @@ dependencies = [
     "pydantic-settings>=2.2.0",
     "typer>=0.12.0",
     "jinja2>=3.1.0",
+    # Chapter 8. Extraction parses whole fetched blobs; the diff is never the source of truth
+    # about the code (AUDIT.md 4.2). tree-sitter over Python's built-in `ast` because it tolerates
+    # the syntax errors a pull request head commit frequently contains, and reaches JS/TS through
+    # the same API when that is scheduled.
+    "tree-sitter>=0.22.0",
+    "tree-sitter-language-pack>=0.2.0",
 ]
 
 [project.optional-dependencies]

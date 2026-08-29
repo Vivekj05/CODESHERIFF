@@ -1175,3 +1175,125 @@ someone later reached for from the agent itself.
 `test_the_authorisation_cwes_have_no_static_path` additionally pins the heterogeneity claim: no
 CWE-862 or CWE-639 case may ever list a static backend. That claim is the clearest evidence the
 four-agent argument has, and it would be lost to a single well-meaning edit.
+
+---
+
+## D-048 — Extraction reads whole fetched blobs; GitHub's `patch` is read nowhere
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 8
+
+**Decision.** `codesheriff_engine.extraction` receives both versions of every changed file as
+complete source and derives `changed_lines` by `difflib` over the two. Nothing in the package —
+and nothing in `apps/worker` that feeds it — reads the `patch` field, and `PullRequestFile` does
+not carry one.
+
+**Rationale.** The superseded `github/parser.py` used the patch for two different jobs and got both
+wrong. It concatenated hunk fragments into a synthetic `post_src` that was syntactically broken and
+carried wrong line numbers (`AUDIT.md` 4.2), and it skipped outright any file GitHub declined to
+send a patch for, which is exactly the large diffs where a review matters most (`parser.py:102`).
+Both failures come from the same mistake: treating a summary of the code as the code.
+
+Diffing the blobs removes the large-diff branch **structurally**. There is no code path that can
+behave differently for a file with no patch, so there is nothing to remember and nothing to
+regress. The cost is one extra API call per modified file, which is affordable against 5,000 per
+hour per installation and is not paid at all for added, copied, deleted or non-Python files.
+
+It also puts production extraction on the *same* derivation as
+`codesheriff_corpus.models.CorpusCase.changed_lines`, which already used `difflib`. That parity is
+load-bearing rather than tidy: every likelihood ratio is fitted on corpus units and applied to
+production units, and that is only sound if the two are the same kind of object.
+
+**Consequences.** A whitespace-only change yields no units at all, and a deletion is anchored to
+the nearest line of code — including the `replace`-with-a-blank-line form, which is how a removed
+decorator usually appears in a real diff and which is the entire D-013 signal for CWE-862 and
+CWE-639.
+
+---
+
+## D-049 — The unit is the outermost function; a module-scope change gets a `<module>` unit
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 8
+
+**Decision.** A changed line is attributed to the outermost enclosing `def` — a top-level function
+or a method, never a nested closure. A changed line with no enclosing function produces one
+`<module>` unit per file, whose `post_src` is the **whole file**, untruncated, and whose
+`changed_lines` are only the lines outside every function.
+
+**Rationale.** §5 makes the changed function the unit of analysis, and `AUDIT.md` 4.1 records what
+happens without one: units were per-file with `symbol=None`, so `qualified_symbol` was always
+`<module>` and every finding anywhere in a file collapsed onto a single `finding_key`. That is the
+D-004 bug reached by another route, and the frozen contract cannot prevent it on its own, because a
+null symbol is legitimate for a genuinely module-scope change.
+
+**Outermost, not innermost.** A closure's free variables are bound in its parent, so a unit
+containing only the closure is a fragment whose taint sources are invisible and whose intent the
+semantic agent has to guess — `AUDIT.md` 4.2's failure arrived at from the opposite direction. The
+cost is a larger `post_src` for the semantic agent, which is the cheaper mistake.
+
+**A module unit at all.** CWE-798 is in the closed set and hard-coded credentials sit at module
+scope more often than not. Emitting only function units would make that CWE structurally
+undetectable in production while the corpus scores it fine — a gap between the measured system and
+the shipped one, which is the failure mode this project exists to argue against.
+
+**The whole file, never a slice.** Assembling "the module-scope statements" would be synthesising
+source again. Oversized units are for the agent to abstain on and never for extraction to trim
+(CLAUDE.md); the fetch budget in `MAX_BLOB_BYTES` is a separate mechanism that skips a file whole
+rather than analysing part of one.
+
+**One unit per qualified name.** `@overload` stubs and conditional redefinitions define the same
+name twice in one file. Both would produce the same `finding_key`, so two units would apply one
+agent's likelihood ratio twice to a single finding, and would collide on `change_units`' UNIQUE
+(audit_id, unit_id). The **last** definition wins, because that is the one Python binds — choosing
+the longest instead reads as reasonable and silently picks the stub whenever the two are the same
+length.
+
+---
+
+## D-050 — The comment reports coverage as counts; a file path never reaches it
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 8
+
+**Decision.** The pull request comment states how many functions were extracted and how many files
+were not analysed, with a plain-English reason for each. It names no file. Every file that produces
+no unit is recorded with a `SkipReason` rather than dropped.
+
+**Rationale.** Two separate problems, one answer.
+
+A file path is chosen by whoever opened the pull request, so it is attacker-controlled text of
+exactly the kind `AUDIT.md` 0.4 describes — a name like `` x](javascript:…).py `` escapes a
+markdown table cell. Chapter 6 established that nothing from the pull request is echoed, and a path
+is from the pull request. The dashboard is where paths belong, behind rendering that escapes them
+(Chapter 16).
+
+Separately, the superseded parser dropped files for three different reasons with a bare `continue`
+each and told nobody. "This pull request is clean" and "we did not look at this pull request"
+rendered identically, which is `AUDIT.md` 4.4 in another module. Coverage is a fact about the audit
+and belongs in its record; `SKIP_WORDING` is asserted to be total over `SkipReason`, so a reason
+added later cannot reach a comment as a `KeyError`.
+
+---
+
+## D-051 — `packages/engine` gains extraction; the `github/` package is deleted
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 8
+
+**Decision.** Extraction lives in `codesheriff_engine.extraction` and holds no HTTP client, no
+GitHub client and no database session. Fetching lives in `apps/worker` — two new `GitHubGateway`
+methods and `pipeline.py`. `codesheriff_engine/github/` is deleted: `parser.py` outright, and
+`reporter.py` moved up to `codesheriff_engine/reporting.py`.
+
+**Rationale.** The split is what lets Chapter 14 run extraction over corpus cases with no
+credentials at all. A single module that both fetched and extracted would make the calibration
+harness need an installation token to build a `ChangeUnit`, and §6's reproducibility requirement
+would quietly become unmeetable.
+
+The package deletion is bookkeeping with a point behind it: after Chapter 6 removed the webhook and
+the API client, `codesheriff_engine/github/` contained only markdown rendering, and CLAUDE.md
+already warns that a GitHub client reappearing in `packages/engine` is the `AUDIT.md` 4.3 mistake. A
+directory named `github` inside the component forbidden from touching GitHub is an invitation.
+
+**Considered and rejected: a separate `packages/extraction`.** It would keep tree-sitter out of the
+package §6 wants reproducible, at the cost of a sixth workspace member and a new `import-linter`
+layer. PLAN.md Chapter 8 names the engine, the layering already permits it, and the boundary that
+actually matters — extraction cannot reach the network or the database — is enforced by the
+existing "Fusion and calibration cannot reach the database" contract either way.

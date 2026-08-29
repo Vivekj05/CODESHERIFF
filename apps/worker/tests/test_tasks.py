@@ -13,6 +13,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.orm import sessionmaker
 
@@ -26,7 +27,8 @@ from codesheriff_storage import (
     upsert_installation,
     upsert_repository,
 )
-from codesheriff_storage.models import Audit, AuditStatus
+from codesheriff_storage.models import Audit, AuditStatus, ChangeUnitRow
+from codesheriff_worker.github_gateway import PullRequestFile
 from codesheriff_worker.tasks import _run_claimed_audit, execute_audit
 
 from .conftest import FakeGitHubGateway
@@ -302,3 +304,137 @@ def test_a_finished_audit_is_never_re_run(
 
     assert execute_audit(audit.id, factory, gateway, url_for) == "not_claimable"
     assert gateway.posted == []
+
+
+# -- extraction reaches the database (Chapter 8) ----------------------------------------------
+
+BEFORE_SRC = """import os
+
+
+class Orders:
+    @login_required
+    def export(self, request):
+        return dump(request.args["scope"])
+"""
+
+AFTER_SRC = """import os
+import subprocess
+
+EXPORT_KEY = "sk_live_51H8xY2"
+
+
+class Orders:
+    def export(self, request):
+        return subprocess.run(dump(request.args["scope"]), shell=True)
+"""
+
+
+@pytest.fixture
+def analysing_gateway() -> FakeGitHubGateway:
+    """A pull request that changes one method and one module-scope constant."""
+    return FakeGitHubGateway(
+        files=[PullRequestFile("orders/api.py", "modified")],
+        blobs={
+            ("a" * 40, "orders/api.py"): AFTER_SRC,
+            ("b" * 40, "orders/api.py"): BEFORE_SRC,
+        },
+    )
+
+
+def units_of(db: DbSession, audit_id: uuid.UUID) -> list[ChangeUnitRow]:
+    return list(
+        db.execute(
+            select(ChangeUnitRow)
+            .where(ChangeUnitRow.audit_id == audit_id)
+            .order_by(ChangeUnitRow.qualified_symbol)
+        ).scalars()
+    )
+
+
+def test_the_changed_functions_are_recorded_against_the_audit(
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    analysing_gateway: FakeGitHubGateway,
+    audit: Audit,
+) -> None:
+    """`change_units` is the record of what this audit looked at. Without it a finding can never
+    be traced back to a function."""
+    execute_audit(audit.id, factory, analysing_gateway, url_for)
+
+    rows = units_of(db, audit.id)
+    assert [r.qualified_symbol for r in rows] == ["<module>", "Orders.export"]
+    assert [r.file for r in rows] == ["orders/api.py", "orders/api.py"]
+
+
+def test_a_recorded_unit_carries_its_symbol_and_class_apart(
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    analysing_gateway: FakeGitHubGateway,
+    audit: Audit,
+) -> None:
+    """AUDIT.md 4.1: every unit used to be a file with `symbol=None`, so `qualified_symbol` was
+    always `<module>` and every finding in a file collapsed onto one key."""
+    execute_audit(audit.id, factory, analysing_gateway, url_for)
+
+    export = next(r for r in units_of(db, audit.id) if r.symbol == "export")
+    assert (export.enclosing_class, export.language) == ("Orders", "python")
+    assert export.start_line > 1
+    assert export.changed_lines
+
+
+def test_no_source_is_persisted_only_hashes(
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    analysing_gateway: FakeGitHubGateway,
+    audit: Audit,
+) -> None:
+    """§6: findings, evidence and hashes only. The row has no column that could hold source, and
+    this asserts the values that stand in for it are actually written."""
+    execute_audit(audit.id, factory, analysing_gateway, url_for)
+
+    export = next(r for r in units_of(db, audit.id) if r.symbol == "export")
+    assert len(export.post_src_sha256) == 64
+    assert export.pre_src_sha256 is not None, "the method existed before, with a decorator"
+    assert export.post_src_bytes > 0 and export.post_src_lines > 0
+
+
+def test_the_comment_reports_what_was_extracted(
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    analysing_gateway: FakeGitHubGateway,
+    audit: Audit,
+) -> None:
+    execute_audit(audit.id, factory, analysing_gateway, url_for)
+
+    assert "Extracted **2** changed functions" in analysing_gateway.posted[0].body
+
+
+def test_a_pull_request_with_no_analysable_python_records_no_units_and_still_comments(
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    audit: Audit,
+) -> None:
+    """An audit with no rows is a legible statement, not a failure. Saying nothing at all would
+    be indistinguishable from a worker that never ran."""
+    gateway = FakeGitHubGateway(files=[PullRequestFile("README.md", "modified")])
+
+    assert execute_audit(audit.id, factory, gateway, url_for) == "succeeded"
+    assert units_of(db, audit.id) == []
+    assert "Extracted **0** changed functions" in gateway.posted[0].body
+
+
+def test_a_failure_while_fetching_is_recorded_on_the_row_and_raised(
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    audit: Audit,
+) -> None:
+    """Extraction now runs before the comment, so it is a new way for an audit to fail. The row
+    is the system of record and the exception is what Celery's monitoring sees; recording only
+    one of the two leaves the other saying the run succeeded."""
+    gateway = FakeGitHubGateway(failing=True)
+
+    with pytest.raises(RuntimeError):
+        execute_audit(audit.id, factory, gateway, url_for)
+
+    db.expire_all()
+    assert db.get(Audit, audit.id).status is AuditStatus.FAILED

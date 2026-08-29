@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import uuid
 
-from codesheriff_contracts import CONTRACT_VERSION, EvidenceKind
+from codesheriff_contracts import CONTRACT_VERSION, ChangeUnit, EvidenceKind
+from codesheriff_engine.extraction import ExtractionResult, SkippedFile, SkipReason
 from codesheriff_worker.comment import (
     ABSTENTION_REASON,
     PENDING_AGENTS,
+    SKIP_WORDING,
     marker_for,
     pending_evidence,
     render,
@@ -99,3 +101,85 @@ def test_the_table_has_one_row_per_backend() -> None:
     rows = [line for line in body().splitlines() if line.startswith("| `")]
 
     assert len(rows) == len(PENDING_AGENTS) == 5
+
+
+# -- what the audit looked at (Chapter 8) -----------------------------------------------------
+
+
+def extraction(units: int = 0, skipped: list[SkipReason] | None = None) -> ExtractionResult:
+    return ExtractionResult(
+        units=[
+            ChangeUnit(
+                unit_id=f"f{i}",
+                repo="acme/payments-api",
+                language="python",
+                file="pkg/mod.py",
+                symbol=f"f{i}",
+                post_src="def f(): ...",
+                base_sha="b" * 40,
+                head_sha="h" * 40,
+            )
+            for i in range(units)
+        ],
+        skipped=[SkippedFile(path=f"f{i}.x", reason=r) for i, r in enumerate(skipped or [])],
+    )
+
+
+def test_the_comment_reports_how_many_functions_were_extracted() -> None:
+    """ "We analysed 4 functions" and "we analysed nothing and said so quietly" have to be
+    distinguishable by a reader in a hurry."""
+    assert "Extracted **4** changed functions" in render(
+        AUDIT_ID, pending_evidence(AUDIT_ID), DASHBOARD_URL, extraction(units=4)
+    )
+
+
+def test_a_single_function_is_not_reported_in_the_plural() -> None:
+    assert "**1** changed function." in render(
+        AUDIT_ID, pending_evidence(AUDIT_ID), DASHBOARD_URL, extraction(units=1)
+    )
+
+
+def test_skipped_files_are_counted_and_explained_in_words() -> None:
+    """A cell reading `language_unsupported` asks a developer to learn this system's vocabulary
+    to find out their TypeScript was not scanned."""
+    body_text = render(
+        AUDIT_ID,
+        pending_evidence(AUDIT_ID),
+        DASHBOARD_URL,
+        extraction(units=1, skipped=[SkipReason.LANGUAGE_UNSUPPORTED] * 2),
+    )
+
+    assert "2 not Python" in body_text
+    assert "language_unsupported" not in body_text
+
+
+def test_no_file_path_ever_reaches_the_comment() -> None:
+    """A path is chosen by whoever opened the pull request, so it is attacker-controlled text in
+    exactly the way AUDIT.md 0.4 describes. Paths belong on the dashboard, behind escaping."""
+    result = extraction(units=1)
+    result.skipped.append(
+        SkippedFile(path="x](javascript:alert(1)).ts", reason=SkipReason.LANGUAGE_UNSUPPORTED)
+    )
+
+    body_text = render(AUDIT_ID, pending_evidence(AUDIT_ID), DASHBOARD_URL, result)
+
+    assert "javascript:" not in body_text
+    assert "pkg/mod.py" not in body_text
+
+
+def test_an_audit_that_extracted_nothing_says_so_rather_than_staying_silent() -> None:
+    body_text = render(
+        AUDIT_ID,
+        pending_evidence(AUDIT_ID),
+        DASHBOARD_URL,
+        extraction(units=0, skipped=[SkipReason.FILE_REMOVED]),
+    )
+
+    assert "Extracted **0** changed functions" in body_text
+    assert "1 deleted" in body_text
+
+
+def test_every_skip_reason_has_words_for_it() -> None:
+    """A reason added to the enum without a phrase here would raise a KeyError while rendering
+    a comment, which is the worst place to find out."""
+    assert set(SKIP_WORDING) == set(SkipReason)

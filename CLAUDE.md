@@ -84,9 +84,10 @@ three of four analysis components are shells:
 - The semantic agent's anti-sycophancy exemplars exist on disk and are **never loaded**.
 - The runtime agent **does not exist**.
 
-The webhook *was* unauthenticated; Chapter 6 closed that (`AUDIT.md` 0.1 and 4.3). See "Closure
-status" at the top of `AUDIT.md` for what each chapter has actually fixed — the findings themselves
-are left as audited, because they are the record of how far the implementation had drifted.
+The extraction *was* per-file diff fragments; Chapter 8 closed that (`AUDIT.md` 4.1 and 4.2). The
+webhook *was* unauthenticated; Chapter 6 closed that (`AUDIT.md` 0.1 and 4.3). See "Closure status"
+at the top of `AUDIT.md` for what each chapter has actually fixed — the findings themselves are left
+as audited, because they are the record of how far the implementation had drifted.
 
 The test suite passes and reports 100%. It cannot detect any of this. `static-agent/cli.py` `bench`
 returns hard-coded `precision: 1.0, recall: 1.0`.
@@ -110,11 +111,11 @@ CODESHERIFF/
 │   ├── agent_semantic/   # semantic.hosted
 │   ├── agent_context/    # context.rag
 │   ├── agent_runtime/    # runtime.sfi                                  (empty — Ch 13)
-│   ├── engine/           # Fusion, calibration. May NOT import a DB client.
+│   ├── engine/           # ChangeUnit extraction, fusion, calibration. May NOT import a DB client.
 │   └── storage/          # SQLAlchemy models, Alembic, pgvector precedent store
 ├── apps/
 │   ├── api/              # FastAPI: sign-in + repo listing (Ch 5); HMAC + enqueue (Ch 6)
-│   ├── worker/           # Celery: owns the pipeline and all agents. Lifecycle only — Ch 8+
+│   ├── worker/           # Celery: owns the pipeline and all agents. Fetch + extract (Ch 8)
 │   └── dashboard/        # Next.js 16 — rendering layer only. Shell + mock data (Ch 4)
 └── docs/history/         # Superseded specs, kept for provenance
 ```
@@ -122,12 +123,13 @@ CODESHERIFF/
 ⚠️ **The layout is correct and the seam around the analysis now runs; the analysis itself does not.**
 Chapter 2 froze the contract at v2.0.0 and got every gate green. Chapter 6 made the pipeline real
 end to end — verified webhook, queued audit, worker-posted comment. Chapter 7 built the ground truth
-every number will be fitted against. None of them made an agent do the right work. The taint engine
-still builds a def-use graph and discards it; the context agent is still four substring tests; the
-runtime agent still does not exist.
+every number will be fitted against. Chapter 8 made the pipeline hand over the right objects. None
+of them made an agent do the right work. The taint engine still builds a def-use graph and discards
+it; the context agent is still four substring tests; the runtime agent still does not exist.
 
-There is now a corpus to measure that against, which is a change in kind: before Chapter 7 the
-agents were unmeasured, and the passing test suite said nothing either way.
+There is now a corpus to measure that against and units of the same shape to measure it on, which
+is a change in kind: before Chapter 7 the agents were unmeasured, and the passing test suite said
+nothing either way.
 
 **The webhook is `apps/api/src/codesheriff_api/webhooks.py`.** It verifies `X-Hub-Signature-256`
 against the raw body *before* parsing it, writes an `audits` row, publishes the id to Celery and
@@ -165,6 +167,29 @@ Case sources are real `.py` files and are **data, not code**: `cases/` is exclud
 `mypy`, because linting deliberately vulnerable samples pressures you into fixing the very thing the
 case exists to contain (D-046). A test compiles every one instead — tree-sitter tolerates broken
 syntax, so a stray indent would silently analyse a fragment rather than fail.
+
+**Extracting units.** `codesheriff_engine.extraction` turns two fetched file blobs into one
+`ChangeUnit` per changed function. It holds no HTTP client, no GitHub client and no database session:
+`apps/worker` fetches and this decides what a unit is, which is what lets Chapter 14 run extraction
+over corpus cases with no credentials (D-051).
+
+**GitHub's `patch` is read nowhere, and there is no field for it on `PullRequestFile`** (D-048).
+`changed_lines` comes from `difflib` over the base and head blobs — the same derivation
+`CorpusCase.changed_lines` uses, so a corpus unit and a production unit are the same kind of object,
+which is the whole basis for applying a ratio fitted on one to the other. It also means a file
+GitHub sends no patch for takes no special path; the `AUDIT.md` 4.2 skip is gone structurally rather
+than by a fix that can be forgotten.
+
+The unit is the **outermost** function — never a nested closure, whose free variables are bound
+outside it. A change with no enclosing function gets one `<module>` unit carrying the whole file,
+because CWE-798 lives at module scope more often than not (D-049). One unit per qualified name, last
+definition winning: `@overload` stubs would otherwise apply one agent's ratio twice to one
+`finding_key`. A file that yields no unit is recorded with a `SkipReason`, never dropped silently,
+and `MAX_BLOB_BYTES` skips an oversized file *whole* — capping the fetch is not truncating a unit.
+
+**No file path reaches the pull request comment** (D-050). A path is chosen by whoever opened the
+pull request; coverage is reported as counts and plain words. Paths belong on the dashboard, behind
+escaping.
 
 **Building evidence.** Never construct `Evidence(...)` directly — use `Evidence.detection()`,
 `.silence()` or `.abstention()`. Never build a `finding_key` by hand — use `unit.key_for(cwe)`. Both
@@ -295,8 +320,8 @@ Signing in needs a registered GitHub App — `docs/github-app-setup.md`. Without
 `501` naming the missing variable rather than failing at import, so `/health` works on a machine
 that has never seen a `.pem`.
 
-All five Python gates and both frontend gates are green as of Chapter 7 (540 tests with a database,
-426 + 114 skips without). `ruff` and `mypy` are
+All five Python gates and both frontend gates are green as of Chapter 8 (618 tests with a database,
+498 + 120 skips without). `ruff` and `mypy` are
 configured **once**, in the root `pyproject.toml` — a per-package `[tool.ruff]` silently shadows it
 with a different rule set, which is how the agent packages went unlinted (D-023).
 
