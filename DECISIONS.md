@@ -1657,3 +1657,66 @@ only place these numbers can come from, and `lint-imports` still reports five co
 validation and test splits stay unread. The numbers those tests assert — 13/13 and 0/18 — are a
 development measurement on the split reserved for development, and nothing may present them as
 calibrated.
+
+---
+
+## D-064 — The names in `.env.example` are the names the code reads
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 11 (prerequisite)
+
+**Decision.** `SemanticConfig` drops `env_prefix="LLM_"` and declares an explicit `alias` per field,
+matching `WorkerConfig` and `ApiConfig`. `api_key` accepts `GEMINI_API_KEY`, `GOOGLE_API_KEY` or
+`LLM_API_KEY`. `load()` no longer reaches for `os.getenv`. `agent_id` and `agent_version` become
+module constants rather than settings fields.
+
+**Rationale.** Found while configuring a real key. `.env.example` documented `GEMINI_API_KEY`,
+`SEMANTIC_MODEL`, `SEMANTIC_N_SAMPLES` and three more; the settings loader read `LLM_MODEL`,
+`LLM_N_SAMPLES` and so on, so **every one of those lines was read by nothing**. And `load()` took
+the key from `os.getenv("GEMINI_API_KEY")`, which reads the *process* environment, while
+`pydantic-settings` parses `.env` into the settings object without exporting to `os.environ`.
+
+So following `.env.example` exactly produced `api_key=None` and an agent that abstained on every
+unit. The abstention was correct and honest (D-057), which is what made it hard to see: the system
+reported accurately that it could not run, and the reason was that the documented way of configuring
+it did nothing.
+
+`agent_id` stops being configurable because fusion refuses an `agent_id` that maps to no witness
+(D-052) — an environment variable that could rename this witness is a way to make every audit raise,
+and the identity is what fitted likelihood ratios attach to.
+
+**Consequences.** `test_config.py` asserts the correspondence in both directions: every documented
+key is a validation alias of a field, and no `SEMANTIC_*` line exists that nothing reads. A
+configuration key the code does not read is not configuration; it is a claim.
+
+---
+
+## D-065 — The model is pinned, and pinned to one that exists
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 11 (prerequisite)
+
+**Decision.** `SEMANTIC_MODEL` defaults to a specific version, never a `-latest` alias, and the
+default must name a model the API still serves. A test asserts the default is not floating and that
+it agrees with `.env.example`.
+
+**Rationale.** Two separate failures, found by pointing a real key at the API.
+
+**Floating is unreproducible.** `gemini-flash-latest` resolves to whatever Google currently points
+it at, so the model that fits the likelihood ratios in Chapter 14 need not be the model scored
+against them afterwards. §6 requires fitted numbers to be reproducible from a recorded artifact, and
+a model identifier that silently changes underneath makes that unverifiable.
+
+**Model names expire, and the default had already expired.** `gemini-2.0-flash` — the committed
+default and the documented one — returns `404: no longer available`. `gemini-2.5-flash` returns
+`404: no longer available to new users`, so a key created today cannot reach it whatever the docs
+say. A default that names a dead model is a live failure mode.
+
+**Consequences.** Bumping the model is a deliberate edit in two places that a test keeps in
+agreement, and it should be accompanied by re-running whatever calibration depends on it. Verify a
+model answers `generateContent` before pinning it; the list endpoint alone is not enough, since a
+model can be listed and still refused to new keys.
+
+**Recorded for Chapter 11, not fixed here.** `HostedLLMClient` has a fixed 30s timeout and no retry.
+Free-tier `503 high demand` is common enough that a single sample loses often, and all three samples
+failing surfaces as `schema_violation` — which misattributes a transport failure to the model's
+output. Retry with backoff, and a distinct `provider_unavailable` reason, belong with the rest of
+that agent's rebuild.
