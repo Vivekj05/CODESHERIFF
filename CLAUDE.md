@@ -79,13 +79,14 @@ odd choice and is load-bearing:
 ## Current state — read `AUDIT.md` before writing code
 
 **The committed code does not implement the design above.** A full conformance audit found that
-three of four analysis components are shells, and three of them still are:
+three of four analysis components are shells. Two still are:
 
-- The static agent has **no taint engine** — the def-use graph is built and discarded; "taint
-  paths" are a line-number cross-product.
 - The context agent has **no RAG reasoning** — four hard-coded substring tests.
 - The semantic agent's anti-sycophancy exemplars exist on disk and are **never loaded**.
 - The runtime agent **does not exist**.
+
+The static agent's taint engine *was* the worst of them — the def-use graph was built and discarded,
+and "taint paths" were a line-number cross-product. Chapter 10 replaced it (`AUDIT.md` 3.1–3.6).
 
 The extraction *was* per-file diff fragments; Chapter 8 closed that (`AUDIT.md` 4.1 and 4.2). The
 webhook *was* unauthenticated; Chapter 6 closed that (`AUDIT.md` 0.1 and 4.3). The fusion engine
@@ -112,7 +113,7 @@ CODESHERIFF/
 ├── packages/
 │   ├── contracts/        # THE single shared contract. Never vendored.
 │   ├── corpus/           # 60 labelled units, 30 twin pairs, committed splits (Ch 7)
-│   ├── agent_static/     # structural.taint + structural.semgrep
+│   ├── agent_static/     # structural.taint (Ch 10) + structural.semgrep
 │   ├── agent_semantic/   # semantic.hosted
 │   ├── agent_context/    # context.rag
 │   ├── agent_runtime/    # runtime.sfi                                  (empty — Ch 13)
@@ -132,11 +133,12 @@ will be fitted against. Chapter 8 made the pipeline hand over the right objects.
 the seam: agents run per unit, their statements are persisted against the function they are about,
 and fusion turns them into a posterior that can go down as well as up.
 
-What Chapter 9 did **not** do is make an agent analyse better. The taint engine still builds a
-def-use graph and discards it; the context agent is still four substring tests; the runtime agent
-still does not exist. What changed is that each of them now abstains under its own name, at a
-likelihood ratio of exactly 1.0, on the record, per unit — so a missing witness costs the posterior
-nothing and hides from nobody.
+Chapter 10 made the first agent do real work: `structural.taint` propagates over a def-use graph
+it consumes, and is measured — 13/13 on the calibration cases the corpus predicts for it, 0 false
+positives across 18 safe twins. The context agent is still four substring tests and the runtime
+agent still does not exist. Both abstain under their own names, at a likelihood ratio of exactly
+1.0, on the record, per unit — so a missing witness costs the posterior nothing and hides from
+nobody.
 
 Every number is **provisional**. The ratios, the prior and the threshold are hand-set, and D-010
 requires them presented as such until Chapter 14 fits them on the calibration split.
@@ -196,6 +198,21 @@ because CWE-798 lives at module scope more often than not (D-049). One unit per 
 definition winning: `@overload` stubs would otherwise apply one agent's ratio twice to one
 `finding_key`. A file that yields no unit is recorded with a `SkipReason`, never dropped silently,
 and `MAX_BLOB_BYTES` skips an oversized file *whole* — capping the fetch is not truncating a unit.
+
+**Taint analysis.** `static_agent.taint` is an AST analysis, not a text one. Rules `fullmatch` the
+**callee** of a call node — never a line of source, which is how a comment came to register a
+critical sink (`AUDIT.md` 3.3). Every sink declares a `class` and its dangerous argument **positions**;
+`args: [0]` on `sql.execute` is how parameterised SQL is modelled, and §5 forbids it being a
+sanitizer (D-059). Sanitizer edges clear classes, so escaping HTML cannot silence an `os.system`.
+
+Three choices there look aggressive and are load-bearing. **Every function parameter is an untrusted
+source** (D-058) — the unit is one function, so its signature is the trust boundary, and nine of the
+thirteen calibration cases depend on it. **A validating guard is a definition** (D-060): `if x not in
+ALLOWED: raise` clears taint, `if x is None: return` does not, because the second establishes nothing
+about the value. **Path sinks require a composition** (D-061), or every function that opens a path it
+was handed becomes a critical finding.
+
+Rule models are `extra="forbid"`. A mistyped field must fail loudly, not analyse quietly.
 
 **Fusing evidence.** `codesheriff_engine.fusion` multiplies one likelihood ratio per **witness**
 — four factors, always four, whatever the agents said. `fusion/witnesses.py` is the only place that
@@ -350,8 +367,15 @@ Signing in needs a registered GitHub App — `docs/github-app-setup.md`. Without
 `501` naming the missing variable rather than failing at import, so `/health` works on a machine
 that has never seen a `.pem`.
 
-All five Python gates and both frontend gates are green as of Chapter 9 (663 tests with a database,
-535 + 128 skips without).
+All five Python gates and both frontend gates are green as of Chapter 10 (798 tests with a
+database, 670 + 128 skips without).
+
+**Measuring an agent.** `packages/agent_static/tests/test_corpus_calibration.py` runs the taint
+engine over the corpus and asserts recall and false positives per case. It reads the **calibration
+split only**, and asserts that it does: §6 reserves validation for threshold selection and permits
+the test split to be evaluated exactly once, at the end, and a suite that runs on every commit is the
+most thorough possible way to violate that. A test may import `codesheriff_corpus`; the `static_agent`
+package may not (D-047, D-063). There is no `bench` command — it returned `precision: 1.0` (D-010).
 
 **Semgrep has no Windows build**, so `structural.semgrep` abstains with `tool_unavailable` on a
 Windows dev machine and the structural witness is the taint engine alone. That is a correctly

@@ -1470,3 +1470,190 @@ ignored silence. Chapter 9 made it harmful, so Chapter 9 fixes it rather than le
 **Consequences.** On a machine with no LLM key — including this one — the semantic witness
 contributes exactly 1.0 rather than 0.50. That is a *higher* posterior on quiet units than before,
 and it is the correct one: nothing looked, so nothing was learned.
+
+---
+
+## D-058 — Every parameter of the analysed function is an untrusted source
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 10
+
+**Decision.** `structural.taint` seeds taint at every parameter of the unit's function except the
+receiver (`self`, `cls`), under the origin id `function_parameter`. It is not a pattern in
+`sources.yml` because it is not a pattern.
+
+**Rationale.** The unit of analysis is one function (D-049). Anything crossing that boundary comes
+from code this analysis cannot see, and for a *security* analysis the conservative reading of an
+unseen caller is that it is attacker-influenced until something inside the function proves
+otherwise.
+
+The corpus settles it empirically: nine of the thirteen calibration cases `detectable_by` predicts
+for this agent depend on it, and none of those functions mentions a request object at all —
+`search(self, term)`, `serve_avatar(request, filename)`, `fetch(self, target)`,
+`render_notification(template_source, user)`. Restricting sources to framework request objects would
+have made the engine structurally incapable of reaching them, which is a recall ceiling imposed by
+the rule set rather than by the technique.
+
+**Consequences.** This is the most aggressive choice in the engine and the one most likely to
+generate false positives outside the corpus. Three things bound it: a real sink is still required,
+sanitizers and guards still clear taint, and CWE-22 additionally requires a path composition
+(D-061). On the calibration split it produces **0 false positives across 18 safe cases**. That
+number is from the split reserved for development and is not a calibrated figure.
+
+**Rejected: `os.environ` and `sys.argv` as sources.** Both are operator-controlled, not
+attacker-controlled — whoever sets an environment variable on the process already holds the
+privileges any sink would grant them, so a flow from one to a shell is a deployment decision. The
+corpus agrees: the *safe* member of `cwe-798-warehouse-connect` reads its DSN from `os.environ`
+precisely because that is the fix.
+
+---
+
+## D-059 — Rules match AST call expressions; a sink declares its class and its dangerous arguments
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 10 · **Closes** `AUDIT.md` 3.3, 3.4, 3.5
+
+**Decision.** Three changes to the rule model, each replacing a line-oriented mechanism:
+
+1. A sink `match` is `fullmatch`ed against the **callee** of a call node, and against each dotted
+   suffix of it, so one rule covers `session.execute` and `self.session.execute`. Keyword predicates
+   (`requires_kwarg`, `forbids_kwarg`) read the call's actual keyword arguments.
+2. Every sink declares a `class` — `injection`, `command`, `xss`, `path`, `deserialization`, `code`,
+   `ssrf` — and `RuleSanitizer.clears` is read against it. A sanitizer edge only removes a flow for
+   the classes it clears.
+3. Every sink declares `args`, the positional indices that are dangerous.
+
+Rule models use `extra="forbid"`.
+
+**Rationale.** All three were the same defect wearing different clothes: the analysis was reading
+text rather than structure.
+
+`AUDIT.md` 3.3 — `re.search` over raw lines meant `# TODO: replace os.system with subprocess`
+registered a critical CWE-78 sink, `\beval` matched the identifiers `evaluate` and `evalContext`,
+and `requires_arg`/`forbids_arg` were same-line-only, so `subprocess.run(cmd,\n shell=True)` was
+missed and `yaml.load(f)` with `Loader=SafeLoader` on the next line was reported.
+
+`AUDIT.md` 3.4 — `clears` was declared and never read, so taint died if *any* sanitizer matched
+*any* line between source and sink. An `html.escape` anywhere in a function silenced its `os.system`.
+
+`AUDIT.md` 3.5 — §5 forbids modelling parameterised SQL as a sanitizer, and it was one. As a
+sanitizer it cleared taint for the whole function, so a safe `execute(q, (uid,))` on line 5 excused
+a vulnerable `execute(f"...{x}")` on line 9. As `args: [0]` on the sink it is a property of the call,
+which is what §5 requires — and it is the only model that gets `cwe-089-order-sort` right, where
+**both twins pass parameters separately** and the vulnerable one concatenates a tainted sort column
+into argument 0.
+
+`extra="forbid"` because the old `extra="ignore"` meant adding `class:` to a YAML rule would have
+been silently dropped and the rule would have gone on behaving like the one it was meant to replace.
+
+**Consequences.** `ssrf` is a seventh class beyond the six §5 lists. CWE-918 is in `IN_SCOPE_CWES`
+and its sinks are neither command nor injection; without its own class, a URL-encoding sanitizer
+would have cleared it, and an encoded link to a metadata service still reaches it.
+
+---
+
+## D-060 — A validating guard is a definition; an emptiness check is not
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 10
+
+**Decision.** An `if` whose body exits — `raise`, `return`, or a call to `abort`/`exit` — and whose
+condition **applies a call or a membership test to a variable** creates a graph node that redefines
+that variable, with an incoming edge clearing every class. A condition that merely tests a variable's
+own truthiness or nullity creates nothing.
+
+**Rationale.** Two forces, in opposite directions.
+
+Guards are how five of the calibration safe twins are safe, and none of them uses a sanitizer:
+`if template_name not in self.known_templates(): raise`,
+`if not is_public_https_url(url): abort(400)`,
+`if self.resolve_public_address(target) is None: raise ValueError`. Without guard recognition every
+one of those is a false positive.
+
+But `cwe-502-cache-get-vuln` opens with `if blob is None: return None` and is genuinely vulnerable
+two lines later. Treating a bare null check as validation would suppress it — and null checks are
+everywhere, so the suppression would be broad and invisible.
+
+The line between them is whether the condition *does something to* the value or merely *looks at
+whether it exists*. That is checkable on the AST and needs no knowledge of what the validator
+actually validates.
+
+**Rejected: naming the project's validator functions in the rules.** Writing
+`is_public_https_url` and `resolve_public_address` into `sanitizers.yml` would have passed the same
+cases and would have been fitting the rules to the corpus — the exact failure §6 exists to prevent.
+The generic form is weaker per case and honest.
+
+**Consequences.** A guard that does not really validate is a false negative this engine will not
+catch. That is the deliberate trade: the corpus measures it, and `DEFECTS.md` is where instances get
+recorded as they are found.
+
+---
+
+## D-061 — Path traversal requires a base path to escape
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 10
+
+**Decision.** Sinks of class `path` carry `requires_path_composition: true`. The finding is reported
+only when the tainted value was joined onto something — `os.path.join(base, name)` or
+`base + "/" + name` — somewhere on the flow.
+
+**Rationale.** Traversal means escaping a base directory. A function handed a whole path and opening
+it has not been tricked into anything; the caller chose the path, and that is the entire interface.
+
+Without this, D-058 makes every function that takes a path and opens it a critical CWE-22 finding.
+It would fire on **both** members of `cwe-502-config-load`, whose safe twin also does `open(path)` —
+a false positive on a safe case, and on the one class of function most likely to appear in a diff.
+
+**Consequences.** A traversal that reaches a sink without a visible join — a path assembled in a
+helper, or an f-string this heuristic does not recognise — is missed. Narrower and right beats
+broader and noisy for a witness whose entire value is that its detections are mechanical proofs.
+
+---
+
+## D-062 — JavaScript abstains rather than being analysed with a Python model
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 10
+
+**Decision.** `language_key` accepts Python only. Every other language returns an abstention with
+reason `language_not_modelled`. The JavaScript rules are deleted from `sinks.yml` and
+`sources.yml`.
+
+**Rationale.** Everything the engine does is Python-shaped: argument positions, keyword arguments,
+`with`-statement binding, parameter seeding, guard recognition. Running it over a JavaScript tree
+produces confident nonsense, and a confident wrong answer costs more than an abstention — an
+abstention contributes a likelihood ratio of exactly 1.0 and changes no posterior (D-052).
+
+This is not a capability loss. What is being deleted is a regex over raw lines whose `\beval` matched
+`evaluate` and `evalContext` (`AUDIT.md` 3.3). Scope is Python-first and JS/TS is unscheduled
+(`CLAUDE.md`, §6); the corpus is Python-only, so a JavaScript finding could not be measured even if
+it were correct.
+
+**Consequences.** `test_engine_js.py` is deleted and replaced by an assertion that JavaScript
+abstains. The old `unsupported_language` reason is renamed `language_not_modelled`, because the
+engine does not merely lack rules — it has no model of the language.
+
+---
+
+## D-063 — The corpus measurement is a test on the calibration split; `bench` is deleted
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 10 · **Implements** D-010
+
+**Decision.** `static_agent/cli.py`'s `bench` command is deleted. The measurement it pretended to
+perform lives in `packages/agent_static/tests/test_corpus_calibration.py`, which loads the corpus,
+runs the engine over the **calibration split only**, and asserts recall and false-positive counts
+per case.
+
+**Rationale.** `bench` took a `--corpus` path, ignored it, and printed
+`precision: 1.0, recall: 1.0, fpr: 0.0`. D-010 requires it deleted so nothing in this repository can
+report perfect scores again.
+
+A test rather than a command, for a reason that outlasts this chapter: §6 permits the test split to
+be evaluated exactly once, at the end, and a CLI anyone can point at any split is precisely how that
+gets violated by accident. `test_only_the_calibration_split_is_read` asserts the restriction rather
+than trusting it. Chapter 14 owns the evaluation harness and the split discipline that goes with it.
+
+**The import does not breach D-047.** That contract names the `static_agent` package — an agent that
+can read `label` is being told the answer. A test is where labels are supposed to be read, it is the
+only place these numbers can come from, and `lint-imports` still reports five contracts kept.
+
+**Consequences.** Development on this engine now happens against 36 labelled cases, and the
+validation and test splits stay unread. The numbers those tests assert — 13/13 and 0/18 — are a
+development measurement on the split reserved for development, and nothing may present them as
+calibrated.

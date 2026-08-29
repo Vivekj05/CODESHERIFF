@@ -85,21 +85,18 @@ def explain(
     sys.exit(0)
 
 
-@app.command()
-def bench(
-    corpus: Path = typer.Option(Path("corpus"), "--corpus", help="Path to corpus directory"),
-) -> None:
-    """Run benchmark metrics over corpus directory."""
-    typer.echo(f"Running benchmark over {corpus}...")
-    metrics = {
-        "precision": 1.0,
-        "recall": 1.0,
-        "fpr": 0.0,
-        "safe_twin_pass_rate": 1.0,
-        "p95_latency_ms": 12.5,
-    }
-    print(json.dumps(metrics, indent=2))
-    sys.exit(0)
+# There is no `bench` command, and there must not be one here.
+#
+# It took a `--corpus` path, ignored it, and printed `precision: 1.0, recall: 1.0, fpr: 0.0` —
+# fabricated metrics that D-010 requires deleted so that nothing in this repository can report
+# perfect scores again. The measurement it pretended to be is real now and lives in
+# `tests/test_corpus_calibration.py`, where it runs against the labelled corpus on the calibration
+# split and fails when recall drops.
+#
+# It belongs in a test rather than a command for a reason that outlasts this chapter: §6 permits
+# the test split to be evaluated exactly once, at the end, and a CLI anyone can point at any split
+# is precisely how that gets violated by accident. Chapter 14 owns the evaluation harness and the
+# split discipline that goes with it.
 
 
 @app.command()

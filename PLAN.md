@@ -37,12 +37,16 @@ As of Chapter 9 the seam is **closed**: every extracted unit reaches four blind 
 one says is persisted against the function it is about, and fusion turns it into a posterior that
 can go down as well as up. The pipeline is end to end for the first time.
 
-**Three of the four analysis components are still the shells the audit described.** The taint
-engine still builds a def-use graph and discards it; the context agent's reasoning is still four
-substring tests; the runtime agent still does not exist. Each has a chapter, and all of them are in
-Phase B. What Chapter 9 changed is the frame around them: an agent that is not built now abstains
-under its own name, at a likelihood ratio of exactly 1.0, on the record, per unit — so a missing
-witness costs the posterior nothing and hides from nobody.
+**One of the four analysis components now does the work its name claims.** As of Chapter 10 the
+structural witness runs worklist taint propagation over a def-use graph it actually consumes, and is
+measured against ground truth: 13/13 on the cases the corpus predicts for it, 0 false positives
+across 18 safe twins, on the calibration split.
+
+The other two remain the shells the audit described — the context agent's reasoning is still four
+substring tests, and the runtime agent still does not exist. Each has a chapter, and both are in
+Phase B. What Chapter 9 changed is the frame around them: an agent that is not built abstains under
+its own name, at a likelihood ratio of exactly 1.0, on the record, per unit — so a missing witness
+costs the posterior nothing and hides from nobody.
 
 The shells are also **measurable** now. Chapter 7 supplied the labels, Chapter 8 supplies units of
 the same shape the corpus holds, and Chapter 9 supplies the arithmetic that turns their statements
@@ -54,7 +58,7 @@ result with a price, since a silence carries a likelihood ratio below 1.0.
 | v0.1 | webhook → diff parsed → comment posted | ✅ **complete** (Ch 6, Ch 8) — HMAC verified before parsing, enqueued, worker posts. Extraction is one unit per changed function, from fetched blobs |
 | v0.2 | contracts frozen + corpus with committed splits | ⚠️ contracts frozen at v2.0.0 (Ch 2); corpus 60 units / 30 pairs with committed splits (Ch 7); **cross-PR scenarios pending Ch 12** |
 | v0.3 | Semgrep backend + fusion engine | ✅ **complete** (Ch 9) — all 7 fusion defects closed; four witnesses, one factor each. Ratios still asserted until Ch 14 |
-| v0.4 | taint engine | ⚠️ **no taint engine** — def-use graph discarded; line cross-product |
+| v0.4 | taint engine | ✅ **complete** (Ch 10) — worklist propagation over a real def-use graph; 13/13 recall and 0/18 false positives on the calibration split |
 | v0.5 | semantic agent | ⚠️ runs; exemplars never loaded, gate incomplete, no size check |
 | v0.6 | empirical calibration | ⬜ blocked on corpus |
 | v0.7 | context agent | ⚠️ **no RAG reasoning** — four hard-coded substring tests |
@@ -610,9 +614,10 @@ may be called calibrated.
 uv run codesheriff-engine fuse evidence.json    # posterior, with one row per witness
 ```
 
-## Chapter 10 — Static agent II: the taint engine ⬜
+## Chapter 10 — Static agent II: the taint engine ✅
 
-**Replaces** `packages/agent_static/src/static_agent/taint/engine.py`.
+**Replaced** `packages/agent_static/src/static_agent/taint/engine.py`, and with it `defuse.py`,
+`catalog.py`, `parse.py`, `render.py` and all three rule files.
 **Closes** `AUDIT.md` 3.1–3.6.
 
 Build the def-use graph **and consume it**. On a correct graph the engine is ~150 lines; without one
@@ -630,6 +635,73 @@ twin.
 
 **Done when:** `# TODO: replace os.system with subprocess` yields nothing; a wrong-class sanitizer
 does not suppress a sink; every sink has both fixtures.
+
+**Delivered.** A real taint engine. All three "Done when" criteria hold, each as a named test, and
+the graph is now the thing the analysis runs on rather than a local variable nobody read. D-058
+through D-063.
+
+- **The def-use graph is built from the AST and consumed** (`AUDIT.md` 3.1). Nodes are definitions,
+  guards and sink arguments; edges are flows. `propagate()` runs a worklist to a fixpoint and
+  `networkx.shortest_path` produces the path that gets rendered. The old builder was regex over
+  stripped lines, its result was assigned to a local and never referenced, `import networkx` was
+  unused, and symbol extraction sat behind a literal `if False`.
+- **Paths are real** (`AUDIT.md` 3.2). A source and an unrelated sink below it produce nothing;
+  a three-hop flow renders three steps with a genuine `propagation` role in the middle. The old
+  artifact was always exactly two steps and could never contain one, so a one-hop flow and a
+  five-hop flow were indistinguishable to a reviewer.
+- **Rules match the callee of a call node, never a line of text** (`AUDIT.md` 3.3, D-059).
+  `# TODO: replace os.system with subprocess` matches nothing, `eval` no longer matches `evaluate`,
+  and keyword arguments are read from the AST — so `subprocess.run(cmd,\n shell=True)` is seen and
+  `yaml.load(f,\n Loader=SafeLoader)` is not a finding.
+- **Sanitizers clear classes, and the class is read** (`AUDIT.md` 3.4, D-059). An edge that clears
+  `xss` disappears from the graph used to reason about an XSS sink and stays in the one used for a
+  command sink. Escaping HTML no longer silences an `os.system`. Clearing is computed **per
+  occurrence**, so `render(escape(a), b)` clears for `a` and not for `b`.
+- **Parameterised SQL is a sink property** (`AUDIT.md` 3.5, D-059). `args: [0]` on `sql.execute`,
+  with `safe_when: params_passed_separately` naming the choice. It is the only model that gets
+  `cwe-089-order-sort` right, where **both** twins pass parameters separately and the vulnerable one
+  concatenates a tainted sort column into argument 0.
+- **Type coercion and allowlists exist** (`AUDIT.md` 3.6). `int`, `float`, `uuid.UUID`,
+  `datetime.fromisoformat` clear every class; a screaming-snake-case mapping lookup clears every
+  class. §5 calls these "the largest false-positive source without them" and there were none.
+- **Function parameters are untrusted** (D-058). The single most consequential choice here: nine of
+  the thirteen calibration cases depend on it and none of those functions mentions a request object.
+- **A validating guard is a definition** (D-060). `if name not in ALLOWED: raise` redefines `name`
+  through an edge that clears everything; `if blob is None: return None` does not, which is what
+  keeps `cwe-502-cache-get` detectable. The distinction is whether the condition *does something to*
+  the value or only asks whether it exists — and it is generic, so no project-specific validator name
+  appears in any rule.
+- **Path traversal requires a base to escape** (D-061), or every function that opens a path it was
+  given becomes a critical finding — including both members of `cwe-502-config-load`.
+- **Eleven sinks, each with a vulnerable fixture and a safe twin**, and a test that fails when a rule
+  is added without a pair. The safe twin is the half that matters: a rule with only a vulnerable
+  fixture is tested for firing and never for staying quiet.
+
+**Measured, on the calibration split only.** 13/13 recall on the cases `detectable_by` predicts for
+`structural.taint`, **0 false positives across all 18 safe cases**, and one detection beyond
+prediction (`cwe-502-config-load-vuln`, a genuine unsafe `yaml.Loader`; `detectable_by` excuses, it
+does not forbid). p95 latency **28ms** per ChangeUnit against a 3s target.
+
+⚠️ **These are development numbers, not calibrated ones.** §6 reserves validation for threshold
+selection and permits the test split to be evaluated exactly once, at the end, so both stay sealed
+until Chapter 14. `test_only_the_calibration_split_is_read` asserts the restriction rather than
+trusting it, and the fabricated `bench` command that returned `precision: 1.0, recall: 1.0` is
+deleted (D-063, D-010).
+
+**JavaScript now abstains** (D-062). Everything the engine does is Python-shaped, and the JS rules
+were the regexes whose `\beval` matched `evaluate`. An abstention contributes a likelihood ratio of
+exactly 1.0 and is worth more than a confident wrong answer. `symbols.py` is deleted — dead since
+`AUDIT.md` 3.1 — and `parse.py` no longer mirrors the whole tree into pydantic on every call.
+
+**Verified.** 798 Python tests pass against Postgres (670 + 128 skips without one); 148 of them are
+new · `ruff check` and `ruff format --check` clean across 151 files · `mypy --strict` clean across 89
+source files · `lint-imports` 5 contracts kept, including the corpus contract with the new
+calibration test in place · `agent_static` coverage 83%, and 87–100% across the taint modules.
+
+```bash
+uv run pytest packages/agent_static/tests/test_corpus_calibration.py   # the measurement
+uv run pytest packages/agent_static/tests/test_taint_sinks.py          # both fixtures per sink
+```
 
 ## Chapter 11 — Semantic agent ⬜
 
