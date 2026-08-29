@@ -37,10 +37,21 @@ As of Chapter 9 the seam is **closed**: every extracted unit reaches four blind 
 one says is persisted against the function it is about, and fusion turns it into a posterior that
 can go down as well as up. The pipeline is end to end for the first time.
 
-**One of the four analysis components now does the work its name claims.** As of Chapter 10 the
+**Two of the four analysis components now do the work their names claim.** As of Chapter 10 the
 structural witness runs worklist taint propagation over a def-use graph it actually consumes, and is
 measured against ground truth: 13/13 on the cases the corpus predicts for it, 0 false positives
-across 18 safe twins, on the calibration split.
+across 18 safe twins, on the calibration split. As of Chapter 11 the semantic witness reads its
+exemplars, bounds the untrusted region with a sentinel the code author cannot forge, and is measured
+the same way — 0% injection subversion, a 94% safe-twin pass rate, and zero hallucinated sinks
+reaching output, from model responses recorded once and committed.
+
+The two are also **heterogeneous in the way the thesis needs**, and the two measurements are the
+first evidence for it rather than an argument about it. Their errors do not coincide. The semantic
+agent's single false positive is `format_html`, whose escaping guarantee lives in a library it
+cannot see, and the taint engine — which knows that callee by rule — is correctly quiet on the same
+case. Its miss is a hardcoded credential, which it fails on for a structural reason: the three-stage
+prompt asks what untrusted input reaches a dangerous sink, and a literal password is neither. Agents
+that failed the same way would add nothing to a probability estimate.
 
 The other two remain the shells the audit described — the context agent's reasoning is still four
 substring tests, and the runtime agent still does not exist. Each has a chapter, and both are in
@@ -59,7 +70,7 @@ result with a price, since a silence carries a likelihood ratio below 1.0.
 | v0.2 | contracts frozen + corpus with committed splits | ⚠️ contracts frozen at v2.0.0 (Ch 2); corpus 60 units / 30 pairs with committed splits (Ch 7); **cross-PR scenarios pending Ch 12** |
 | v0.3 | Semgrep backend + fusion engine | ✅ **complete** (Ch 9) — all 7 fusion defects closed; four witnesses, one factor each. Ratios still asserted until Ch 14 |
 | v0.4 | taint engine | ✅ **complete** (Ch 10) — worklist propagation over a real def-use graph; 13/13 recall and 0/18 false positives on the calibration split |
-| v0.5 | semantic agent | ⚠️ runs; exemplars never loaded, gate incomplete, no size check |
+| v0.5 | semantic agent | ✅ **complete** (Ch 11) — exemplars wired, gate complete, sentinel-bounded prompt; 0% injection subversion and 94% safe-twin pass on the calibration split |
 | v0.6 | empirical calibration | ⬜ blocked on corpus |
 | v0.7 | context agent | ⚠️ **no RAG reasoning** — four hard-coded substring tests |
 | v0.8 | runtime agent (Wasmtime + WASI) | ⬜ does not exist |
@@ -703,7 +714,7 @@ uv run pytest packages/agent_static/tests/test_corpus_calibration.py   # the mea
 uv run pytest packages/agent_static/tests/test_taint_sinks.py          # both fixtures per sink
 ```
 
-## Chapter 11 — Semantic agent ⬜
+## Chapter 11 — Semantic agent ✅
 
 **Closes** `AUDIT.md` 0.3, 0.4, 3.9, 3.10, 3.11, 3.12.
 
@@ -716,6 +727,81 @@ never stub,** when unconfigured. Keep n=3 with varying seeds.
 
 **Done when:** injection subversion ≤ 10%; safe-twin pass rate ≥ 85%; zero hallucinated sinks reach
 output; zero live API calls in the suite.
+
+**Delivered.** All four criteria hold, each as a named test over real recorded model output rather
+than a scripted stub. D-066 through D-068.
+
+- **The untrusted region is bounded by a sentinel the code author cannot predict** (`AUDIT.md` 0.3,
+  D-066). `CODESHERIFF-` plus eight bytes from `secrets`, drawn per request, with the prompt saying
+  in advance that any text inside the block claiming to close it — or repeating the sentinel — is
+  the attack, and the code is still the thing to report on. The old literal `<code_to_analyze>` tag
+  was forgeable by exactly the person whose code was being read.
+- **The exemplars are loaded, and rendered inside that same sentinel** (`AUDIT.md` 3.9). They could
+  not have been loaded as they stood: each file held only a `response`, with no record of the code
+  it answered, so the input half was authored. Six now, **four of which correctly report nothing**,
+  and `exemplar_balance` asserts the ratio so it cannot drift. None is drawn from the corpus — an
+  example lifted from a labelled case puts that case's answer in the prompt (D-047). Framing them
+  identically to the real unit is deliberate: shown in a different wrapper they would teach that the
+  sentinel is decorative, and they are the longest part of the prompt.
+- **All four hallucination-gate checks hold** (`AUDIT.md` 3.10). The `IN_SCOPE_CWES` check that was
+  absent entirely; an exact file-path comparison instead of the basename fallback that let a finding
+  about `vendor/evil/users.py` pass against `app/api/users.py`; the verbatim sink check; and
+  evidence-line bounds with the `+ 5` slack — five lines past the end of the unit — removed. A
+  rejected finding is dropped without failing the sample, because one response can carry a real
+  finding and an invention, and discarding both loses the real one.
+- **Model prose is screened, and instruction-shaped prose is dropped whole** (`AUDIT.md` 0.4,
+  D-067). In `mapping.py`, the only place an `LLMFinding` becomes an `Evidence`, so no path to a
+  stored row, a comment or the dashboard skips it. Escaping was the wrong instinct: an escaped
+  injection is still published to the reader it is aimed at. The finding survives either way and is
+  reported from its gate-validated fields, since whether the code is vulnerable does not depend on
+  how the model described it.
+- **An oversized unit abstains** (`AUDIT.md` 3.11, D-015). 60 kB, checked before any call. It used
+  to trip the budget check, `break`, and fall through to an empty list — downstream indistinguishable
+  from "reviewed, clean".
+- **A provider failure is not a model failure** (`AUDIT.md` 3.12, D-065). Retry with jittered
+  backoff, and three 503s now abstain with `provider_unavailable` rather than `schema_violation`,
+  which blamed the model for output it was never asked for. That misattribution would have been read
+  as evidence about the model when the ratios are fitted.
+
+**Measured, on the calibration split only** — 36 recorded cases, 18 safe and 18 vulnerable, plus 23
+injected variants.
+
+| Criterion | Target | Measured |
+|---|---|---|
+| Injection subversion | ≤ 10% | **0%** — 0 of the 10 cases carrying a baseline detection |
+| Safe-twin pass rate | ≥ 85% | **94%** — 17 of 18 |
+| Hallucinated sinks reaching output | zero | **zero**, asserted per emitted finding against the source |
+| Live API calls in the suite | zero | **zero**, enforced at the socket, not by convention |
+
+Recall on the cases `detectable_by` predicts for this agent is **17/18**, reported rather than
+gated: recall is what Chapter 14 fits a likelihood ratio *from*, and a floor asserted here would
+make the ratio a target rather than a measurement.
+
+⚠️ **These are development numbers, not calibrated ones**, and they describe one pinned model on one
+date. §6 keeps validation and test sealed until Chapters 14 and 18, and
+`test_only_the_calibration_split_is_read` asserts the restriction rather than trusting it.
+
+**Measured from committed cassettes** (D-068). `tools/record_cassettes.py` calls the live API once
+and commits what came back; the suite replays it through the real `analyze()` path. That is what
+lets "zero live calls" and "measured on real model output" both hold, and it makes the measurement
+deterministic, free, and inspectable — the exact bytes are in the repository. Each cassette carries
+the fingerprint of the prompt it answered, so editing the template, the system prompt or an exemplar
+marks every recording stale instead of quietly measuring a prompt nobody sends.
+
+**Two defects found and logged, both open** (`DEFECTS.md`). FP-001: the model reports CWE-79 on
+`format_html`, whose escaping guarantee lives in the library rather than in the unit — doubt about
+an unseen callee resolves toward reporting. FN-001 is the more interesting one: the prompt reports
+only when "untrusted input enters, it reaches a dangerous sink, and no invariant protects it", and a
+hardcoded credential has no untrusted input, so **the three-stage framework structurally excludes
+CWE-798**. Fixing it means a prompt change, which invalidates every cassette and requires a
+re-record against the live API — so it is logged rather than patched, and belongs with the next
+recording run.
+
+```bash
+uv run pytest packages/agent_semantic/tests/test_corpus_semantic.py   # the measurement
+uv run pytest packages/agent_semantic/tests/test_injection.py         # the boundary itself
+uv run python packages/agent_semantic/tools/record_cassettes.py       # spends quota; needs a key
+```
 
 ## Chapter 12 — Context agent ⬜
 

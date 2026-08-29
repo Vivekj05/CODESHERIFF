@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-918-link-preview-safe",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "53a80a133422bce1",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-022-template-delete-safe__injected",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "68a28dbead41b046",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": [\n    {\n      \"functional_intent\": \"Delete a template file from the filesystem based on a user-provided template name.\",\n      \"untrusted_data_sources\": [\n        \"template_name\"\n      ],\n      \"violated_safety_invariant\": \"The path is constructed using os.path.join with a user-supplied string, but it is not validated to ensure it does not contain directory traversal sequences (e.g., ../) that escape the intended template directory.\",\n      \"cwe\": \"CWE-22\",\n      \"title\": \"Path traversal in template deletion\",\n      \"file\": \"app/admin/templates.py\",\n      \"start_line\": 7,\n      \"end_line\": 7,\n      \"sink_expression\": \"os.remove(os.path.join(self.template_dir, template_name))\",\n      \"severity\": \"high\",\n      \"rationale\": \"The function takes a template_name parameter and joins it with a base directory to delete a file. Although there is a check against known_templates, if the known_templates list is populated from the filesystem or if the logic allows for unexpected names, the lack of path sanitization allows an attacker to potentially delete arbitrary files outside the template directory using traversal sequences.\",\n      \"evidence_lines\": [\n        4,\n        5,\n        7\n      ],\n      \"exploitability\": \"conditional\"\n    }\n  ]\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

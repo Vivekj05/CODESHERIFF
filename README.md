@@ -111,14 +111,28 @@ agent importing a sibling, the engine, or infrastructure fails CI.
 
 ## Project status
 
-A full conformance audit found that the committed code does not implement the design above. Three
-of four analysis components are shells and no corpus exists — so no number the system currently
-produces is calibrated, and it says so on every pull request it comments on.
+A full conformance audit found that the committed code did not implement the design above: three
+of four analysis components were shells and no corpus existed. **No number the system produces is
+calibrated yet**, and it says so on every pull request it comments on — the likelihood ratios, the
+prior and the alert threshold are still hand-set, and Chapter 14 is where they are fitted.
 
 The seam around the analysis is real as of Chapter 6: a signature-verified webhook becomes a queued
 audit becomes one comment posted by the worker. The unauthenticated endpoint the audit found was
-deleted rather than patched. What is still missing is the analysis itself — the taint engine, the
-RAG reasoning, the runtime sandbox, and the corpus every fitted number depends on.
+deleted rather than patched. Chapter 7 built the ground truth — 60 hand-written units in 30
+vulnerable/safe twin pairs, with committed splits. Chapter 8 made the pipeline hand over one
+`ChangeUnit` per changed function, and Chapter 9 made fusion multiply one likelihood ratio per
+witness over a fixed roster, so a posterior can go down as well as up.
+
+Two of the four agents now do the work their names claim, each measured against the corpus on the
+calibration split. `structural.taint` (Chapter 10) propagates over a def-use graph it consumes:
+13/13 recall on the cases the corpus predicts for it, 0 false positives across 18 safe twins.
+`semantic.hosted` (Chapter 11) reads its exemplars and bounds untrusted code with a sentinel the
+code author cannot forge: 0% injection subversion, a 94% safe-twin pass rate, zero hallucinated
+sinks reaching output.
+
+What is still missing is the RAG reasoning, the runtime sandbox, and the calibration itself. Both
+missing agents abstain under their own names at a likelihood ratio of exactly 1.0, per unit, on the
+record — so a witness that is not built costs the posterior nothing and hides from nobody.
 
 The audit is in **[`AUDIT.md`](AUDIT.md)**, with a `file:line` citation for every claim. It is the
 baseline the rebuild is measured against.

@@ -66,6 +66,10 @@ warn_unused_ignores = true
 # disambiguate them while each package keeps a directory called `tests`.
 exclude = ["/tests/", "^build/", "/codesheriff_corpus/cases/"]
 mypy_path = [
+    # The cassette harness lives in the semantic agent's tests because it is test infrastructure,
+    # but `tools/record_cassettes.py` — which is checked — imports it. On the path so the import
+    # resolves; still excluded from being checked itself by the `/tests/` rule above.
+    "packages/agent_semantic/tests",
     "packages/contracts/src",
     "packages/corpus/src",
     "packages/agent_static/src",
@@ -109,6 +113,9 @@ markers = [
     # pgvector cannot be faked on SQLite, and a schema built from metadata is not the schema
     # production runs — so these tests use a real Postgres or they do not run (D-029).
     "db: needs a live Postgres; skipped unless CODESHERIFF_TEST_DB names a throwaway database",
+    # Spends free-tier LLM quota and is non-deterministic, so it is never part of a normal run.
+    # The default suite replays recorded cassettes instead (D-068).
+    "live_api: calls a real LLM provider; skipped unless --live-api is passed",
 ]
 
 # ---------------------------------------------------------------------------

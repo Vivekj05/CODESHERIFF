@@ -72,6 +72,9 @@ odd choice and is load-bearing:
 | Agents run **blind** — no anchors | Anchoring is obviously more efficient | It correlates the agents and breaks the conditional independence the fusion math assumes |
 | Debate emits its own evidence, never overwrites the posterior | Overwriting is simpler | Overwriting destroys calibration exactly on the contested cases and makes the debate step unmeasurable |
 | Oversized units **abstain**, never truncate | Truncating gets partial signal | Truncated analysis produces confident findings from half-read code, biased toward over-reporting, and silently invalidates calibration |
+| The exemplars sit **inside** the same sentinel as the unit | An example is not untrusted data; wrapping it looks like a category error | They are the longest, most attended-to part of the prompt. Framed differently they would teach that the sentinel is decorative formatting, which is exactly the belief an injection needs |
+| Instruction-shaped model prose is **dropped**, not escaped | Escaping preserves the information and fixes the rendering bug | An escaped injection is still published to the reader it targets. The finding survives on its validated fields — whether the code is vulnerable does not depend on how the model described it |
+| Editing a prompt turns the semantic suite **red** | A test that fails on an intended edit looks broken | The cassettes measure the old prompt. A green suite reporting a rate for a prompt nobody sends any more is worse than a red one; re-record, do not touch the fingerprint |
 | PR title/description passed as separate `pr_context` | Convenient inside `ChangeUnit` | Attacker-controlled, and absent from corpus cases — embedding it makes corpus runs behave differently from production, corrupting calibration |
 
 ---
@@ -82,11 +85,13 @@ odd choice and is load-bearing:
 three of four analysis components are shells. Two still are:
 
 - The context agent has **no RAG reasoning** — four hard-coded substring tests.
-- The semantic agent's anti-sycophancy exemplars exist on disk and are **never loaded**.
 - The runtime agent **does not exist**.
 
 The static agent's taint engine *was* the worst of them — the def-use graph was built and discarded,
-and "taint paths" were a line-number cross-product. Chapter 10 replaced it (`AUDIT.md` 3.1–3.6).
+and "taint paths" were a line-number cross-product. Chapter 10 replaced it (`AUDIT.md` 3.1–3.6). The
+semantic agent's anti-sycophancy exemplars *were* on disk and never loaded, its prompt delimiter was
+forgeable by the code it analysed, and its hallucination gate had three of four checks with two of
+them weakened; Chapter 11 closed all of it (`AUDIT.md` 0.3, 0.4, 3.9–3.12).
 
 The extraction *was* per-file diff fragments; Chapter 8 closed that (`AUDIT.md` 4.1 and 4.2). The
 webhook *was* unauthenticated; Chapter 6 closed that (`AUDIT.md` 0.1 and 4.3). The fusion engine
@@ -126,7 +131,7 @@ CODESHERIFF/
 └── docs/history/         # Superseded specs, kept for provenance
 ```
 
-⚠️ **The pipeline runs end to end; three of the four agents still do not do the right work.**
+⚠️ **The pipeline runs end to end; two of the four agents still do not do the right work.**
 Chapter 2 froze the contract at v2.0.0 and got every gate green. Chapter 6 made the plumbing real —
 verified webhook, queued audit, worker-posted comment. Chapter 7 built the ground truth every number
 will be fitted against. Chapter 8 made the pipeline hand over the right objects. Chapter 9 closed
@@ -135,10 +140,12 @@ and fusion turns them into a posterior that can go down as well as up.
 
 Chapter 10 made the first agent do real work: `structural.taint` propagates over a def-use graph
 it consumes, and is measured — 13/13 on the calibration cases the corpus predicts for it, 0 false
-positives across 18 safe twins. The context agent is still four substring tests and the runtime
-agent still does not exist. Both abstain under their own names, at a likelihood ratio of exactly
-1.0, on the record, per unit — so a missing witness costs the posterior nothing and hides from
-nobody.
+positives across 18 safe twins. Chapter 11 made the second: `semantic.hosted` loads its exemplars,
+bounds the untrusted region with an unforgeable sentinel, and is measured the same way — 0%
+injection subversion, a 94% safe-twin pass rate, zero hallucinated sinks. The context agent is still
+four substring tests and the runtime agent still does not exist. Both abstain under their own names,
+at a likelihood ratio of exactly 1.0, on the record, per unit — so a missing witness costs the
+posterior nothing and hides from nobody.
 
 Every number is **provisional**. The ratios, the prior and the threshold are hand-set, and D-010
 requires them presented as such until Chapter 14 fits them on the calibration split.
@@ -213,6 +220,24 @@ about the value. **Path sinks require a composition** (D-061), or every function
 was handed becomes a critical finding.
 
 Rule models are `extra="forbid"`. A mistyped field must fail loudly, not analyse quietly.
+
+**Semantic analysis.** `semantic_agent` asks a hosted model for intent, trust boundaries and the
+violated invariant, and everything defensive around it exists to bound the one failure mode a model
+has that a rule engine does not: being confidently wrong, or agreeable.
+
+The untrusted region is delimited by a **per-request random sentinel** (D-066) — `secrets`, never
+`random`, because this is the whole injection boundary. Nothing else in the prompt is a delimiter,
+and the exemplars use the same one. Model prose is **screened in `mapping.py`**, the only place an
+`LLMFinding` becomes an `Evidence`, and prose that reads as an instruction is dropped rather than
+sanitised (D-067). The **hallucination gate** rejects a finding whose CWE is out of scope, whose
+file is not exactly the unit's, whose sink is not verbatim in `post_src`, or whose evidence lines
+fall outside the unit — a rejection drops that finding and not the whole sample, because one
+response can carry a real finding and an invention.
+
+Never construct a prompt without `build_prompt`, and never add a field to the template that carries
+attacker-controlled text outside the sentinel. `n_samples` is 3 with varying seeds, and the spread
+between them is what `raw_score` is derived from — replaying one answer three times would look like
+unanimous confidence.
 
 **Fusing evidence.** `codesheriff_engine.fusion` multiplies one likelihood ratio per **witness**
 — four factors, always four, whatever the agents said. `fusion/witnesses.py` is the only place that
@@ -367,8 +392,8 @@ Signing in needs a registered GitHub App — `docs/github-app-setup.md`. Without
 `501` naming the missing variable rather than failing at import, so `/health` works on a machine
 that has never seen a `.pem`.
 
-All five Python gates and both frontend gates are green as of Chapter 10 (798 tests with a
-database, 670 + 128 skips without).
+All five Python gates and both frontend gates are green as of Chapter 11 (881 tests with a
+database, 753 + 128 skips without).
 
 **Measuring an agent.** `packages/agent_static/tests/test_corpus_calibration.py` runs the taint
 engine over the corpus and asserts recall and false positives per case. It reads the **calibration
@@ -376,6 +401,14 @@ split only**, and asserts that it does: §6 reserves validation for threshold se
 the test split to be evaluated exactly once, at the end, and a suite that runs on every commit is the
 most thorough possible way to violate that. A test may import `codesheriff_corpus`; the `static_agent`
 package may not (D-047, D-063). There is no `bench` command — it returned `precision: 1.0` (D-010).
+
+`packages/agent_semantic/tests/test_corpus_semantic.py` does the same for `semantic.hosted`, under
+the same calibration-split restriction, but replays **committed cassettes** rather than calling the
+model: the criteria demand a rate measured on real model output *and* zero live API calls, and
+recording once is how both hold (D-068). Editing the prompt, the system prompt or an exemplar
+changes each cassette's recorded fingerprint and turns the suite red — deliberately. A prompt edit
+invalidates every number measured against the old prompt, so re-record with
+`tools/record_cassettes.py` rather than reaching for the fingerprint.
 
 **Semgrep has no Windows build**, so `structural.semgrep` abstains with `tool_unavailable` on a
 Windows dev machine and the structural witness is the taint engine alone. That is a correctly

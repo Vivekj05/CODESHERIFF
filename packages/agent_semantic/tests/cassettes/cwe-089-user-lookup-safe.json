@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-089-user-lookup-safe",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "b37775670d0753c0",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

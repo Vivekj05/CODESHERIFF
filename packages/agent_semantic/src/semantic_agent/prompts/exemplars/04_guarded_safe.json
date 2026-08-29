@@ -1,0 +1,12 @@
+{
+  "note": "No finding, and the untrusted URL does reach a fetch. Teaches the failure mode this agent is measured on: a validation that is present in the code counts. The guard refuses to continue, so the invariant is established before the sink.",
+  "unit": {
+    "file": "app/proxy/thumbnails.py",
+    "symbol": "fetch_thumbnail",
+    "language": "python",
+    "post_src": "def fetch_thumbnail(request):\n    source = request.args[\"src\"]\n    if not is_allowed_image_host(source):\n        abort(400, \"unrecognised image host\")\n    return requests.get(source, timeout=5).content\n"
+  },
+  "response": {
+    "findings": []
+  }
+}

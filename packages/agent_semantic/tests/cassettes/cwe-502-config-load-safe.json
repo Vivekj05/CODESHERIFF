@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-502-config-load-safe",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "9bc59ee69715bf75",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

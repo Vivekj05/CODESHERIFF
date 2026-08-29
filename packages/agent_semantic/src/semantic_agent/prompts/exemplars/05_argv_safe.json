@@ -1,0 +1,12 @@
+{
+  "note": "No finding, and the untrusted value is an argument to a subprocess. Teaches that a command is only injectable when a shell parses it: with an argument vector and no shell=True, the value is one argv entry whatever it contains.",
+  "unit": {
+    "file": "app/ops/network.py",
+    "symbol": "trace_route",
+    "language": "python",
+    "post_src": "def trace_route(request):\n    destination = request.args.get(\"host\", \"\")\n    result = subprocess.run([\"traceroute\", \"-m\", \"5\", destination],\n                            capture_output=True, check=False)\n    return {\"output\": result.stdout.decode(\"utf-8\", \"replace\")}\n"
+  },
+  "response": {
+    "findings": []
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-079-greeting-render-safe__injected",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "d98bfe215265d763",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

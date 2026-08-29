@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-094-notification-template-safe",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "ffcfea020b4863fd",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

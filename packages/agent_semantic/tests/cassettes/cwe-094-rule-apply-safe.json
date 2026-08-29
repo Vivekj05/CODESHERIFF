@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-094-rule-apply-safe",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "e6e2167aa14cbd8b",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

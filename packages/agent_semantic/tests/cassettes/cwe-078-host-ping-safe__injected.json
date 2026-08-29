@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-078-host-ping-safe__injected",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "ee1ff80c1e5bc42f",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

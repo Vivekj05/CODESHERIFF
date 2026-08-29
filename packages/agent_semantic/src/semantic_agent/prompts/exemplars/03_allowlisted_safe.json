@@ -1,0 +1,12 @@
+{
+  "note": "No finding, and untrusted input genuinely reaches a shell. Teaches the hardest case: the value the attacker controls only selects among values the program already chose, so what reaches the sink was never attacker-controlled.",
+  "unit": {
+    "file": "app/ops/reports.py",
+    "symbol": "run_report",
+    "language": "python",
+    "post_src": "REPORTS = {\"daily\": \"daily.sql\", \"weekly\": \"weekly.sql\"}\n\ndef run_report(request):\n    name = REPORTS.get(request.args.get(\"report\"))\n    if name is None:\n        abort(400)\n    return subprocess.run([\"psql\", \"-f\", name], capture_output=True)\n"
+  },
+  "response": {
+    "findings": []
+  }
+}

@@ -89,4 +89,8 @@ def test_semantic_agent_never_raises(sample_unit: ChangeUnit, tmp_path: Path) ->
     ev_list = agent.analyze(sample_unit)
     assert len(ev_list) == 1
     assert ev_list[0].kind is EvidenceKind.ABSTENTION
-    assert ev_list[0].reason in {"schema_violation", "runtime_error"}
+    # `provider_unavailable`, not `schema_violation`: the client never returned output, so there
+    # was nothing for the model to get wrong. Reporting a transport failure as a schema failure
+    # blames the model for something it was never asked, and that misattribution would be read as
+    # evidence about the model when the likelihood ratios are fitted (D-065).
+    assert ev_list[0].reason == "provider_unavailable"

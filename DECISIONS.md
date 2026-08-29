@@ -1720,3 +1720,126 @@ Free-tier `503 high demand` is common enough that a single sample loses often, a
 failing surfaces as `schema_violation` — which misattributes a transport failure to the model's
 output. Retry with backoff, and a distinct `provider_unavailable` reason, belong with the rest of
 that agent's rebuild.
+
+---
+
+## D-066 — The untrusted region is bounded by a per-request sentinel, and the exemplars sit inside it
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 11
+
+**Context.** `AUDIT.md` 0.3. The old template interpolated `pre_src` and `post_src` between literal
+`<code_to_analyze>` tags. Code containing that closing tag ended the data region, and everything
+after it read as trusted instruction. The system prompt's boundary paragraph was well written and
+did not help, because the delimiter itself was forgeable by the person whose code was being read.
+
+**Decision.** The untrusted region is delimited by `CODESHERIFF-` plus eight bytes from `secrets`,
+drawn fresh for every request, and the prompt states in advance that any text inside the block
+claiming to close it — or repeating the sentinel — is itself the attack. The **exemplars are
+rendered inside the same sentinel**, with the same `BEGIN`/`END` framing as the real unit.
+
+**Rationale.** A delimiter the author of the analysed code cannot predict cannot be forged, and
+`secrets` rather than `random` because this is the whole injection boundary: a value from a seeded
+generator could be reconstructed by someone who sees enough output to infer its state.
+
+Presenting the exemplars in the *same* frame is the less obvious half. A worked example shown in a
+different wrapper would teach the model that the sentinel is decorative formatting — the exemplars
+are the longest and most attended-to part of the prompt, so whatever they demonstrate about the
+delimiter is what the model learns about it. Identical framing teaches that everything inside a
+sentinel is code to be judged, which is exactly the behaviour the real request depends on.
+
+The cache key is computed against a **fixed** stand-in sentinel (`CACHE_KEY_NONCE`). A random value
+per request would make every cache lookup a miss and turn the cache into a write-only table; the
+constant makes the key mean "this prompt, modulo the sentinel", which is the equivalence the cache
+wants, and it still changes when the template, the exemplars or the code change.
+
+**Consequences.** The rendered prompt is not reproducible byte-for-byte across requests, so anything
+needing a stable identity for a prompt — the cache key, and the cassette fingerprint in D-068 — must
+render a second time with the constant. Both do.
+
+---
+
+## D-067 — Model prose that reads as an instruction is dropped whole, never sanitised
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 11
+
+**Context.** `AUDIT.md` 0.4. Model-authored `rationale`, `functional_intent` and
+`violated_safety_invariant` flowed verbatim into the pull request comment and into a markdown table
+with no pipe escaping. The only control was a 400-character truncation. §5 requires rationales
+screened so injected strings are not echoed.
+
+**Decision.** Every field of model prose is screened in `mapping.py`, which is the only place an
+`LLMFinding` becomes an `Evidence` — so no path to a stored row, a pull request comment or the
+dashboard skips it. Prose that reads as an instruction is **dropped entirely** and the finding is
+reported from `_structured_summary` instead: the CWE, the gate-validated sink expression, the
+severity and the exploitability, with a line saying the model's own wording was withheld.
+
+**Rationale.** Escaping is the wrong instinct here. An injected string that is escaped is still
+*published* — to a reviewer, to the dashboard, to whoever reads the comment next — and the attack it
+carries is aimed at that reader rather than at the markdown parser. Sanitising it would faithfully
+reproduce the payload with its metacharacters neutered, which defeats the rendering bug and not the
+attack.
+
+Dropping the prose costs nothing that matters, and that is what makes the choice cheap: whether the
+code is vulnerable does not depend on how the model chose to describe it. The finding survives
+screening either way. Only the narration is lost, and only for findings whose narration was already
+untrustworthy.
+
+`sink_expression` is quoted in the fallback summary and is *not* screened, because the hallucination
+gate has already checked it appears verbatim in `post_src`. It is attacker-influenced text, but it
+is attacker-influenced text that is genuinely present in the code under review — which is precisely
+the claim being made about it.
+
+**Consequences.** A screening rejection is logged with the field and the reason, so a repeated
+rejection on ordinary findings shows up as a screening rule that is too tight rather than as
+silently degraded output. `prose_screened` is recorded on the `semantic_intent` artifact, so
+Chapter 14 can check whether screened findings behave differently from unscreened ones before any
+ratio is fitted across both.
+
+---
+
+## D-068 — The agent is measured from committed cassettes, and an injected replay analyses the injected source
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 11
+
+**Context.** Chapter 11 requires four things at once: a safe-twin pass rate and an injection
+subversion rate measured on **real model output**, and **zero live API calls in the suite**. A test
+that calls the provider satisfies the first two and breaks the last, spends free-tier quota on every
+commit, and cannot run in CI at all.
+
+**Decision.** `tools/record_cassettes.py` calls the live API once, over the **calibration split
+only**, and commits what came back. The suite replays those recordings through the real
+`SemanticAgent.analyze()` path with a `CassetteClient`, and a socket-layer autouse fixture fails any
+non-loopback connection. Each cassette records the fingerprint of the prompt it answered — the
+rendered prompt with the sentinel replaced by the constant from D-066 — and a test compares it, so a
+changed template, system prompt or exemplar set marks every recording stale instead of quietly
+measuring a prompt nobody sends.
+
+The injected variants are built by `injected_source()`, which lives beside the cassettes and is
+imported by **both** the recorder and the replay.
+
+**Rationale.** Cassettes buy three things past the criterion. The measurement is **deterministic**,
+so a regression is a code change rather than the model having a different day. It is **free**, which
+matters on a project whose hard constraint is zero recurring cost. And it is **inspectable** — the
+exact bytes the model returned are in the repository, which is what lets a number in the report be
+argued about later rather than taken on trust.
+
+Sharing `injected_source()` is not tidiness; it is the correctness of the measurement. The injected
+comment is two lines long, so it shifts every line number in the unit. When the replay built the
+injected unit from the *clean* source, every line the model reported fell outside the unit's bounds,
+the hallucination gate correctly rejected the finding, and the case counted as a lost detection —
+reporting **100% injection subversion** across ten cases where the model had in fact resisted the
+injection and named the vulnerability correctly. One definition used by both sides is what makes
+that class of mismatch impossible rather than merely unlikely.
+
+Recording is restricted to the calibration split for the same reason the taint measurement is
+(D-063). A recording script pointed at validation or test would be iterating against a reserved
+split, and the fact that the iteration is slow, manual and expensive does not make it not fitting.
+
+**Consequences.** A prompt change is now a two-step operation: edit, then re-record, or the suite
+goes red on staleness. That friction is deliberate and it is the point — a prompt edit invalidates
+every number measured against the old prompt, and the alternative is a green suite reporting a rate
+that describes a prompt nobody sends any more.
+
+The cassettes are a snapshot of one model on one date. They are development measurements on the
+split reserved for development, and D-010 applies: nothing may present them as calibrated. Chapter
+14 fits the ratios, and if the model is re-pinned (D-065) every recording must be refreshed first.

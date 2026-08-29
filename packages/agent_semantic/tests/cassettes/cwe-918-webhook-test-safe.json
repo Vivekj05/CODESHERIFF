@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-918-webhook-test-safe",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "ed584db7af368a4d",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-862-billing-plan-safe__injected",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "7d4d532f9f18ee69",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

@@ -45,25 +45,13 @@ docstring, killed taint before the sink" is a cause. Only the second is useful l
 
 | ID | Date | Case | CWE | Agent | Posterior | Cause | Fixed |
 |---|---|---|---|---|---|---|---|
-| _none recorded yet_ | | | | | | | |
+| FP-001 | 2026-08-29 | `cwe-079-search-summary-safe` | CWE-79 | `semantic.hosted` | n/a — agent-level, fusion ratios unfitted until Ch 14 | `format_html` escapes its arguments, but the guarantee lives in the library and not in the unit; the model hedged on the off-screen contract ("while format_html in frameworks like Django is intended to be safe...") and reported anyway. Doubt about an unseen callee resolves toward reporting | open |
 
 ## False negatives
 
 | ID | Date | Case | CWE | Agent | Posterior | Cause | Fixed |
 |---|---|---|---|---|---|---|---|
-| _none recorded yet_ | | | | | | | |
-
----
-
-## Example entries
-
-Illustrative only — delete once real entries exist. Both are drawn from defects `AUDIT.md`
-predicts the current code would produce, so they show the intended level of detail.
-
-| ID | Date | Case | CWE | Agent | Posterior | Cause | Fixed |
-|---|---|---|---|---|---|---|---|
-| FP-000 | 2026-08-27 | `demo-001` | CWE-78 | `structural.taint` | 0.81 | Sink regex matched `os.system` inside a `# TODO:` comment; rules run on raw lines, not call-expression nodes | open |
-| FN-000 | 2026-08-27 | `authz-004` | CWE-862 | `fusion` | 0.18 | Context agent emitted under its own `finding_key`, so its evidence never joined the group and could not corroborate | open |
+| FN-001 | 2026-08-29 | `cwe-798-warehouse-connect-vuln` | CWE-798 | `semantic.hosted` | n/a — agent-level, fusion ratios unfitted until Ch 14 | The prompt reports only when "untrusted input enters, it reaches a dangerous sink, and no invariant protects it". A hardcoded DSN has no untrusted input, so the three-stage gate structurally excludes CWE-798 — all three samples returned no findings on a literal password. The framework, not the model, is what missed it | open |
 
 ---
 
