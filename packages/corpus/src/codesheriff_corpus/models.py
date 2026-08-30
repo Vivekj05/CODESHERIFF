@@ -59,6 +59,47 @@ KNOWN_AGENT_IDS: frozenset[str] = frozenset(
 forever, because nothing downstream would ever match the name."""
 
 
+class PrecedentRecord(BaseModel):
+    """One excerpt of merged code this case's repository already accepted.
+
+    A cross-PR scenario is a case *plus a history* — the shape Chapter 7 deferred to
+    Chapter 12 rather than guess at. This is that shape, and it is deliberately the
+    same shape `codesheriff_storage.PrecedentChunk` holds in production: one merged
+    pull request, one file, one qualified symbol, one bounded excerpt of source. A
+    corpus history that described precedent differently from the way the database
+    stores it would measure an agent that does not exist.
+
+    Indexing is **per symbol, not per pull request** (PROJECT_CONTEXT.md §5).
+    `BAAI/bge-small-en-v1.5` truncates at 512 tokens, so a PR-level document is
+    silently cut and matches poorly against a function-level query.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    pr_number: int
+    """Which merged pull request accepted this. Ordering is by this and the symbol,
+    so a history reads as a timeline rather than as a set."""
+
+    file: str
+    qualified_symbol: str
+    """`Class.method` or a bare function name, matching `ChangeUnit.qualified_symbol`.
+
+    Not optional here, unlike the production column. Precedent whose symbol is unknown
+    could never establish a convention *about* a symbol, so a corpus history has no use
+    for one, and permitting it would invite a case that cannot fail.
+    """
+
+    accepted_src: str
+    """The merged source of that symbol, read from `precedent/` beside the case."""
+
+    @field_validator("accepted_src")
+    @classmethod
+    def _source_present(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("a precedent record with no source establishes nothing")
+        return value
+
+
 class CorpusCase(BaseModel):
     """One labelled unit of analysis.
 
@@ -101,6 +142,19 @@ class CorpusCase(BaseModel):
 
     post_src: str
     pre_src: str | None = None
+
+    precedent: tuple[PrecedentRecord, ...] = ()
+    """Merged code this repository accepted before this change (Chapter 12).
+
+    Empty on most cases, and that emptiness is a real condition rather than a gap:
+    `context.rag`'s documented failure mode is a repository with no relevant history,
+    and a case with no precedent is how that abstention gets measured.
+
+    Both twins of a pair carry the **same** history. The safe twin exists so that a
+    rule keyed on the shape of the code rather than on the flaw fires on both members
+    and is caught doing it; a twin whose history differed would let the agent be right
+    on the pair for the wrong reason. `test_twins_share_a_precedent_history` asserts it.
+    """
 
     # -- serialisation ------------------------------------------------------
 

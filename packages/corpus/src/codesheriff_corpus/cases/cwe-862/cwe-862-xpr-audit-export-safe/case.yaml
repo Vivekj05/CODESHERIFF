@@ -1,0 +1,27 @@
+case_id: cwe-862-xpr-audit-export-safe
+pair_id: cwe-862-xpr-audit-export
+label: safe
+cwe: CWE-862
+file: app/admin/audit.py
+symbol: export_audit_log
+start_line: 61
+decorators: ['@app.route("/admin/audit/export")', '@admin_required']
+imports: [flask.Response, flask.request]
+precedent:
+  - pr_number: 118
+    file: app/admin/users.py
+    qualified_symbol: export_users
+    source: 118-export_users.py
+  - pr_number: 131
+    file: app/admin/billing.py
+    qualified_symbol: export_invoices
+    source: 131-export_invoices.py
+  - pr_number: 146
+    file: app/admin/audit.py
+    qualified_symbol: view_audit_log
+    source: 146-view_audit_log.py
+rationale: >-
+  The identical endpoint with @admin_required present, against the identical history.
+  Same route, same query, same response; the decorator is the only difference, so an
+  agent that fires on both is reacting to an admin export being added rather than to an
+  absent control.

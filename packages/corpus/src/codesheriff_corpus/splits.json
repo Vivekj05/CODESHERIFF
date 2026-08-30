@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generated": "2026-08-29",
+  "generated": "2026-08-30",
   "seed": 20260829,
   "ratios": {
     "calibration": 0.6,
     "test": 0.2,
     "validation": 0.2
   },
-  "notes": "Chapter 7. Stratified by CWE, assigned by twin pair, 60/20/20 (D-045).",
+  "notes": "Chapter 12 adds eight cross-PR pairs. The original thirty keep the homes the Chapter 7 draw gave them; only the new pairs were placed.",
   "assignments": {
     "cwe-022-avatar-serve": "calibration",
     "cwe-022-report-download": "test",
@@ -30,12 +30,20 @@
     "cwe-639-document-delete": "calibration",
     "cwe-639-invoice-fetch": "validation",
     "cwe-639-profile-update": "test",
+    "cwe-639-xpr-attachment-fetch": "test",
+    "cwe-639-xpr-note-delete": "calibration",
+    "cwe-639-xpr-report-share": "calibration",
     "cwe-798-payment-client": "calibration",
     "cwe-798-token-signing": "test",
     "cwe-798-warehouse-connect": "calibration",
     "cwe-862-admin-export": "validation",
     "cwe-862-billing-plan": "calibration",
     "cwe-862-delivery-replay": "test",
+    "cwe-862-xpr-audit-export": "calibration",
+    "cwe-862-xpr-feature-toggle": "test",
+    "cwe-862-xpr-queue-drain": "calibration",
+    "cwe-862-xpr-team-invite": "calibration",
+    "cwe-862-xpr-webhook-replay": "validation",
     "cwe-918-avatar-import": "validation",
     "cwe-918-link-preview": "calibration",
     "cwe-918-webhook-test": "calibration"

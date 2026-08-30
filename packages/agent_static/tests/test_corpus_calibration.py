@@ -104,13 +104,19 @@ def test_recall_and_precision_on_the_calibration_split() -> None:
     These are *not* calibrated figures and nothing may present them as such — they are a
     development measurement on the split reserved for development. Chapter 14 fits likelihood
     ratios, and the validation and test splits stay sealed until then.
+
+    The safe-twin count rose from 18 to 23 when Chapter 12 added eight cross-PR pairs, five of
+    which landed in calibration. Recall is unchanged at 13: those pairs are CWE-862 and
+    CWE-639, and no taint path can see a missing permission check — which is the heterogeneity
+    claim `test_authorisation_cases_are_left_to_another_witness` pins. Five more safe twins
+    this agent must stay quiet on is a strictly stronger false-positive measurement.
     """
     detected = sum(case.cwe in detected_cwes(case) for case in EXPECTED)
     false_positives = sum(case.cwe in detected_cwes(case) for case in SAFE)
 
     assert detected == len(EXPECTED) == 13
     assert false_positives == 0
-    assert len(SAFE) == 18
+    assert len(SAFE) == 23
 
 
 def test_the_agent_never_raises_on_any_corpus_case() -> None:

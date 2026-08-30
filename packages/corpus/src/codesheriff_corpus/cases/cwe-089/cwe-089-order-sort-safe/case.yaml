@@ -6,6 +6,19 @@ file: app/api/orders.py
 symbol: list_orders
 start_line: 77
 imports: [flask.request, flask.abort, app.db.cursor]
+precedent:
+  - pr_number: 52
+    file: app/api/orders.py
+    qualified_symbol: get_order
+    source: 52-get_order.py
+  - pr_number: 66
+    file: app/api/orders.py
+    qualified_symbol: count_orders
+    source: 66-count_orders.py
+# Chapter 12 negative control.
+# Precedent that establishes no control at all. Retrieval succeeds and mining finds nothing
+# to be missing, which must read as SILENCE — analysed, nothing regressed — and never as an
+# abstention, which is the statement reserved for a repository with no history to consult.
 rationale: >-
   The interpolated value is a column name the application chose, looked up through a
   fixed mapping; the untrusted string is only ever a key into that mapping and never

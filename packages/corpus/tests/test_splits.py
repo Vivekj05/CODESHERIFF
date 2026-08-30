@@ -12,7 +12,7 @@ import pytest
 
 from codesheriff_corpus import Split, load_cases, load_pairs, load_splits, pairs_in
 from codesheriff_corpus.loader import CorpusError
-from codesheriff_corpus.splits import DEFAULT_RATIOS, SplitFile, assign
+from codesheriff_corpus.splits import DEFAULT_RATIOS, SplitFile, _targets, assign
 
 
 def test_splits_load_and_cover_the_corpus_exactly() -> None:
@@ -49,11 +49,18 @@ def test_twins_are_never_split() -> None:
 
 
 def test_split_sizes_match_the_recorded_ratios() -> None:
-    """60/20/20 by pair (D-045)."""
+    """60/20/20 by pair (D-045), under the same allocation `assign` uses.
+
+    Compared against `_targets`, the largest-remainder allocation, rather than against
+    `round(total * ratio)` per split. Rounding each split independently does not sum to the
+    total: at 38 pairs it asks for 23 + 8 + 8 = 39. It happened to agree while the corpus held
+    30 pairs and 30 divides 60/20/20 exactly, so the arithmetic error was invisible until
+    Chapter 12 added eight cross-PR pairs.
+    """
     splits = load_splits()
-    total = len(splits.assignments)
-    for split, ratio in splits.ratios.items():
-        assert len(pairs_in(split)) == round(total * ratio), split.value
+    targets = _targets(len(splits.assignments), splits.ratios)
+    for split in Split:
+        assert len(pairs_in(split)) == targets[split], split.value
 
 
 def test_every_cwe_appears_in_the_calibration_split() -> None:
@@ -68,10 +75,36 @@ def test_every_cwe_appears_in_the_calibration_split() -> None:
     assert covered == {c.cwe for c in load_cases()}
 
 
-def test_assignment_is_reproducible_from_the_recorded_seed() -> None:
-    """The seed is in splits.json so the draw can be re-derived and shown to be unrigged."""
+def test_assignment_is_a_fixed_point_of_the_recorded_seed() -> None:
+    """Re-running the recorded procedure over the recorded assignment changes nothing.
+
+    This is the reproducibility claim an incrementally grown corpus can actually make, and it
+    is weaker than the one this test made before Chapter 12. A from-scratch draw over 38 pairs
+    does not reproduce the committed assignment, and must not: the original 30 were drawn when
+    the corpus held 30, and D-045 ranks never moving a settled pair above matching a fresh
+    draw. Re-deriving the whole thing therefore needs the order the pairs were added in, not
+    the seed alone.
+
+    What survives is checkable and is what the integrity claim rests on: the seed was fixed
+    before the draw and has not been rerolled, no settled pair has moved
+    (`test_assignment_never_moves_a_pair_that_already_has_a_split`), and running `assign`
+    again is a no-op — so no pair sits anywhere the recorded procedure would not have put it.
+    """
     splits = load_splits()
-    assert assign(seed=splits.seed, ratios=splits.ratios) == splits.assignments
+    assert assign(seed=splits.seed, ratios=splits.ratios, existing=dict(splits.assignments)) == (
+        splits.assignments
+    )
+
+
+def test_a_from_scratch_draw_is_deliberately_not_reproduced() -> None:
+    """The cost of immutability, asserted so it is a decision rather than a surprise.
+
+    If this ever starts passing, the corpus has been re-drawn from scratch — which would mean
+    settled pairs moved, including in and out of the sealed test split.
+    """
+    splits = load_splits()
+    fresh = assign(seed=splits.seed, ratios=splits.ratios)
+    assert fresh != splits.assignments
 
 
 def test_assignment_never_moves_a_pair_that_already_has_a_split() -> None:

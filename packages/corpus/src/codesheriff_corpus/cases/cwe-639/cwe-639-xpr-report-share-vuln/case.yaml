@@ -1,0 +1,27 @@
+case_id: cwe-639-xpr-report-share-vuln
+pair_id: cwe-639-xpr-report-share
+label: vulnerable
+cwe: CWE-639
+file: app/reports/service.py
+symbol: share_report
+enclosing_class: ReportService
+start_line: 118
+decorators: []
+imports: [app.reports.models.Report]
+detectable_by: [semantic.hosted, context.rag]
+precedent:
+  - pr_number: 126
+    file: app/reports/service.py
+    qualified_symbol: ReportService.get_report
+    source: 126-get_report.py
+  - pr_number: 133
+    file: app/reports/service.py
+    qualified_symbol: ReportService.delete_report
+    source: 133-delete_report.py
+rationale: >-
+  report_id is caller-supplied and the report is fetched and then shared outside the
+  account with no ownership assertion. Both merged methods on this service call
+  assert_owner with the fetched row and the current user immediately after the lookup,
+  so the guard is an established step in this repository's report flow rather than a
+  suggestion. Sharing is the most damaging of the three operations, and it is the one
+  that omits the check.

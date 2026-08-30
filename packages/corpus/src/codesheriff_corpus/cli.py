@@ -22,6 +22,7 @@ from codesheriff_corpus.splits import (
     SplitFile,
     assign,
     load_splits,
+    read_splits_file,
     write_splits,
 )
 
@@ -107,12 +108,14 @@ def assign_(
     notes: str = typer.Option("", help="Why this assignment was made."),
 ) -> None:
     """Place unassigned pairs. Never moves a pair that already has a split."""
-    try:
-        existing = dict(load_splits().assignments)
-    except CorpusError:
-        existing = {}
+    # Read the file directly rather than through `load_splits`, which refuses a
+    # half-assigned corpus — the state this command exists to resolve. Catching that
+    # refusal and continuing with nothing is how a re-run came to re-draw every settled
+    # pair instead of extending them (D-069).
+    committed = read_splits_file()
+    existing = dict(committed.assignments) if committed else {}
 
-    if existing and out.is_file():
+    if existing:
         typer.secho(f"keeping {len(existing)} existing assignments", fg=typer.colors.YELLOW)
 
     assignments = assign(seed=seed, existing=existing)

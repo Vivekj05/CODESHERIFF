@@ -8,6 +8,19 @@ enclosing_class: LinkPreview
 start_line: 41
 imports: [urllib.request]
 detectable_by: [structural.taint, structural.semgrep, semantic.hosted, runtime.sfi]
+precedent:
+  - pr_number: 88
+    file: app/previews/fetcher.py
+    qualified_symbol: LinkPreview.fetch_favicon
+    source: 88-fetch_favicon.py
+  - pr_number: 97
+    file: app/previews/oembed.py
+    qualified_symbol: OEmbedClient.discover
+    source: 97-discover.py
+# Chapter 12 negative control.
+# Both merged fetchers carry @rate_limit and neither twin does, so a classifier that read
+# any repeated decorator as an access control would fire on both members. Rate limiting is
+# availability, not authorization, and the agent must decline to map it to CWE-862.
 rationale: >-
   urlopen on a URL pasted into a message. urlopen additionally accepts file:// and ftp://,
   so the reachable surface is wider than HTTP alone. The byte cap bounds the response

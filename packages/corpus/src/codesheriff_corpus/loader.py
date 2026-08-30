@@ -11,6 +11,12 @@ Layout, one directory per case:
         case.yaml     labels and unit metadata
         post.py       the unit under analysis
         pre.py        optional; absent for an added function
+        precedent/    optional; merged sources this repository already accepted
+
+A cross-PR scenario is a case plus a history (Chapter 12). Each entry under
+`precedent:` in the manifest names a `.py` file in `precedent/`, and the source lives
+in that file for the same reason `post.py` does: it is code, and it has to survive
+tree-sitter and be reviewable in a diff.
 
 The source is kept in real `.py` files rather than embedded in the YAML. It is code:
 it has to survive tree-sitter, carry honest line numbers, and be reviewable in a
@@ -30,10 +36,11 @@ from typing import Any
 
 import yaml
 
-from codesheriff_corpus.models import CorpusCase, Label
+from codesheriff_corpus.models import CorpusCase, Label, PrecedentRecord
 
 CASES_DIRNAME = "cases"
 CASE_MANIFEST = "case.yaml"
+PRECEDENT_DIRNAME = "precedent"
 
 
 class CorpusError(RuntimeError):
@@ -76,6 +83,53 @@ def _read_optional(case_dir: Traversable, name: str) -> str | None:
     return target.read_text(encoding="utf-8") if target.is_file() else None
 
 
+def _load_precedent(case_dir: Traversable, raw: Any) -> tuple[PrecedentRecord, ...]:
+    """The manifest's `precedent:` entries, with each source read from `precedent/`.
+
+    Ordered by pull request and then symbol, so a history reads as a timeline and the
+    corpus hash does not depend on the order someone happened to type the entries in.
+
+    A `.py` file in `precedent/` that no entry names is an error. An unreferenced
+    source is a history the agent never sees, which is indistinguishable from the case
+    having no precedent at all — and that is the difference between a case that
+    measures retrieval and a case that measures nothing.
+    """
+    entries = raw.pop("precedent", None) or []
+    if not isinstance(entries, list):
+        raise CorpusError(f"{case_dir.name}: `precedent:` must be a list of records")
+
+    root = case_dir / PRECEDENT_DIRNAME
+    records: list[PrecedentRecord] = []
+    named: set[str] = set()
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise CorpusError(f"{case_dir.name}: a precedent entry must be a mapping")
+        source = entry.pop("source", None)
+        if not isinstance(source, str) or not source:
+            raise CorpusError(f"{case_dir.name}: a precedent entry needs a `source:` filename")
+        target = root / source
+        if not target.is_file():
+            raise CorpusError(f"{case_dir.name}: precedent/{source} does not exist")
+        named.add(source)
+        try:
+            records.append(
+                PrecedentRecord(**entry, accepted_src=target.read_text(encoding="utf-8"))
+            )
+        except Exception as exc:
+            raise CorpusError(f"{case_dir.name}: precedent/{source}: {exc}") from exc
+
+    if root.is_dir():
+        on_disk = {p.name for p in root.iterdir() if p.name.endswith(".py")}
+        if orphaned := on_disk - named:
+            raise CorpusError(
+                f"{case_dir.name}: precedent/ holds sources no entry names: "
+                f"{sorted(orphaned)}. An unread history measures nothing."
+            )
+
+    return tuple(sorted(records, key=lambda r: (r.pr_number, r.qualified_symbol, r.file)))
+
+
 def _load_case_dir(case_dir: Traversable) -> CorpusCase:
     raw: Any = yaml.safe_load((case_dir / CASE_MANIFEST).read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
@@ -85,8 +139,15 @@ def _load_case_dir(case_dir: Traversable) -> CorpusCase:
     if post_src is None:
         raise CorpusError(f"{case_dir.name}: post.py is the unit under analysis and is required")
 
+    precedent = _load_precedent(case_dir, raw)
+
     try:
-        case = CorpusCase(**raw, post_src=post_src, pre_src=_read_optional(case_dir, "pre.py"))
+        case = CorpusCase(
+            **raw,
+            post_src=post_src,
+            pre_src=_read_optional(case_dir, "pre.py"),
+            precedent=precedent,
+        )
     except Exception as exc:
         raise CorpusError(f"{case_dir.name}: {exc}") from exc
 

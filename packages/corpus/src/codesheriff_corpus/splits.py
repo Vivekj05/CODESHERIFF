@@ -80,6 +80,26 @@ def _splits_path() -> object:
     return files("codesheriff_corpus") / SPLITS_FILENAME
 
 
+def read_splits_file() -> SplitFile | None:
+    """The committed assignment exactly as written, or None if there is not one yet.
+
+    Deliberately *without* the completeness check `load_splits` applies. `assign` is
+    only ever run after new cases have been added, which is exactly when that check
+    fails — so routing the CLI through `load_splits` meant the one command that must
+    preserve settled assignments received none of them and re-drew the whole corpus.
+    Chapter 12 found it by adding eight pairs and watching sixteen of the settled
+    thirty move, four of them out of the sealed test split (D-069).
+
+    Consumers still go through `load_splits`. A reader that silently accepted a
+    half-assigned file would let cases drop out of a split without saying so, which is
+    the failure that check exists to prevent.
+    """
+    target = _splits_path()
+    if not target.is_file():  # type: ignore[attr-defined]
+        return None
+    return SplitFile.model_validate_json(target.read_text(encoding="utf-8"))  # type: ignore[attr-defined]
+
+
 def load_splits() -> SplitFile:
     """Read the committed assignment, and check it still describes this corpus.
 

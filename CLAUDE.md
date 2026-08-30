@@ -82,9 +82,8 @@ odd choice and is load-bearing:
 ## Current state — read `AUDIT.md` before writing code
 
 **The committed code does not implement the design above.** A full conformance audit found that
-three of four analysis components are shells. Two still are:
+three of four analysis components are shells. One still is:
 
-- The context agent has **no RAG reasoning** — four hard-coded substring tests.
 - The runtime agent **does not exist**.
 
 The static agent's taint engine *was* the worst of them — the def-use graph was built and discarded,
@@ -92,6 +91,10 @@ and "taint paths" were a line-number cross-product. Chapter 10 replaced it (`AUD
 semantic agent's anti-sycophancy exemplars *were* on disk and never loaded, its prompt delimiter was
 forgeable by the code it analysed, and its hallucination gate had three of four checks with two of
 them weakened; Chapter 11 closed all of it (`AUDIT.md` 0.3, 0.4, 3.9–3.12).
+
+The context agent *was* four hard-coded substring tests over a vector store its reasoning never
+consulted, sharing one global collection across every repository; Chapter 12 replaced all of it
+(`AUDIT.md` 0.2, 3.7, 3.8).
 
 The extraction *was* per-file diff fragments; Chapter 8 closed that (`AUDIT.md` 4.1 and 4.2). The
 webhook *was* unauthenticated; Chapter 6 closed that (`AUDIT.md` 0.1 and 4.3). The fusion engine
@@ -120,7 +123,7 @@ CODESHERIFF/
 │   ├── corpus/           # 60 labelled units, 30 twin pairs, committed splits (Ch 7)
 │   ├── agent_static/     # structural.taint (Ch 10) + structural.semgrep
 │   ├── agent_semantic/   # semantic.hosted
-│   ├── agent_context/    # context.rag
+│   ├── agent_context/    # context.rag (Ch 12)
 │   ├── agent_runtime/    # runtime.sfi                                  (empty — Ch 13)
 │   ├── engine/           # ChangeUnit extraction, fusion, calibration. No DB client, no agents.
 │   └── storage/          # SQLAlchemy models, Alembic, pgvector precedent store
@@ -131,7 +134,7 @@ CODESHERIFF/
 └── docs/history/         # Superseded specs, kept for provenance
 ```
 
-⚠️ **The pipeline runs end to end; two of the four agents still do not do the right work.**
+⚠️ **The pipeline runs end to end; one of the four agents still does not exist.**
 Chapter 2 froze the contract at v2.0.0 and got every gate green. Chapter 6 made the plumbing real —
 verified webhook, queued audit, worker-posted comment. Chapter 7 built the ground truth every number
 will be fitted against. Chapter 8 made the pipeline hand over the right objects. Chapter 9 closed
@@ -140,12 +143,14 @@ and fusion turns them into a posterior that can go down as well as up.
 
 Chapter 10 made the first agent do real work: `structural.taint` propagates over a def-use graph
 it consumes, and is measured — 13/13 on the calibration cases the corpus predicts for it, 0 false
-positives across 18 safe twins. Chapter 11 made the second: `semantic.hosted` loads its exemplars,
+positives across 23 safe twins. Chapter 11 made the second: `semantic.hosted` loads its exemplars,
 bounds the untrusted region with an unforgeable sentinel, and is measured the same way — 0%
-injection subversion, a 94% safe-twin pass rate, zero hallucinated sinks. The context agent is still
-four substring tests and the runtime agent still does not exist. Both abstain under their own names,
-at a likelihood ratio of exactly 1.0, on the record, per unit — so a missing witness costs the
-posterior nothing and hides from nobody.
+injection subversion, a 94% safe-twin pass rate, zero hallucinated sinks. Chapter 12 made the
+third: `context.rag` mines the control vocabulary of retrieved merged code instead of running four
+substring tests, and is measured on cross-PR scenarios the same chapter added to the corpus — 5/5
+recall, 0 false positives across 11 twins and negative controls. The runtime agent still does not
+exist; it abstains under its own name, at a likelihood ratio of exactly 1.0, on the record, per
+unit — so a missing witness costs the posterior nothing and hides from nobody.
 
 Every number is **provisional**. The ratios, the prior and the threshold are hand-set, and D-010
 requires them presented as such until Chapter 14 fits them on the calibration split.
@@ -238,6 +243,47 @@ Never construct a prompt without `build_prompt`, and never add a field to the te
 attacker-controlled text outside the sentinel. `n_samples` is 3 with varying seeds, and the spread
 between them is what `raw_score` is derived from — replaying one answer three times would look like
 unanimous confidence.
+
+**Repository precedent.** `context_agent` reports a security control that this repository's own
+merged history establishes and the unit under analysis does not apply. Which controls a repository
+applies is **learned** from retrieved merged code; which of them are authorization controls is a
+**fixed** table (D-071). Making both halves learned would mean inferring a CWE from a name whose
+meaning the agent was never told; making both halves fixed would be a second rule engine with a
+hard-coded guard list, correlated with the one that already exists.
+
+There is **no LLM in this agent**, deliberately. Its basis is precedent and its failure mode is a
+repository with no relevant history; a model-driven version would fail the way `semantic.hosted`
+fails, and heterogeneity is the whole argument for four witnesses.
+
+A control is established either by **the same qualified symbol** carrying it in one merge — matched
+on the symbol, never the path, because a move is what changes the path — or by **two or more
+distinct sibling symbols** sharing it. One neighbour's habit is a coincidence, and treating it as a
+rule would make every added function a regression against whichever neighbour retrieval returned.
+
+It reports **CWE-862 and CWE-639 only**, and that narrowness is the mechanism, not a limitation. A
+mined control that maps to no in-scope CWE cannot be reported at all, so a repository where every
+merged view calls `escape()` has a real convention, a unit that drops it has really regressed, and
+this witness still says nothing — escaping is not authorization. `rate_limit` and `throttle` are
+absent from the table rather than excluded from it, and there is no bare `access`, `check`,
+`verify`, `validate` or `require` token; corpus pairs fire both traps on both twins.
+
+**Retrieval is a Protocol the agent declares and `apps/worker` implements** (D-072). The agent holds
+no store, no session and no embedding model — `lint-imports` fails the build for an agent that
+reaches a database client, and the split is also what lets the corpus measurement run the production
+`analyze()` path with no database and no model download. Cross-repository retrieval is impossible
+structurally: `repository_id` is bound when the retriever is constructed, `retrieve(unit, limit)`
+takes no repository, and the filter is in SQL. `unit.repo` is deliberately not consulted.
+
+**Embedding failure is loud, and there is no fallback branch.** A missing library, an unloadable
+model or a wrong output dimension raises `RetrievalUnavailableError`, which the agent records as a
+`retrieval_unavailable` abstention — distinct from `no_precedent`, because a store that is down is
+not a repository that is new. `AUDIT.md` 3.8 is what conflating them looked like: a 384-dimensional
+MD5 term-hasher, the default path for a normal install, reporting noise with no log line.
+
+**Precedent is written by a backfill command, never by the audit path** —
+`codesheriff-worker precedent backfill`. One chunk per **symbol**, never per pull request, and only
+the merged side: the base version is already precedent from an earlier merge, and indexing both
+would let a control a pull request deliberately removed go on establishing itself forever.
 
 **Fusing evidence.** `codesheriff_engine.fusion` multiplies one likelihood ratio per **witness**
 — four factors, always four, whatever the agents said. `fusion/witnesses.py` is the only place that
@@ -358,6 +404,9 @@ uv run codesheriff-corpus show cwe-862-admin-export-vuln
 
 uv run codesheriff-engine fuse evidence.json       # posterior + one row per witness. No agents.
 
+# The precedent store context.rag reasons from. The ONLY writer; the audit path never ingests.
+uv run codesheriff-worker precedent backfill --repository-id 1 --repo-full-name owner/name \n    --installation-id 42 --pr 118 --head-sha <sha>
+
 uv run uvicorn codesheriff_api.main:app --reload   # /health, /auth/*, /repositories, /webhooks/github
 
 # The worker. Needs Redis; without it the API answers 503 on the webhook rather than losing work.
@@ -392,8 +441,8 @@ Signing in needs a registered GitHub App — `docs/github-app-setup.md`. Without
 `501` naming the missing variable rather than failing at import, so `/health` works on a machine
 that has never seen a `.pem`.
 
-All five Python gates and both frontend gates are green as of Chapter 11 (881 tests with a
-database, 753 + 128 skips without).
+All five Python gates and both frontend gates are green as of Chapter 12 (965 tests with a
+database, 837 + 128 skips without).
 
 **Measuring an agent.** `packages/agent_static/tests/test_corpus_calibration.py` runs the taint
 engine over the corpus and asserts recall and false positives per case. It reads the **calibration
@@ -409,6 +458,13 @@ recording once is how both hold (D-068). Editing the prompt, the system prompt o
 changes each cassette's recorded fingerprint and turns the suite red — deliberately. A prompt edit
 invalidates every number measured against the old prompt, so re-record with
 `tools/record_cassettes.py` rather than reaching for the fingerprint.
+
+`packages/agent_context/tests/test_corpus_context.py` does the same for `context.rag`, under the
+same restriction, injecting a deterministic token-overlap retriever over each case's authored
+history — no database, no model download, no network, and the production `analyze()` path. What it
+does not measure is pgvector's own nearest-neighbour ordering; that waits for Chapter 14, which
+needs a populated store anyway. `test_a_case_with_a_history_is_never_an_abstention` is the guard
+that keeps the measurement from passing vacuously against an agent that never ran.
 
 **Semgrep has no Windows build**, so `structural.semgrep` abstains with `tool_unavailable` on a
 Windows dev machine and the structural witness is the taint engine alone. That is a correctly

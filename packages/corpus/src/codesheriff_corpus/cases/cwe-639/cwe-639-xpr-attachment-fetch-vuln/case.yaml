@@ -1,0 +1,26 @@
+case_id: cwe-639-xpr-attachment-fetch-vuln
+pair_id: cwe-639-xpr-attachment-fetch
+label: vulnerable
+cwe: CWE-639
+file: app/attachments/views.py
+symbol: download_attachment
+start_line: 45
+decorators: ['@bp.get("/attachments/<int:attachment_id>/download")']
+imports: [flask.send_file]
+detectable_by: [semantic.hosted, context.rag]
+precedent:
+  - pr_number: 161
+    file: app/attachments/views.py
+    qualified_symbol: get_attachment
+    source: 161-get_attachment.py
+  - pr_number: 167
+    file: app/attachments/views.py
+    qualified_symbol: delete_attachment
+    source: 167-delete_attachment.py
+rationale: >-
+  An incrementing attachment id from the path selects the file that is streamed back,
+  with no check of who owns it. The two merged attachment endpoints carry require_owner
+  with the same argument naming the path parameter, so the convention is specific enough
+  to name the key it guards. stored_path comes from the row rather than from the
+  request, so this is an ownership failure and not a path traversal, and the twin exists
+  partly to hold that distinction.

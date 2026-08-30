@@ -1843,3 +1843,209 @@ that describes a prompt nobody sends any more.
 The cassettes are a snapshot of one model on one date. They are development measurements on the
 split reserved for development, and D-010 applies: nothing may present them as calibrated. Chapter
 14 fits the ratios, and if the model is re-pinned (D-065) every recording must be refreshed first.
+
+---
+
+## D-069 — `assign` reads the committed file directly; routing it through `load_splits` re-drew the corpus
+
+**Date:** 2026-08-30 · **Status:** ACTIVE · **Fixes** a defect in D-045's mechanism · **Chapter:** 12
+
+**Decision.** `codesheriff-corpus assign` reads `splits.json` through a new `read_splits_file`,
+which parses the committed assignment and applies **none** of `load_splits`'s consistency checks.
+Consumers keep going through `load_splits`.
+
+**The defect.** D-045 promises that assignment "will not move a pair that already has a home", and
+`assign` implements that faithfully — given the existing assignments. The CLI obtained them with:
+
+```python
+try:
+    existing = dict(load_splits().assignments)
+except CorpusError:
+    existing = {}
+```
+
+`load_splits` raises `CorpusError` when any known pair has no split. That is correct for a reader —
+a half-assigned file would let a case drop silently out of a split. But it is precisely the state
+the corpus is in **whenever new cases have just been added**, which is the only situation in which
+`assign` is ever run. So the one command whose job is to extend an assignment received an empty one
+and re-drew the entire corpus from the seed.
+
+Adding the eight Chapter 12 pairs and re-running it moved **16 of the 30 settled pairs**, including
+four in or out of the sealed test split:
+
+```
+cwe-089-user-lookup      calibration -> test
+cwe-639-profile-update   test        -> calibration
+cwe-862-admin-export     validation  -> test
+cwe-798-token-signing    test        -> calibration
+```
+
+Had that been committed, every future claim about the test split would have described a split that
+was silently reshuffled the last time anyone added a case. §6 permits the test split to be evaluated
+exactly once; a split whose membership changes underneath that evaluation makes the claim
+meaningless, and nothing in the suite would have said so.
+
+**Why the guard was worth keeping anyway.** The temptation is to make `load_splits` tolerant. That
+trades a loud failure in one command for a silent one everywhere else: `cases_in(Split.CALIBRATION)`
+would quietly return fewer cases than the corpus holds. The right shape is two readers with
+different contracts, which is what this is.
+
+**What it cost, and what survives.** Reproducibility is now weaker than it was, and honestly so.
+`test_assignment_is_reproducible_from_the_recorded_seed` asserted that a from-scratch draw
+reproduces the committed file; that cannot hold for a corpus grown in increments, because the first
+thirty pairs were drawn when the corpus held thirty. Re-deriving the whole assignment needs the
+order cases were added in, not the seed alone.
+
+What replaced it is checkable, and is what the integrity claim actually rests on:
+
+- `test_assignment_is_a_fixed_point_of_the_recorded_seed` — running the recorded procedure over the
+  recorded assignment changes nothing, so no pair sits anywhere the procedure would not have put it.
+- `test_a_from_scratch_draw_is_deliberately_not_reproduced` — asserts the *difference*, so a future
+  re-draw from scratch shows up as this test starting to pass rather than as a large diff nobody
+  reads.
+- `test_assignment_never_moves_a_pair_that_already_has_a_split`, which already existed and passed
+  throughout — it exercises `assign` directly and never went near the CLI's error handling. That is
+  the lesson worth keeping: the invariant was tested, the *call site* was not.
+
+**Also fixed here.** `test_split_sizes_match_the_recorded_ratios` compared each split against
+`round(total * ratio)`, which does not sum to the total — at 38 pairs it asks for 23 + 8 + 8 = 39.
+It agreed while the corpus held 30 pairs, because 30 divides 60/20/20 exactly. It now compares
+against `_targets`, the largest-remainder allocation `assign` itself uses.
+
+---
+
+## D-070 — Precedent is per-symbol merged source, and a corpus history has the same shape as a stored one
+
+**Date:** 2026-08-30 · **Status:** ACTIVE · **Closes** Chapter 7's deferred deliverable · **Chapter:** 12
+
+**Decision.** A precedent record is *one merged pull request, one file, one qualified symbol, one
+bounded excerpt of accepted source*. It has three representations and they are deliberately the same
+shape:
+
+| Where | Type |
+|---|---|
+| The database | `codesheriff_storage.PrecedentChunk` / `PrecedentMatch` |
+| The corpus | `codesheriff_corpus.PrecedentRecord`, from `precedent/*.py` beside the case |
+| The agent | `context_agent.precedent.Precedent` |
+
+**Rationale.** Chapter 7 deferred the ~15 cross-PR scenarios because "a cross-PR scenario is a case
+plus a precedent history, and the shape of a precedent document is Chapter 12's to design". Fixing
+it alongside the agent is what makes the two sides provably the same: an agent measured against a
+corpus history that differed in shape from a stored chunk would not be the agent that runs in
+production, and a ratio fitted on one could not be applied to the other.
+
+**Per symbol, never per pull request** (PROJECT_CONTEXT.md §5). `bge-small-en-v1.5` truncates at 512
+tokens, so a PR-level document is silently cut and matches poorly against a function-level query —
+and a per-PR vector cannot answer "which symbol carried this guard", which is the only question the
+context agent asks.
+
+**Both twins carry the same history.** A twin whose history differed would let the agent be right
+about the pair for the wrong reason: the difference, rather than the guard, would be doing the work.
+`test_twins_share_a_precedent_history` asserts it.
+
+**What was authored.** Eight new twin pairs (16 cases), all CWE-862 and CWE-639, in which the unit
+alone carries no evidence of a missing control and only the repository's history does — five of them
+landed in the calibration split, covering all three ways a control gets established. Six existing
+calibration cases additionally gained histories as **negative controls**, where precedent
+establishes a convention that is real, that the unit really breaks, and that this witness must
+decline to report: `escape()` on the CWE-79 pair, `@rate_limit` on the CWE-918 pair, and a history
+with no controls at all on the CWE-89 pair, which must read as SILENCE rather than an abstention.
+
+**Consequences.** `corpus_hash` changes, which Chapter 7 anticipated and which is safe only because
+no calibration artifact exists yet. Precedent sources are compiled by a test for the same reason
+`post.py` is — tree-sitter tolerates broken syntax, so a stray indent would silently establish a
+convention from a fragment. Method sources are written at column zero with `enclosing_class` set,
+matching the existing cases; an indented excerpt does not compile.
+
+---
+
+## D-071 — The context agent mines its control vocabulary from precedent and classifies it with a fixed table
+
+**Date:** 2026-08-30 · **Status:** ACTIVE · **Closes** `AUDIT.md` 0.2, 3.7, 3.8 · **Chapter:** 12
+
+**Decision.** `context.rag` reads the **control surface** of a unit and of each retrieved excerpt —
+decorators and called names, from the syntax tree — and reports a control that the repository's own
+history establishes and this unit does not apply. Which controls a repository applies is *learned*;
+which of them are authorization controls is a *fixed* table in `classify.py`.
+
+**No LLM.** `CLAUDE.md` gives this witness the basis "this repository's own precedent" and the
+failure mode "repo has no relevant history". A model-driven version would share `semantic.hosted`'s
+failure mode — confidently wrong, or agreeable — and heterogeneity is the entire justification for
+fusing four witnesses rather than trusting one. `reasoning/prompts/cross_pr_v1.md`, which the audit
+found was referenced by no code, is deleted rather than wired up.
+
+**Both halves are needed.** All-learned would mean inferring a CWE from a name whose meaning the
+agent was never told. All-fixed would be a second rule engine with a hard-coded guard list — which
+is `structural.taint` with worse coverage, and correlated with it.
+
+**Established two ways.** The same qualified symbol carrying the control in one merge settles it:
+frequency cannot decide a function that has only ever been merged once, and matching is on the
+symbol rather than the path, because a move is what changes the path. Otherwise two or more distinct
+retrieved symbols must share it — one neighbour's habit is a coincidence, and treating it as a rule
+would make every added function a regression against whichever neighbour retrieval returned.
+
+**CWE-862 and CWE-639 only,** and the narrowness does three jobs. A control that maps to nothing
+cannot be reported at all, since `Evidence.detection` requires an in-scope CWE — that is the
+mechanism stopping a mined convention from becoming a finding. These are the two CWEs the taint
+engine holds no rules for, which is what `CLAUDE.md` means by the authorization cases existing "to
+prove heterogeneity". And reporting CWE-89 from a missing `execute(query, params)` convention would
+put this witness in the structural witness's territory by a weaker method.
+
+`rate_limit`, `throttle` and `audit_log` are absent from the table rather than excluded from it, and
+there is no bare `access`, `check`, `verify`, `validate` or `require` token — the four commonest
+verbs in any codebase would turn `validate_payload` into an access control. Two corpus pairs carry
+histories that fire exactly these traps on both twins, so the omissions are measured, not trusted.
+
+**It corroborates, it does not solo** (D-012). Evidence is keyed through `unit.key_for(cwe)`. With
+the provisional ratios its strongest detection takes a 0.05 prior to 0.18 against a 0.70 threshold,
+so a finding it raised alone could never alert; a witness that can only corroborate must key like
+one.
+
+**Numbers that are provisional and say so** (D-010). `MIN_SUPPORTING_SYMBOLS` is 2,
+`FULL_CREDIT_SIMILARITY` is 0.85, `min_similarity` is 0.35 and `top_k` is 5. `raw_score` is 0.85 for
+the strong form — same symbol, or three or more siblings — and 0.65 otherwise, damped only once
+similarity falls below full credit. An earlier version multiplied by raw similarity and pushed every
+detection backed by perfectly good 0.9 precedent down to 0.765, below the 0.8 tier boundary in
+`WitnessRatios.for_score`: retrieval doing its job demoted every claim the agent could make, and the
+tier boundary stopped meaning anything.
+
+---
+
+## D-072 — Retrieval is a Protocol the agent declares and `apps/worker` implements
+
+**Date:** 2026-08-30 · **Status:** ACTIVE · **Closes** `AUDIT.md` 0.2, 3.8 · **Chapter:** 12
+
+**Decision.** `context_agent` declares `PrecedentRetriever` and holds no store, no session, no
+embedding model and no local directory. `apps/worker/precedent/` supplies the implementation, and
+`load_agents(deps=AgentDeps(precedent_retriever=...))` injects it. `chroma_db_dir` is gone with the
+store it pointed at.
+
+**Cross-repository retrieval is impossible structurally** (`AUDIT.md` 0.2). `repository_id` is bound
+when the retriever is constructed; `retrieve(unit, limit)` takes no repository, and
+`search_precedents` filters in SQL. `unit.repo` is deliberately not consulted — it is a string on an
+object the agent was handed, whereas the binding comes from the audit's own repository row. The
+superseded store put every repository in one global Chroma collection and never recorded which
+repository a document came from, so no filter could even be added without a full re-ingest. A filter
+that must be passed correctly is one that will eventually be passed wrongly.
+
+**Embedding failure is loud** (`AUDIT.md` 3.8). There is no fallback branch. A missing library, an
+unloadable model and a wrong output dimension each raise `RetrievalUnavailableError`, which the
+agent records as a `retrieval_unavailable` abstention — distinct from `no_precedent`, because a
+store that is down is not a repository that is new. Conflating them is what let an MD5 term-hasher
+report, silently and forever, that every repository it was pointed at happened to have no relevant
+history. `sentence-transformers` is declared by `apps/worker`, the package that actually uses it.
+
+**One model, both directions.** `load_embedder` serves ingestion and querying, and `query_text`
+renders both sides identically. A store written with one model and queried with another is a
+distance between two unrelated vector spaces: it does not error, it answers wrongly.
+
+**The retriever opens its own session.** Agents run concurrently in a thread pool, a SQLAlchemy
+`Session` is not thread-safe, and the audit's session is mid-transaction with unflushed evidence
+rows on it. It is handed the session *factory* instead.
+
+**Ingestion is a backfill command, not a pipeline step.** An audit that also ingested would make the
+store's contents depend on which pull requests happened to be reviewed and in what order, and would
+put a write transaction inside a read the agents are already running concurrently against. It also
+means Chapter 14 can stand up a precedent store with no GitHub credentials. Only the merged side is
+indexed: the base version is already precedent from an earlier merge, and indexing both would let a
+control that a pull request deliberately removed go on establishing itself forever.

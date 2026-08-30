@@ -121,7 +121,8 @@ def test_an_agent_declaring_an_unregistered_id_is_replaced() -> None:
             return []
 
     slot = AGENT_SLOTS[0]
-    agents = load_agents((slot.__class__(slot.witness, slot.agent_id, Rogue),))
+    # Slot loaders take the injected dependencies (Chapter 12), so this one ignores them.
+    agents = load_agents((slot.__class__(slot.witness, slot.agent_id, lambda deps: Rogue()),))
 
     assert isinstance(agents[0], UnavailableAgent)
     assert agents[0].reason == "agent_id_unregistered"

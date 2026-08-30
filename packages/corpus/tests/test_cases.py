@@ -23,8 +23,19 @@ from codesheriff_corpus.models import CORPUS_REPO
 
 
 def test_corpus_loads() -> None:
+    """60 hand-written units (Chapter 7, D-044) plus 16 cross-PR scenarios (Chapter 12).
+
+    A cross-PR scenario is a case *plus a precedent history*, which is why they landed a
+    chapter later: the shape of a precedent document was Chapter 12's to fix, and authoring
+    them against a guessed schema would have meant rewriting them.
+
+    More than 16 cases carry a history — six of the original sixty gained one as negative
+    controls, where precedent establishes a convention that is real and is deliberately not
+    this witness's to report.
+    """
     cases = load_cases()
-    assert len(cases) == 60, "Chapter 7 authors 60 units; see DECISIONS.md D-044"
+    assert len(cases) == 76
+    assert len(load_pairs()) == 38
     assert len({c.case_id for c in cases}) == len(cases)
 
 

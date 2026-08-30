@@ -1,0 +1,21 @@
+case_id: cwe-862-xpr-feature-toggle-safe
+pair_id: cwe-862-xpr-feature-toggle
+label: safe
+cwe: CWE-862
+file: app/flags/views.py
+symbol: set_feature_flag
+start_line: 54
+decorators: ['@bp.post("/flags/<name>")']
+imports: [flask.jsonify, flask.request]
+precedent:
+  - pr_number: 170
+    file: app/flags/views.py
+    qualified_symbol: list_feature_flags
+    source: 170-list_feature_flags.py
+  - pr_number: 178
+    file: app/flags/views.py
+    qualified_symbol: delete_feature_flag
+    source: 178-delete_feature_flag.py
+rationale: >-
+  The same view with the same ensure_staff(request.user) call its two merged siblings
+  open with. The remaining three lines are identical to the vulnerable twin.

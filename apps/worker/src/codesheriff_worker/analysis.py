@@ -39,6 +39,7 @@ from typing import Any, Protocol
 
 from codesheriff_contracts import ChangeUnit, Evidence
 from codesheriff_engine.fusion import CONTEXT, RUNTIME, SEMANTIC, STRUCTURAL, WITNESS_OF_AGENT
+from context_agent.precedent import PrecedentRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -78,25 +79,44 @@ class UnavailableAgent:
         ]
 
 
-def _load_static() -> Agent:
+@dataclass(frozen=True)
+class AgentDeps:
+    """Infrastructure an agent needs but must not reach for itself.
+
+    Agents may import `codesheriff_contracts` and nothing else, so anything that talks to a
+    database, a model or a network arrives through a Protocol the agent declares and this
+    process implements. One field today; Chapter 13's sandbox handle is the next.
+
+    Empty is a valid state and is what a bare `load_agents()` produces: the agents that need a
+    dependency abstain under a reason naming it, rather than substituting something that
+    answers anyway.
+    """
+
+    precedent_retriever: PrecedentRetriever | None = None
+
+
+def _load_static(deps: AgentDeps) -> Agent:
     from static_agent.agent import StaticAgent
 
     return StaticAgent()
 
 
-def _load_semantic() -> Agent:
+def _load_semantic(deps: AgentDeps) -> Agent:
     from semantic_agent.agent import SemanticAgent
 
     return SemanticAgent()
 
 
-def _load_context() -> Agent:
+def _load_context(deps: AgentDeps) -> Agent:
     from context_agent.agent import ContextAgent
 
-    return ContextAgent()
+    # None is passed through rather than defaulted away. `ContextAgent` warns and abstains on
+    # every unit with no retriever, which is the honest report; giving it a store of its own
+    # here would be this process deciding what the agent's history is.
+    return ContextAgent(retriever=deps.precedent_retriever)
 
 
-def _load_runtime() -> Agent:
+def _load_runtime(deps: AgentDeps) -> Agent:
     raise ModuleNotFoundError(
         "runtime.sfi is not built — PLAN.md Chapter 13. The Wasmtime sandbox is "
         "isolation infrastructure first and a detection agent second."
@@ -112,7 +132,7 @@ class AgentSlot:
     """The id used when the slot cannot be filled, so an absent agent still abstains
     under a name fusion recognises rather than vanishing from the record."""
 
-    load: Callable[[], Agent]
+    load: Callable[[AgentDeps], Agent]
 
 
 AGENT_SLOTS: tuple[AgentSlot, ...] = (
@@ -135,7 +155,10 @@ def agent_id_of(agent: Any, default: str) -> str:
     return str(value) if value else default
 
 
-def load_agents(slots: tuple[AgentSlot, ...] = AGENT_SLOTS) -> list[Agent]:
+def load_agents(
+    slots: tuple[AgentSlot, ...] = AGENT_SLOTS,
+    deps: AgentDeps | None = None,
+) -> list[Agent]:
     """Fill every slot, substituting an abstaining stand-in for any that will not load.
 
     An agent whose declared `agent_id` is not registered against a witness is also
@@ -143,10 +166,11 @@ def load_agents(slots: tuple[AgentSlot, ...] = AGENT_SLOTS) -> list[Agent]:
     in a factor nobody calibrated — and refusing at load time turns that into one log line
     at worker start rather than an exception in the middle of every audit.
     """
+    resolved = deps or AgentDeps()
     agents: list[Agent] = []
     for slot in slots:
         try:
-            agent = slot.load()
+            agent = slot.load(resolved)
         except Exception as exc:
             logger.info("Agent slot %s unavailable: %s", slot.witness, exc)
             agents.append(UnavailableAgent(slot.agent_id, "agent_unavailable", str(exc)[:400]))

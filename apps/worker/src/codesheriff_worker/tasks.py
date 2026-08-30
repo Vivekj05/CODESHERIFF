@@ -54,11 +54,12 @@ from codesheriff_storage import (
     to_evidence_row,
     to_finding,
 )
-from codesheriff_worker.analysis import Agent, analyse_unit, load_agents
+from codesheriff_worker.analysis import Agent, AgentDeps, analyse_unit, load_agents
 from codesheriff_worker.celery_app import app, config
 from codesheriff_worker.comment import render
 from codesheriff_worker.github_gateway import GitHubGateway, GitHubKitGateway
 from codesheriff_worker.pipeline import fetch_and_extract
+from codesheriff_worker.precedent import PgVectorPrecedentRetriever, load_embedder
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +129,7 @@ def execute_audit(
             if audit is None:
                 logger.info("Audit %s was not claimable — already running, or superseded", audit_id)
                 return "not_claimable"
-            return _run_claimed_audit(db, audit, gateway, url_for)
+            return _run_claimed_audit(db, factory, audit, gateway, url_for)
     except Exception as exc:
         logger.exception("Audit %s failed", audit_id)
         _record_failure(factory, audit_id, exc)
@@ -153,6 +154,7 @@ def _record_failure(
 
 def _run_claimed_audit(
     db: DbSession,
+    factory: sessionmaker[DbSession],
     audit: Audit,
     gateway: GitHubGateway,
     url_for: Callable[[uuid.UUID], str],
@@ -169,7 +171,7 @@ def _run_claimed_audit(
         base_sha=audit.base_sha,
         head_sha=audit.head_sha,
     )
-    evidence, findings = _analyse(db, audit, extraction.units)
+    evidence, findings = _analyse(db, factory, audit, extraction.units)
 
     # Checked immediately before writing to GitHub, not only at the start. The window between the
     # two is the whole pipeline, and a comment about a commit that is no longer at the head is
@@ -208,8 +210,26 @@ def _run_claimed_audit(
     return "succeeded"
 
 
+def _deps_for(factory: sessionmaker[DbSession], audit: Audit) -> AgentDeps:
+    """Infrastructure this audit's agents may use, bound to this audit's repository.
+
+    The retriever is constructed against `audit.repository_id` and holds no way to name
+    another repository (`AUDIT.md` 0.2). It is given the session *factory* rather than the
+    audit's open session: agents run concurrently in a thread pool, a SQLAlchemy session is not
+    thread-safe, and the audit's session is mid-transaction with unflushed evidence on it.
+    """
+    return AgentDeps(
+        precedent_retriever=PgVectorPrecedentRetriever(
+            session_factory=factory,
+            repository_id=audit.repository_id,
+            embedder=load_embedder(),
+        )
+    )
+
+
 def _analyse(
     db: DbSession,
+    factory: sessionmaker[DbSession],
     audit: Audit,
     units: list[ChangeUnit],
     agents: list[Agent] | None = None,
@@ -225,7 +245,7 @@ def _analyse(
     no units at all.** `change_units` records what this audit *looked at*; an audit with no rows
     is a legible statement that a pull request touched no analysable Python.
     """
-    roster = load_agents() if agents is None else agents
+    roster = load_agents(deps=_deps_for(factory, audit)) if agents is None else agents
     config = EngineConfig.load()
 
     all_evidence: list[Evidence] = []

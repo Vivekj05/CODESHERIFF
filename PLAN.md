@@ -17,7 +17,7 @@ One chapter per session. Start a session by reading this file, take the first ch
 
 ## Where the project actually is
 
-Roughly: **v0.1 partially built, v0.2 contract frozen, v0.3–v0.5 built as facades.**
+Roughly: **v0.1–v0.5 built and measured; v0.6 onward not started.**
 
 Four packages exist with a passing test suite and a webhook that reaches GitHub. But the conformance
 audit found three of four analysis components non-functional, the fusion engine implementing the
@@ -37,29 +37,37 @@ As of Chapter 9 the seam is **closed**: every extracted unit reaches four blind 
 one says is persisted against the function it is about, and fusion turns it into a posterior that
 can go down as well as up. The pipeline is end to end for the first time.
 
-**Two of the four analysis components now do the work their names claim.** As of Chapter 10 the
+**Three of the four analysis components now do the work their names claim.** As of Chapter 10 the
 structural witness runs worklist taint propagation over a def-use graph it actually consumes, and is
 measured against ground truth: 13/13 on the cases the corpus predicts for it, 0 false positives
-across 18 safe twins, on the calibration split. As of Chapter 11 the semantic witness reads its
+across 23 safe twins, on the calibration split. As of Chapter 11 the semantic witness reads its
 exemplars, bounds the untrusted region with a sentinel the code author cannot forge, and is measured
 the same way — 0% injection subversion, a 94% safe-twin pass rate, and zero hallucinated sinks
-reaching output, from model responses recorded once and committed.
+reaching output, from model responses recorded once and committed. As of Chapter 12 the context
+witness reasons from retrieved merged code rather than from four substring tests: 5/5 on the cases
+the corpus predicts for it and 0 false positives across 11 twins and negative controls.
 
-The two are also **heterogeneous in the way the thesis needs**, and the two measurements are the
-first evidence for it rather than an argument about it. Their errors do not coincide. The semantic
-agent's single false positive is `format_html`, whose escaping guarantee lives in a library it
-cannot see, and the taint engine — which knows that callee by rule — is correctly quiet on the same
-case. Its miss is a hardcoded credential, which it fails on for a structural reason: the three-stage
-prompt asks what untrusted input reaches a dangerous sink, and a literal password is neither. Agents
-that failed the same way would add nothing to a probability estimate.
+The three are **heterogeneous in the way the thesis needs**, and the measurements are the first
+evidence for it rather than an argument about it. Their errors do not coincide. The semantic agent's
+single false positive is `format_html`, whose escaping guarantee lives in a library it cannot see,
+and the taint engine — which knows that callee by rule — is correctly quiet on the same case. Its
+miss is a hardcoded credential, which it fails on for a structural reason: the three-stage prompt
+asks what untrusted input reaches a dangerous sink, and a literal password is neither. The context
+agent's blind spot is different again and is by construction: it sees nothing whatsoever in a
+repository with no relevant history, which is most repositories most of the time, and it sees
+authorization failures that leave no syntactic trace at all — the two CWEs for which the taint
+engine holds no rules. Agents that failed the same way would add nothing to a probability estimate.
 
-The other two remain the shells the audit described — the context agent's reasoning is still four
-substring tests, and the runtime agent still does not exist. Each has a chapter, and both are in
-Phase B. What Chapter 9 changed is the frame around them: an agent that is not built abstains under
-its own name, at a likelihood ratio of exactly 1.0, on the record, per unit — so a missing witness
-costs the posterior nothing and hides from nobody.
+**One shell remains**: the runtime agent does not exist, and Chapter 13 is where it lands. What
+Chapter 9 changed is the frame around it — an agent that is not built abstains under its own name,
+at a likelihood ratio of exactly 1.0, on the record, per unit, so a missing witness costs the
+posterior nothing and hides from nobody.
 
-The shells are also **measurable** now. Chapter 7 supplied the labels, Chapter 8 supplies units of
+Chapter 12 also closed Chapter 7's outstanding caveat. The corpus is 76 cases in 38 twin pairs, and
+the cross-PR scenarios — a case plus a precedent history — exist now that the shape of a precedent
+document is fixed. Everything Chapter 14 needs to fit ratios on is in place.
+
+The remaining shell is **measurable** the moment it exists. Chapter 7 supplied the labels, Chapter 8 supplies units of
 the same shape the corpus holds, and Chapter 9 supplies the arithmetic that turns their statements
 into a number. "This agent found nothing" is a result rather than an absence of one — and it is a
 result with a price, since a silence carries a likelihood ratio below 1.0.
@@ -71,7 +79,7 @@ result with a price, since a silence carries a likelihood ratio below 1.0.
 | v0.3 | Semgrep backend + fusion engine | ✅ **complete** (Ch 9) — all 7 fusion defects closed; four witnesses, one factor each. Ratios still asserted until Ch 14 |
 | v0.4 | taint engine | ✅ **complete** (Ch 10) — worklist propagation over a real def-use graph; 13/13 recall and 0/18 false positives on the calibration split |
 | v0.5 | semantic agent | ✅ **complete** (Ch 11) — exemplars wired, gate complete, sentinel-bounded prompt; 0% injection subversion and 94% safe-twin pass on the calibration split |
-| v0.6 | empirical calibration | ⬜ blocked on corpus |
+| v0.6 | empirical calibration | ⬜ blocked on Chapter 14; the corpus and its cross-PR scenarios are now complete |
 | v0.7 | context agent | ⚠️ **no RAG reasoning** — four hard-coded substring tests |
 | v0.8 | runtime agent (Wasmtime + WASI) | ⬜ does not exist |
 | v0.9 | learned scorer + fine-tuned semantic model | ⬜ |
@@ -384,7 +392,7 @@ checklist; it shares the blocker with Chapter 5.
 Goal: four heterogeneous agents producing evidence that fuses into a calibrated posterior. This is
 the contribution — protect this phase from schedule pressure.
 
-## Chapter 7 — Corpus and committed splits ⚠️
+## Chapter 7 — Corpus and committed splits ✅
 
 **Gates every numeric claim the project makes.** Fitting likelihood ratios, the prior, or the
 threshold without this means asserting them — precisely the failure the paper criticises.
@@ -437,12 +445,7 @@ and `ruff format --check` clean across 144 files · `mypy --strict` clean across
 `lint-imports` 5 contracts kept, with a deliberate `static_agent -> codesheriff_corpus` import added,
 correctly broken, and removed.
 
-⚠️ **Not ✅ — the ~15 cross-PR scenarios are not here.** A cross-PR scenario is a case plus a
-precedent history, and the shape of a precedent document is Chapter 12's to design (§5 fixes only
-that indexing is per-symbol, not per-PR). Authoring fifteen histories against a guessed schema now
-would mean rewriting them later. They land with the context agent; `corpus_hash` changes when they
-do, which is safe only because Chapter 12 precedes Chapter 14 and no calibration artifact exists
-yet. **If those two chapters are ever reordered, the scenarios must be authored first.**
+✅ **Closed by Chapter 12.** The cross-PR scenarios were deferred because a scenario is a case *plus a precedent history*, and the shape of a precedent document was Chapter 12's to fix (§5 fixed only that indexing is per-symbol, not per-PR); authoring fifteen histories against a guessed schema would have meant rewriting them. They landed with the context agent as **eight new twin pairs**, taking the corpus to 76 cases in 38 pairs, plus histories on six existing calibration cases as negative controls (D-070). `corpus_hash` changed, which was safe only because Chapter 12 preceded Chapter 14 and no calibration artifact exists yet — the ordering the original note insisted on.
 
 **One defect found by running the CLI twice** (D-045). `corpus_hash` differed on every invocation:
 `detectable_by` is a `frozenset`, and Python randomises string hashing per process, so it serialised
@@ -803,19 +806,102 @@ uv run pytest packages/agent_semantic/tests/test_injection.py         # the boun
 uv run python packages/agent_semantic/tools/record_cassettes.py       # spends quota; needs a key
 ```
 
-## Chapter 12 — Context agent ⬜
+## Chapter 12 — Context agent ✅
 
-**Replaces** `packages/agent_context/src/context_agent/reasoning/analyzer.py`.
-**Closes** `AUDIT.md` 0.2, 3.7, 3.8.
+**Replaced** `packages/agent_context/src/context_agent/reasoning/analyzer.py`, and `rag/`,
+`retrieval/` and `reasoning/` with it.
+**Closes** `AUDIT.md` 0.2, 3.7, 3.8. **Closes Chapter 7's ⚠️** — the cross-PR scenarios are here.
 
-**Per-symbol** embeddings into pgvector — not per-PR: `bge-small-en-v1.5` truncates at 512 tokens, so
-PR-level documents are silently cut and match poorly against function-level queries. Repository filter
-with `repo` in metadata. Real retrieval-driven cross-PR regression reasoning. Emit under the
-**incoming** `finding_key` — it corroborates, it does not solo (D-012). Embedding failure must be
-loud, never a silent MD5 fallback.
+**Delivered.** D-069 through D-072. Both "Done when" criteria hold, and the agent is measured the
+way Chapters 10 and 11 measured theirs.
 
-**Done when:** a cross-PR bypass fixture produces evidence *through `ContextAgent.analyze()`*, and
-cross-repository retrieval is impossible.
+- **The reasoning is retrieval-driven, and mechanical.** `controls.py` reads a control surface off
+  the syntax tree — decorators and called names — for the unit and for each retrieved excerpt alike.
+  `regression.py` mines which controls this repository's own merged history establishes, either by
+  the same qualified symbol carrying one, or by two or more distinct sibling symbols sharing one.
+  `classify.py` decides which of those are authorization controls. With an empty history the agent
+  produces nothing: every input to the decision comes from what was retrieved.
+- **No LLM, deliberately.** `CLAUDE.md` gives this witness the basis "this repository's own
+  precedent" and the failure mode "repo has no relevant history". A model-driven version would share
+  `semantic.hosted`'s failure mode and heterogeneity is the whole argument for four witnesses
+  (D-071). `reasoning/prompts/cross_pr_v1.md` — referenced by no code since it was written — is
+  deleted rather than wired up.
+- **CWE-862 and CWE-639 only.** A mined control that maps to no in-scope CWE cannot be reported at
+  all, which is the mechanism that stops a real convention from becoming this witness's finding.
+- **Cross-repository retrieval is impossible structurally.** `repository_id` is bound at
+  construction, `retrieve(unit, limit)` takes no repository, and the filter is in SQL (D-072).
+- **Embedding failure is loud.** There is no fallback branch: the agent embeds nothing, and a
+  missing library or wrong dimension raises, arriving as a `retrieval_unavailable` abstention that
+  is distinct from `no_precedent`.
+- **Precedent has one shape in three places** (D-070) — the pgvector chunk, the corpus record, and
+  the value the agent reads. An agent measured against a corpus history shaped differently from a
+  stored one would not be the agent production runs.
+- **`apps/worker/precedent/`**: the embedder, the pgvector retriever, and a backfill command
+  (`codesheriff-worker precedent backfill`). Nothing in the audit path writes precedent.
+
+**The corpus grew, which is Chapter 7's deferred deliverable.** 60 → **76 cases in 38 pairs**.
+Eight new twin pairs, all authorization CWEs, in which the unit alone carries no evidence and only
+the repository's history does — an added endpoint whose merged siblings all carry the guard, a
+handler that moved modules and lost its decorator, a service method added beside two that have one.
+Five landed in calibration and between them cover all three ways a control gets established.
+
+Six existing calibration cases additionally gained histories as **negative controls**, where
+precedent establishes a convention that is real and that the unit really breaks, and that this
+witness must decline to report: `escape()` on the CWE-79 pair, `@rate_limit` on the CWE-918 pair,
+and a history with no controls at all on the CWE-89 pair, which must read as SILENCE rather than as
+an abstention.
+
+**Measured** — `packages/agent_context/tests/test_corpus_context.py`, calibration split only, with
+`test_only_the_calibration_split_is_read` asserting the restriction:
+
+| | |
+|---|---|
+| Recall on cases `detectable_by` predicts | **5 / 5** |
+| False positives across safe twins and negative controls | **0 / 11** |
+| Cases with a history that abstained | **0 / 16** |
+| Cases with no history | abstain, every one |
+
+Retrieval in the measurement is a deterministic token-overlap ranking over the case's authored
+history — no database, no model download, no network, the same discipline as the semantic agent's
+cassettes (D-068). The production `analyze()` path is what runs. What is *not* measured is
+pgvector's own nearest-neighbour ordering, which is why the ranking is exercised at all rather than
+the history being handed over wholesale: a retriever that returned everything would hide a `top_k`
+that silently dropped the second carrier of a convention.
+
+⚠️ **These are development numbers, not calibrated ones** (D-010). Five predicted cases is a small
+recall denominator and the report must say so; the false-positive side is the stronger half at 11.
+
+**A serious defect found and fixed — `codesheriff-corpus assign` re-drew the whole corpus** (D-069).
+D-045 promises assignment never moves a settled pair, and `assign` honours that — but the CLI fed it
+existing assignments via `load_splits()`, which *raises* when any pair is unassigned. That is the
+state the corpus is in whenever cases have just been added, which is the only time the command runs.
+It caught `CorpusError` and continued with nothing. Adding these eight pairs moved **16 of the 30
+settled pairs**, four of them in or out of the sealed test split, before the run was inspected and
+reverted. The invariant had a test; the call site did not. Reproducibility is honestly weaker as a
+result and is now asserted as a fixed point rather than as a from-scratch redraw — see D-069.
+
+A second, quieter bug in the same area: `test_split_sizes_match_the_recorded_ratios` compared each
+split to `round(total * ratio)`, which does not sum to the total. It agreed only because 30 divides
+60/20/20 exactly.
+
+**Still open, and deliberately.** `structural.semgrep` remains unavailable on Windows, so the
+structural witness is one backend here (Chapter 9's note stands). The context agent has no
+`db`-marked end-to-end test against a live pgvector store: the SQL scoping is asserted by compiling
+the statement and the mapping by unit tests, but a real round trip through a 384-dimensional index
+waits for Chapter 14, which needs a populated store anyway.
+
+**Verified.** 965 Python tests pass with a database (837 + 128 skips without); 91 of them are new in
+`packages/agent_context`, 12 in `apps/worker`, 9 in `packages/corpus` · `ruff check` and
+`ruff format --check` clean across 162 files · `mypy --strict` clean across 95 source files ·
+`lint-imports` **5 contracts kept** — including the two this chapter most risked, agent isolation
+and no-agent-reads-the-corpus.
+
+```bash
+uv run pytest packages/agent_context/tests/test_corpus_context.py   # the measurement
+uv run pytest packages/agent_context packages/corpus apps/worker
+uv run codesheriff-corpus validate                                  # 76 cases, 38 pairs
+uv run codesheriff-worker precedent backfill --help                 # the only writer
+```
 
 ## Chapter 13 — Runtime agent ⬜
 

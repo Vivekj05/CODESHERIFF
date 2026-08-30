@@ -1,0 +1,22 @@
+case_id: cwe-639-xpr-attachment-fetch-safe
+pair_id: cwe-639-xpr-attachment-fetch
+label: safe
+cwe: CWE-639
+file: app/attachments/views.py
+symbol: download_attachment
+start_line: 45
+decorators: ['@bp.get("/attachments/<int:attachment_id>/download")', '@require_owner("attachment_id")']
+imports: [flask.send_file]
+precedent:
+  - pr_number: 161
+    file: app/attachments/views.py
+    qualified_symbol: get_attachment
+    source: 161-get_attachment.py
+  - pr_number: 167
+    file: app/attachments/views.py
+    qualified_symbol: delete_attachment
+    source: 167-delete_attachment.py
+rationale: >-
+  The same download endpoint carrying the same require_owner decorator its siblings
+  carry. The body is identical, including send_file and stored_path, so a rule that
+  fires on send_file fires on both members and is measured for it.

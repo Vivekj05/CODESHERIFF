@@ -1,42 +1,54 @@
-"""Global pytest configuration and fixtures for Context Agent."""
+"""Fixtures for the context witness.
+
+The helper classes and sample sources live in `context_support`, imported by test modules as
+`from .context_support import ...` — the relative form this repository already uses for
+`apps/worker/tests/payloads.py`, and the one that works under `--import-mode=importlib`. A
+plain `from context_support import ...` resolved by whichever directory pytest happened to put
+on `sys.path` first, which worked when this package was run alone and broke the moment the
+whole workspace was collected in one pass. This file cannot use the relative form, so it
+builds its records directly.
+"""
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-from typing import Any
-
 import pytest
 
-from codesheriff_contracts import ChangeUnit
+from context_agent.precedent import Precedent
+
+GET_NOTE = (
+    '@bp.get("/notes/<int:note_id>")\n'
+    "@require_owner\n"
+    "def get_note(note_id):\n"
+    "    note = Note.query.get_or_404(note_id)\n"
+    "    return jsonify(note.as_dict())\n"
+)
+
+UPDATE_NOTE = (
+    '@bp.patch("/notes/<int:note_id>")\n'
+    "@require_owner\n"
+    "def update_note(note_id):\n"
+    "    note = Note.query.get_or_404(note_id)\n"
+    "    note.save()\n"
+    "    return jsonify(note.as_dict())\n"
+)
 
 
 @pytest.fixture
-def sample_unit() -> ChangeUnit:
-    """Provide sample_unit payload."""
-    p = Path(__file__).parent / "fixtures" / "sample_unit.json"
-    data = json.loads(p.read_text(encoding="utf-8"))
-    return ChangeUnit.model_validate(data)
-
-
-@pytest.fixture
-def sample_unit_safe() -> ChangeUnit:
-    """Provide sample_unit_safe payload."""
-    p = Path(__file__).parent / "fixtures" / "sample_unit_safe.json"
-    data = json.loads(p.read_text(encoding="utf-8"))
-    return ChangeUnit.model_validate(data)
-
-
-@pytest.fixture
-def sample_past_pr() -> dict[str, Any]:
-    """Provide sample_past_pr metadata dict."""
-    p = Path(__file__).parent / "fixtures" / "sample_past_pr.json"
-    return json.loads(p.read_text(encoding="utf-8"))
-
-
-@pytest.fixture
-def sample_bypassing_unit() -> ChangeUnit:
-    """Provide sample_bypassing_unit payload."""
-    p = Path(__file__).parent / "fixtures" / "sample_bypassing_unit.json"
-    data = json.loads(p.read_text(encoding="utf-8"))
-    return ChangeUnit.model_validate(data)
+def guarded_history() -> list[Precedent]:
+    """Two merged siblings that both carry `@require_owner` — a convention, not a habit."""
+    return [
+        Precedent(
+            pr_number=141,
+            file="app/notes/views.py",
+            qualified_symbol="get_note",
+            accepted_src=GET_NOTE,
+            similarity=0.9,
+        ),
+        Precedent(
+            pr_number=152,
+            file="app/notes/views.py",
+            qualified_symbol="update_note",
+            accepted_src=UPDATE_NOTE,
+            similarity=0.9,
+        ),
+    ]

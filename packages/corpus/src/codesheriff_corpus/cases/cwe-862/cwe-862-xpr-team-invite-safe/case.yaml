@@ -1,0 +1,23 @@
+case_id: cwe-862-xpr-team-invite-safe
+pair_id: cwe-862-xpr-team-invite
+label: safe
+cwe: CWE-862
+file: app/teams/service.py
+symbol: invite_member
+enclosing_class: TeamService
+start_line: 142
+decorators: ['@permission_required("team:manage")']
+imports: [app.teams.models.Invitation]
+precedent:
+  - pr_number: 87
+    file: app/teams/service.py
+    qualified_symbol: TeamService.remove_member
+    source: 87-remove_member.py
+  - pr_number: 103
+    file: app/teams/service.py
+    qualified_symbol: TeamService.change_role
+    source: 103-change_role.py
+rationale: >-
+  The same method carrying the same decorator its siblings carry. Same class, same
+  repository history, same body, so the pair measures whether the agent reads the
+  decorator rather than the method name.
