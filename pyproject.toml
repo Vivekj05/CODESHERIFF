@@ -64,7 +64,16 @@ warn_unused_ignores = true
 # Type-check the shipped source. Every package has a tests/conftest.py, and mypy
 # resolves those to one module name and refuses to continue; there is no way to
 # disambiguate them while each package keeps a directory called `tests`.
-exclude = ["/tests/", "^build/", "/codesheriff_corpus/cases/"]
+exclude = [
+    "/tests/",
+    "^build/",
+    "/codesheriff_corpus/cases/",
+    # The WASI guest driver targets a different interpreter and is read as text, never
+    # imported (D-078). Its whole mechanism is a str subclass that misreports what it is,
+    # so `--strict` cannot describe it without annotating the lie as the truth. It stays
+    # inside `ruff`, which catches the undefined names that would actually break it.
+    "/agent_runtime/guest/",
+]
 mypy_path = [
     # The cassette harness lives in the semantic agent's tests because it is test infrastructure,
     # but `tools/record_cassettes.py` — which is checked — imports it. On the path so the import
@@ -116,6 +125,11 @@ markers = [
     # Spends free-tier LLM quota and is non-deterministic, so it is never part of a normal run.
     # The default suite replays recorded cassettes instead (D-068).
     "live_api: calls a real LLM provider; skipped unless --live-api is passed",
+    # The WASI CPython build is 26 MB and deliberately not committed, so these tests execute
+    # a real interpreter inside a real Wasmtime sandbox or they do not run. Same principle as
+    # `db` (D-029): a faked sandbox measures the fake, and the isolation claim is the whole
+    # deliverable. `runtime-agent doctor` says whether this machine can run them.
+    "wasm: needs the pinned WASI CPython build; skipped unless it is present",
 ]
 
 # ---------------------------------------------------------------------------

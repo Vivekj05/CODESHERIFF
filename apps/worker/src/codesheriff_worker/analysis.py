@@ -117,10 +117,14 @@ def _load_context(deps: AgentDeps) -> Agent:
 
 
 def _load_runtime(deps: AgentDeps) -> Agent:
-    raise ModuleNotFoundError(
-        "runtime.sfi is not built — PLAN.md Chapter 13. The Wasmtime sandbox is "
-        "isolation infrastructure first and a detection agent second."
-    )
+    from agent_runtime.agent import RuntimeAgent
+
+    # The sandbox itself is built lazily, on the first unit. Compiling the 26 MB CPython
+    # module costs seconds, and a worker whose start-up paid that cost would pay it again on
+    # every restart even for a queue that never runs a Python unit. A host with no
+    # interpreter still loads the agent — it abstains `interpreter_unavailable` per unit,
+    # under its own name, which is the report a missing artifact should produce.
+    return RuntimeAgent()
 
 
 @dataclass(frozen=True)

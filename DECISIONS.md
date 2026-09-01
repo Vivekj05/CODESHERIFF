@@ -2049,3 +2049,236 @@ put a write transaction inside a read the agents are already running concurrentl
 means Chapter 14 can stand up a precedent store with no GitHub credentials. Only the merged side is
 indexed: the base version is already precedent from an earlier merge, and indexing both would let a
 control that a pull request deliberately removed go on establishing itself forever.
+
+---
+
+## D-073 — The runtime witness *observes*; it never proves
+
+**Date:** 2026-09-01 · **Status:** ACTIVE · **Chapter:** 13
+
+**Decision.** `runtime.sfi` executes the changed function once inside the sandbox with every
+parameter bound to a uniquely tokenised untrusted value, and reports which dangerous operations
+that value actually reached. It is forced execution with synthesised inputs, and everything about
+how it reports follows from that being an observation rather than a proof.
+
+**Taint is a substring, not a wrapper.** Each untrusted value is a `str` subclass whose text is a
+random token. An f-string, a `+`, a `%`, a `.format()` and an `os.path.join` all carry the token
+into the result for free, because they carry the characters — so the probe models none of Python's
+string semantics, which is the half a wrapper-based tracker gets wrong. Detection is then "does the
+argument text contain a live token", and **composition** is "and is it not exactly that token",
+which is how D-061's path rule is enforced by a string comparison rather than a dataflow analysis.
+
+**Four propagation rules, and each is a claim about trust.** Attribute access on an untrusted object
+stays untrusted; a call on an untrusted receiver returns untrusted data; a call to an unmodelled
+free function *clears* taint and is recorded as a guard (D-079); a sink's result is untrusted,
+which is how `yaml.load(handle)` is reached through `open(path)`. The third is the load-bearing one
+— `secure_filename(name)` may be a sanitiser, a validator or a no-op, and clearing is the direction
+that does not manufacture false positives out of code that defends itself.
+
+**Every parameter is a source, `self` included**, for the reason the static engine gives (D-058):
+the unit is one function, so its signature is the trust boundary.
+
+**It reports five CWEs, and the five it omits are the mechanism.** CWE-89 and CWE-79 are absent
+because their sinks are *methods on objects the probe itself fabricated* — a cursor the harness
+built calling a stub the harness installed. An "observation" there would be the harness observing
+itself, and reporting it would make this witness a weaker restatement of the structural one, which
+is exactly the correlation D-011 exists to prevent. CWE-862, CWE-639 and CWE-798 are absent because
+there is nothing to observe: a missing authorisation check is the absence of an event and a
+hard-coded credential is a fact about the source text. The corpus pre-registered exactly these five
+in `detectable_by` before this agent existed, which is what makes the narrowness a claim rather
+than a convenience.
+
+**One score, not a spread.** `OBSERVED_SCORE` is 0.85 and there is no medium or low tier. The other
+witnesses grade themselves because a taint path can be longer or shorter and a model can be more or
+less sure; an execution either reached the argument or it did not. Inventing a spread to fill
+`WitnessRatios.for_score`'s tiers would be inventing a confidence the probe does not measure. Still
+provisional (D-010) — Chapter 14 may find it wants those tiers.
+
+**Measured** on the calibration split, the way Chapters 10 to 12 measured theirs: **9/9** on the
+cases the corpus predicts for it, **0 false positives across 23 safe twins**, in ~14 s for 46 cases.
+
+---
+
+## D-074 — The interpreter is pinned by digest and never committed
+
+**Date:** 2026-09-01 · **Status:** ACTIVE · **Chapter:** 13
+
+**Decision.** The sandbox runs `python-3.12.0.wasm` from `vmware-labs/webassembly-language-runtimes`,
+identified by `INTERPRETER_SHA256` and verified on load. It is 26 MB, it lives in a gitignored
+`.wasm-runtimes/`, and it is fetched deliberately by a person.
+
+**Not committed**, because a binary in a git history is in that history forever, and this project's
+reproducibility argument rests on artifacts being identified by digest rather than by having been
+checked in once.
+
+**Not downloaded by the agent**, because an agent that pulled executable code over the network at
+analysis time would be the supply-chain problem this project exists to notice. `runtime-agent
+doctor` prints the URL and the digest; a person runs `curl`.
+
+**A digest mismatch is fatal, not a warning.** The whole security argument is that untrusted code
+runs inside an interpreter we chose, and a build we did not choose carries no such argument. It is
+also not the interpreter the numbers were measured against: a build whose `pickle` is missing turns
+a detection into an abstention, and one whose `socket` works turns the sandbox into a proxy.
+`verify_interpreter_digest=False` exists for deliberately testing another build and logs a WARNING
+naming the digest it loaded, so a run made that way is identifiable afterwards from its own logs.
+
+**Tests that need it are marked `wasm` and skip without it**, on the `db` precedent (D-029): the
+sandbox runs a real interpreter in a real Wasmtime engine or those tests do not run. The isolation
+tests themselves do *not* need it — they are hand-written WebAssembly, and they run everywhere.
+
+---
+
+## D-075 — Capabilities are absent, not filtered
+
+**Date:** 2026-09-01 · **Status:** ACTIVE · **Chapter:** 13
+
+**Decision.** `WasiConfig` is constructed empty and stays that way. No `inherit_env`, no
+`inherit_stdin`, no `preopen_dir`. The guest gets an argv, three file descriptors backed by host
+temporary files, and nothing else.
+
+**"The sandbox holds no credentials" is a structural property, not a filter.** The guest's
+`os.environ` is `{}` because there was nothing to inherit from — not because a deny-list removed
+the interesting keys. A filter is a list somebody has to keep correct, and the first variable named
+something other than `*_TOKEN` defeats it. `test_the_guest_environment_is_empty_even_when_the_host_is_not`
+sets a `GITHUB_TOKEN`, a `DATABASE_URL` and an LLM key on the host and proves the guest still counts
+zero; without that setup the assertion would pass against an empty host and prove nothing.
+
+**The network is absent in the strongest available sense.** WASI preview1 defines no `sock_connect`,
+so a module importing one **fails to instantiate** — the denial lands before the guest's first
+instruction, and `test_a_module_that_asks_to_connect_cannot_even_load` asserts `fuel_used == 0` to
+say so. `sock_accept` does exist and is useless: accepting needs a listening descriptor and nothing
+creates one. This is the difference from a container, where the syscall exists and a policy stands
+in front of it.
+
+**`SandboxPolicy` has no field that grants anything.** Three numeric bounds, and a test asserts that
+shape rather than only the behaviour. A policy object with an `allow_network` flag is one flag away
+from not being a sandbox, and the flag would eventually be set by somebody debugging a fixture at
+midnight.
+
+**Four caps, because each covers another's blind spot.** Fuel is a deterministic WebAssembly
+instruction budget — the same unit exhausts it at the same instruction on every machine, which is
+what a calibration run needs and what a wall clock cannot promise. Epoch interruption is the
+wall-clock backstop, because fuel counts guest instructions and a guest blocked in a host call burns
+none of it. Memory is a linear-memory ceiling, so an allocation loop raises `MemoryError` inside the
+guest instead of taking the worker down with it. Capabilities are the fourth. Both time caps are
+armed on every run.
+
+---
+
+## D-076 — One execution backend, and no fallback path
+
+**Date:** 2026-09-01 · **Status:** ACTIVE · **Chapter:** 13
+
+**Decision.** Wasmtime is the only way this agent runs anything. There is no subprocess executor,
+no "trusted corpus" fast path, and no in-process fake — not even for tests.
+
+**Wasmtime and not Docker**, per `PROJECT_CONTEXT.md` §5. A container is OS-level isolation: the
+guest runs as native code, the kernel is the boundary, and the host's process table, network
+namespace and credentials are one misconfiguration away. WebAssembly is software fault isolation —
+the guest cannot name an address outside its linear memory and cannot perform an operation the host
+did not hand it as an import. The SFI claim in this project's title requires the second kind.
+
+**And no second backend, because a test-only host executor is a fallback branch**, and this
+repository has already shipped two: the MD5 term-hasher that stood in for embeddings (`AUDIT.md`
+3.8) and the substring matcher that stood in for debate (D-053). Both were introduced as the
+convenient path and both became the default path, silently. A host executor would be reached for
+the first time a `wasm`-marked test was inconvenient, and from then on the measurement would be of
+code running on the machine holding the database credentials.
+
+The cost is real and accepted: without the interpreter the agent abstains on every unit and the
+corpus measurement skips. That is the honest report of a machine that cannot run this witness, and
+it costs the posterior nothing.
+
+---
+
+## D-077 — An abstention that names where it looked, and a `doctor` that agrees
+
+**Date:** 2026-09-01 · **Status:** ACTIVE · **Chapter:** 13
+
+**Decision.** `interpreter_unavailable` and `interpreter_digest_mismatch` are separate reasons, the
+explanation on each names every path consulted and the URL and digest to fix it, and
+`runtime-agent doctor` prints the same search — every candidate, hit or miss — plus the active
+resource bounds.
+
+**Because an agent that abstains on every unit is otherwise indistinguishable from one that is
+quietly doing nothing.** That is the failure mode of `AUDIT.md` 3.8 restated: a component reporting
+"no relevant history" forever, with no log line, where the truth was that it had never worked. A
+search that reports only its result is indistinguishable from a search that was never run, so
+`InterpreterSearch` carries the full candidate list and `doctor` prints all of it.
+
+**Two reasons rather than one** because they need different fixes. Absent means fetch it; wrong
+digest means the file on disk is not the artifact this agent was measured against, and re-fetching
+a corrupt download is a different action from investigating a substituted one.
+
+Every non-detection outcome keeps its own reason for the same reason — `fuel_exhausted` and
+`timed_out` describe a budget, `unit_raised` and `no_safe_entrypoint` describe the unit,
+`sandbox_trapped` describes the sandbox. Collapsing them into `analysis_failed` would make the
+difference between "this agent needs more fuel" and "this code does not run" invisible in exactly
+the data Chapter 14 reads.
+
+---
+
+## D-078 — The guest driver is data, not an import
+
+**Date:** 2026-09-01 · **Status:** ACTIVE · **Chapter:** 13
+
+**Decision.** `agent_runtime/guest/driver.py` is read as text by `probe.py` and handed to the guest
+as `-c` source. It is a real file rather than a string constant, and it has no `__init__.py` and no
+importer on the host. The root `pyproject.toml` excludes it from `mypy` and nothing else.
+
+**A real file** because 300 lines of program embedded in a string constant is a program nobody
+reviews or diffs. This is the same call `cases/` gets (D-046): it is source that some *other*
+interpreter runs, so it lives on disk as source.
+
+**Excluded from `mypy` only.** Its entire mechanism is a `str` subclass that deliberately misreports
+what it is — `__getattribute__` answers for a module when the value is clean and for a string when
+it is tainted — and `--strict` cannot describe that without annotating the lie as the truth. It
+stays inside `ruff`, which catches the undefined names that would actually break it, and a test
+asserts it imports nothing outside the guest's standard library: a driver that grew a third-party
+import would fail inside the sandbox and report `probe_error` on every unit, a silent total outage.
+
+**The unit never touches the guest's own standard library.** Every free name resolves to a proxy
+through a `__missing__`-backed globals dict, and `open`, `eval`, `exec`, `compile`, `__import__`,
+`input` and `breakpoint` are replaced in `__builtins__`. Defence in depth rather than convenience —
+the sandbox already denies the capabilities, and this denies the names.
+
+**Decorators are stripped before compiling.** A decorator the probe cannot resolve evaluates to a
+proxy and calling a proxy returns a proxy, so the name the unit defines would not be the function
+and every decorated unit would report `no_safe_entrypoint`. It costs this witness nothing it claims:
+the CWEs a decorator carries are the access-control ones, which `COVERED_CWES` omits precisely
+because running a function once cannot observe a check that is not there.
+
+**Nothing the guest says is taken on trust.** The trace is located by a per-request sentinel from
+`secrets` — the same decision as the semantic agent's prompt delimiter (D-066), because the unit can
+print and a unit that has read this file would print a trace of its own. A reported sink name not in
+`SINKS` is dropped, and the **CWE is re-derived from our table**, so analysed code cannot invent a
+finding or relabel a path traversal as a command injection. Every published word comes from the sink
+table and the agent's own verbs, which is why — unlike model prose (D-067) — the explanation needs
+no screening pass before it reaches a pull request comment.
+
+---
+
+## D-079 — A value a guard inspected abstains; it does not report, and it does not fall silent
+
+**Date:** 2026-09-01 · **Status:** ACTIVE · **Chapter:** 13
+
+**Decision.** When the **exact** token that reached a sink was earlier passed to a call the probe
+could not evaluate, the agent emits `guard_unresolved` rather than a detection or a silence.
+
+**Because forced execution cannot evaluate a guard it had to stub.** `if not is_public_url(url):
+raise` is a real SSRF defence, and the probe answered `is_public_url` itself — so the run reached
+`requests.post(url)` only because the harness let it. Reporting would be a false positive on
+precisely the code that defends itself, which is the worst possible place for a security tool to be
+wrong. Falling silent would argue, below a likelihood ratio of 1.0, that guarded code is clean on
+the strength of a guard nobody read. Neither is honest, so the witness says it could not tell, at
+exactly 1.0.
+
+**Exact-token matching, and no propagation through derivation.** `self._namespaced(key)` also
+consumes a token, and it is a namespacing helper rather than a validator. Propagating "guarded"
+down the derivation chain would turn every unit that transforms its input into an abstention —
+`cwe-502-cache-get-vuln` among them, which is a real deserialisation bug. The rule only fires when
+the value that reached the sink is the value that was inspected.
+
+On the calibration split this converts two safe twins — `cwe-918-link-preview-safe` and
+`cwe-918-webhook-test-safe` — from would-be false positives into abstentions. Both are exactly the
+shape the rule describes: an unmodelled predicate consulted on the URL that is then fetched.

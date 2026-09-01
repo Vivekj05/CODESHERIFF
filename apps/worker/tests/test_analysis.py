@@ -91,14 +91,38 @@ def test_every_slots_fallback_id_is_a_registered_agent() -> None:
         assert witness_for(slot.agent_id) == slot.witness
 
 
-def test_every_slot_is_filled_even_when_the_package_is_missing() -> None:
-    """`runtime.sfi` does not exist (Chapter 13), and the seat is still occupied."""
+def test_every_slot_is_filled_by_a_real_agent() -> None:
+    """All four exist as of Chapter 13, and every seat is occupied by the agent itself.
+
+    This asserted a stand-in for `runtime.sfi` until Chapter 13 built it. The stand-in path
+    is still the one that matters and is still tested, one test down — but by a loader that
+    genuinely fails, rather than by the shell that used to be the fourth agent. A test whose
+    premise is "this component does not exist yet" has to be retired when it does, or it
+    starts asserting the absence rather than the mechanism.
+    """
     agents = load_agents()
 
     assert len(agents) == len(AGENT_SLOTS)
-    runtime = agents[-1]
-    assert isinstance(runtime, UnavailableAgent)
-    assert agent_id_of(runtime, "?") == "runtime.sfi"
+    assert not any(isinstance(agent, UnavailableAgent) for agent in agents)
+    assert [agent_id_of(agent, "?") for agent in agents] == [s.agent_id for s in AGENT_SLOTS]
+
+
+def test_a_slot_whose_loader_fails_is_still_occupied() -> None:
+    """AUDIT.md 4.4: a missing agent degrading to silence is what made silence read as clean.
+
+    The four packages all import now, so the only way to reach this path is a loader that
+    raises — which is what a broken install, a missing extra or a renamed module looks like.
+    """
+    slot = AGENT_SLOTS[-1]
+
+    def refuses(deps: object) -> object:
+        raise ModuleNotFoundError("no module named 'agent_runtime'")
+
+    agents = load_agents((slot.__class__(slot.witness, slot.agent_id, refuses),))
+
+    assert isinstance(agents[0], UnavailableAgent)
+    assert agents[0].reason == "agent_unavailable"
+    assert agent_id_of(agents[0], "?") == "runtime.sfi"
 
 
 def test_an_unavailable_agent_abstains_with_a_reason() -> None:

@@ -37,3 +37,8 @@ redis-data/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# The pinned WASI CPython build the runtime agent executes untrusted code inside.
+# 26 MB, fetched deliberately by a person, verified against INTERPRETER_SHA256 on load.
+# Never committed: a binary in a git history is in that history forever.
+.wasm-runtimes/

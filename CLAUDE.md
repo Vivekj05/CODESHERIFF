@@ -75,16 +75,18 @@ odd choice and is load-bearing:
 | The exemplars sit **inside** the same sentinel as the unit | An example is not untrusted data; wrapping it looks like a category error | They are the longest, most attended-to part of the prompt. Framed differently they would teach that the sentinel is decorative formatting, which is exactly the belief an injection needs |
 | Instruction-shaped model prose is **dropped**, not escaped | Escaping preserves the information and fixes the rendering bug | An escaped injection is still published to the reader it targets. The finding survives on its validated fields — whether the code is vulnerable does not depend on how the model described it |
 | Editing a prompt turns the semantic suite **red** | A test that fails on an intended edit looks broken | The cassettes measure the old prompt. A green suite reporting a rate for a prompt nobody sends any more is worse than a red one; re-record, do not touch the fingerprint |
+| The runtime witness reports **five** CWEs, not ten | Half the scope, from the witness with the most direct evidence | Its SQL and XSS sinks are methods on objects the probe itself fabricated, so an "observation" there is the harness observing itself — a weaker restatement of the structural witness, correlated with it (D-073) |
+| A guard the probe could not evaluate produces an **abstention**, not a detection | The value demonstrably reached the sink | The run reached it only because the harness answered the guard. Reporting is a false positive on exactly the code that defends itself; silence argues that guarded code is clean on the strength of a guard nobody read (D-079) |
+| There is **no** second execution backend, not even for tests | A subprocess runner would make the suite portable | It would be reached the first time a `wasm` test was inconvenient, and the measurement would then be of untrusted code running beside the database credentials. This repo has shipped that shape twice (D-076) |
 | PR title/description passed as separate `pr_context` | Convenient inside `ChangeUnit` | Attacker-controlled, and absent from corpus cases — embedding it makes corpus runs behave differently from production, corrupting calibration |
 
 ---
 
 ## Current state — read `AUDIT.md` before writing code
 
-**The committed code does not implement the design above.** A full conformance audit found that
-three of four analysis components are shells. One still is:
-
-- The runtime agent **does not exist**.
+**The committed code did not implement the design above.** A full conformance audit found that
+three of four analysis components were shells. **None still are** — Chapter 13 built the last of
+them, and every witness is now measured against the corpus on the calibration split.
 
 The static agent's taint engine *was* the worst of them — the def-use graph was built and discarded,
 and "taint paths" were a line-number cross-product. Chapter 10 replaced it (`AUDIT.md` 3.1–3.6). The
@@ -95,6 +97,8 @@ them weakened; Chapter 11 closed all of it (`AUDIT.md` 0.3, 0.4, 3.9–3.12).
 The context agent *was* four hard-coded substring tests over a vector store its reasoning never
 consulted, sharing one global collection across every repository; Chapter 12 replaced all of it
 (`AUDIT.md` 0.2, 3.7, 3.8).
+
+The runtime agent *did not exist at all*; Chapter 13 built it, sandbox first.
 
 The extraction *was* per-file diff fragments; Chapter 8 closed that (`AUDIT.md` 4.1 and 4.2). The
 webhook *was* unauthenticated; Chapter 6 closed that (`AUDIT.md` 0.1 and 4.3). The fusion engine
@@ -120,11 +124,11 @@ CODESHERIFF/
 ├── pyproject.toml        # uv workspace + ruff/mypy/import-linter config
 ├── packages/
 │   ├── contracts/        # THE single shared contract. Never vendored.
-│   ├── corpus/           # 60 labelled units, 30 twin pairs, committed splits (Ch 7)
+│   ├── corpus/           # 76 labelled units, 38 twin pairs, committed splits (Ch 7, Ch 12)
 │   ├── agent_static/     # structural.taint (Ch 10) + structural.semgrep
 │   ├── agent_semantic/   # semantic.hosted
 │   ├── agent_context/    # context.rag (Ch 12)
-│   ├── agent_runtime/    # runtime.sfi                                  (empty — Ch 13)
+│   ├── agent_runtime/    # runtime.sfi — Wasmtime + WASI sandbox (Ch 13)
 │   ├── engine/           # ChangeUnit extraction, fusion, calibration. No DB client, no agents.
 │   └── storage/          # SQLAlchemy models, Alembic, pgvector precedent store
 ├── apps/
@@ -134,7 +138,7 @@ CODESHERIFF/
 └── docs/history/         # Superseded specs, kept for provenance
 ```
 
-⚠️ **The pipeline runs end to end; one of the four agents still does not exist.**
+✅ **The pipeline runs end to end, and all four agents exist and are measured.**
 Chapter 2 froze the contract at v2.0.0 and got every gate green. Chapter 6 made the plumbing real —
 verified webhook, queued audit, worker-posted comment. Chapter 7 built the ground truth every number
 will be fitted against. Chapter 8 made the pipeline hand over the right objects. Chapter 9 closed
@@ -148,9 +152,12 @@ bounds the untrusted region with an unforgeable sentinel, and is measured the sa
 injection subversion, a 94% safe-twin pass rate, zero hallucinated sinks. Chapter 12 made the
 third: `context.rag` mines the control vocabulary of retrieved merged code instead of running four
 substring tests, and is measured on cross-PR scenarios the same chapter added to the corpus — 5/5
-recall, 0 false positives across 11 twins and negative controls. The runtime agent still does not
-exist; it abstains under its own name, at a likelihood ratio of exactly 1.0, on the record, per
-unit — so a missing witness costs the posterior nothing and hides from nobody.
+recall, 0 false positives across 11 twins and negative controls. Chapter 13 made the fourth:
+`runtime.sfi` executes the changed function inside a Wasmtime sandbox that denies the network at
+link time and hands the guest an empty environment, and reports what an untrusted value actually
+reached — 9/9 recall, 0 false positives across 23 safe twins. On a machine with no WASI interpreter
+it abstains under its own name, at a likelihood ratio of exactly 1.0, on the record, per unit — so a
+witness that cannot run costs the posterior nothing and hides from nobody.
 
 Every number is **provisional**. The ratios, the prior and the threshold are hand-set, and D-010
 requires them presented as such until Chapter 14 fits them on the calibration split.
@@ -285,6 +292,42 @@ MD5 term-hasher, the default path for a normal install, reporting noise with no 
 the merged side: the base version is already precedent from an earlier merge, and indexing both
 would let a control a pull request deliberately removed go on establishing itself forever.
 
+**Runtime observation.** `runtime_agent` executes the changed function **once**, inside a Wasmtime +
+WASI sandbox, with every parameter bound to a uniquely tokenised untrusted value, and reports which
+dangerous operations that value actually reached. It observes; it never proves (D-073).
+
+**The sandbox is the deliverable and the agent is second.** Running a pull request's code is how CI
+systems get compromised, so `sandbox.py` would be worth having if `agent.py` did not exist. The
+guest gets an argv, three file descriptors, and nothing else. **Capabilities are absent, not
+filtered** (D-075): `os.environ` is `{}` because `WasiConfig` inherits nothing, not because a
+deny-list removed the interesting keys, and WASI preview1 defines no `sock_connect`, so a module
+that asks to connect **fails to instantiate** — denial before the first instruction. Never add
+`inherit_env`, `preopen_dir` or a field to `SandboxPolicy` that grants rather than bounds.
+
+**Four caps, each covering another's blind spot.** Fuel is deterministic and is what a calibration
+run needs; epoch interruption is the wall-clock backstop, because a guest blocked in a host call
+burns no fuel; memory keeps an allocation loop a guest `MemoryError` rather than a host OOM.
+
+**Taint is a substring, not a wrapper.** The untrusted value is a `str` subclass whose text is a
+random token, so f-strings, `+`, `%`, `.format()` and `os.path.join` carry it for free and D-061's
+composition rule is a string comparison. The proxy answers as a **module** when clean and as a
+**string** when tainted — `os.path.join` resolving to `str.join` is the bug that split fixed, and it
+cost a real detection while it lasted.
+
+**The interpreter is pinned, verified and never committed** (D-074). 26 MB, gitignored in
+`.wasm-runtimes/`, checked against `INTERPRETER_SHA256` on load, and fetched by a person — an agent
+that downloaded executable code at analysis time would be the supply-chain problem this project
+exists to notice. A digest mismatch is fatal, not a warning. Without it the agent abstains
+`interpreter_unavailable` per unit and `wasm`-marked tests skip; `runtime-agent doctor` reports
+every path it consulted (D-077).
+
+**The guest driver is data, not an import** (D-078). `guest/driver.py` is read as text and handed to
+another interpreter; it has no importer on the host and is excluded from `mypy` only. Nothing it
+says is taken on trust: the trace is found behind a per-request `secrets` sentinel, an unknown sink
+name is dropped, and the **CWE is re-derived from our table** — analysed code cannot invent a
+finding or relabel one. Every published word comes from `sinks.py` and the agent's own verbs, which
+is why the explanation needs no screening pass of the kind model prose needs (D-067).
+
 **Fusing evidence.** `codesheriff_engine.fusion` multiplies one likelihood ratio per **witness**
 — four factors, always four, whatever the agents said. `fusion/witnesses.py` is the only place that
 decides how many witnesses there are, and an `agent_id` it does not know raises rather than becoming
@@ -404,6 +447,11 @@ uv run codesheriff-corpus show cwe-862-admin-export-vuln
 
 uv run codesheriff-engine fuse evidence.json       # posterior + one row per witness. No agents.
 
+# The runtime witness's sandbox. `doctor` says whether this machine can run it at all, and where
+# it looked; without the pinned interpreter the agent abstains per unit and `wasm` tests skip.
+uv run runtime-agent doctor
+curl -L -o .wasm-runtimes/python-3.12.0.wasm \n  https://github.com/vmware-labs/webassembly-language-runtimes/releases/download/python%2F3.12.0%2B20231211-040d5a6/python-3.12.0.wasm
+
 # The precedent store context.rag reasons from. The ONLY writer; the audit path never ingests.
 uv run codesheriff-worker precedent backfill --repository-id 1 --repo-full-name owner/name \n    --installation-id 42 --pr 118 --head-sha <sha>
 
@@ -441,8 +489,9 @@ Signing in needs a registered GitHub App — `docs/github-app-setup.md`. Without
 `501` naming the missing variable rather than failing at import, so `/health` works on a machine
 that has never seen a `.pem`.
 
-All five Python gates and both frontend gates are green as of Chapter 12 (965 tests with a
-database, 837 + 128 skips without).
+All five Python gates and both frontend gates are green as of Chapter 13 (1204 tests with a
+database and the WASI interpreter; 1076 + 128 skips without a database, and 67 more skipped without
+the interpreter — the isolation proofs are hand-written WebAssembly and run everywhere).
 
 **Measuring an agent.** `packages/agent_static/tests/test_corpus_calibration.py` runs the taint
 engine over the corpus and asserts recall and false positives per case. It reads the **calibration
@@ -458,6 +507,15 @@ recording once is how both hold (D-068). Editing the prompt, the system prompt o
 changes each cassette's recorded fingerprint and turns the suite red — deliberately. A prompt edit
 invalidates every number measured against the old prompt, so re-record with
 `tools/record_cassettes.py` rather than reaching for the fingerprint.
+
+`packages/agent_runtime/tests/test_corpus_runtime.py` does the same for `runtime.sfi`, under the
+same calibration-split restriction, executing the production `analyze()` path inside the real
+sandbox — 9/9 recall on the nine calibration cases the corpus predicts for it, 0 false positives
+across 23 safe twins. It is marked `wasm` and skips without the interpreter, on the `db` precedent
+(D-029). `test_a_runnable_case_is_never_an_abstention` is the guard that keeps it from passing
+vacuously against an agent whose sandbox is broken — without it, every false-positive assertion
+would pass on an agent that abstained on everything. What it does not measure is p95 latency or the
+fuel budget's behaviour on a 600-line function; both wait for Chapter 14 and CI hardware.
 
 `packages/agent_context/tests/test_corpus_context.py` does the same for `context.rag`, under the
 same restriction, injecting a deterministic token-overlap retriever over each case's authored

@@ -37,7 +37,7 @@ As of Chapter 9 the seam is **closed**: every extracted unit reaches four blind 
 one says is persisted against the function it is about, and fusion turns it into a posterior that
 can go down as well as up. The pipeline is end to end for the first time.
 
-**Three of the four analysis components now do the work their names claim.** As of Chapter 10 the
+**All four analysis components now do the work their names claim.** As of Chapter 10 the
 structural witness runs worklist taint propagation over a def-use graph it actually consumes, and is
 measured against ground truth: 13/13 on the cases the corpus predicts for it, 0 false positives
 across 23 safe twins, on the calibration split. As of Chapter 11 the semantic witness reads its
@@ -45,9 +45,13 @@ exemplars, bounds the untrusted region with a sentinel the code author cannot fo
 the same way — 0% injection subversion, a 94% safe-twin pass rate, and zero hallucinated sinks
 reaching output, from model responses recorded once and committed. As of Chapter 12 the context
 witness reasons from retrieved merged code rather than from four substring tests: 5/5 on the cases
-the corpus predicts for it and 0 false positives across 11 twins and negative controls.
+the corpus predicts for it and 0 false positives across 11 twins and negative controls. As of
+Chapter 13 the runtime witness executes the changed function inside a Wasmtime sandbox that denies
+the network at link time and hands the guest an empty environment, and reports what an untrusted
+value actually reached: 9/9 on the cases the corpus predicts for it and 0 false positives across 23
+safe twins.
 
-The three are **heterogeneous in the way the thesis needs**, and the measurements are the first
+The four are **heterogeneous in the way the thesis needs**, and the measurements are the first
 evidence for it rather than an argument about it. Their errors do not coincide. The semantic agent's
 single false positive is `format_html`, whose escaping guarantee lives in a library it cannot see,
 and the taint engine — which knows that callee by rule — is correctly quiet on the same case. Its
@@ -56,20 +60,25 @@ asks what untrusted input reaches a dangerous sink, and a literal password is ne
 agent's blind spot is different again and is by construction: it sees nothing whatsoever in a
 repository with no relevant history, which is most repositories most of the time, and it sees
 authorization failures that leave no syntactic trace at all — the two CWEs for which the taint
-engine holds no rules. Agents that failed the same way would add nothing to a probability estimate.
+engine holds no rules. The runtime agent's blind spot is the sharpest of the four and the easiest to
+state: it sees only what a function does when it runs, so it is silent on the two CWEs whose sinks
+are methods on objects it had to fabricate, and it abstains outright whenever a guard it could not
+evaluate stood between the value and the sink. Agents that failed the same way would add nothing to
+a probability estimate.
 
-**One shell remains**: the runtime agent does not exist, and Chapter 13 is where it lands. What
-Chapter 9 changed is the frame around it — an agent that is not built abstains under its own name,
-at a likelihood ratio of exactly 1.0, on the record, per unit, so a missing witness costs the
-posterior nothing and hides from nobody.
+**No shells remain.** All four witnesses run, and all four are measured on the calibration split
+against ground truth that was written before any of them existed. What Chapter 9 built is still the
+frame around them — an agent that cannot run abstains under its own name, at a likelihood ratio of
+exactly 1.0, on the record, per unit — and that frame is now what carries a machine with no WASI
+interpreter rather than what carried an agent that did not exist.
 
 Chapter 12 also closed Chapter 7's outstanding caveat. The corpus is 76 cases in 38 twin pairs, and
 the cross-PR scenarios — a case plus a precedent history — exist now that the shape of a precedent
 document is fixed. Everything Chapter 14 needs to fit ratios on is in place.
 
-The remaining shell is **measurable** the moment it exists. Chapter 7 supplied the labels, Chapter 8 supplies units of
-the same shape the corpus holds, and Chapter 9 supplies the arithmetic that turns their statements
-into a number. "This agent found nothing" is a result rather than an absence of one — and it is a
+Every witness is **measurable**, and all four now are. Chapter 7 supplied the labels, Chapter 8
+supplies units of the same shape the corpus holds, and Chapter 9 supplies the arithmetic that turns
+their statements into a number. "This agent found nothing" is a result rather than an absence of one — and it is a
 result with a price, since a silence carries a likelihood ratio below 1.0.
 
 | Version | Goal | Status |
@@ -81,7 +90,7 @@ result with a price, since a silence carries a likelihood ratio below 1.0.
 | v0.5 | semantic agent | ✅ **complete** (Ch 11) — exemplars wired, gate complete, sentinel-bounded prompt; 0% injection subversion and 94% safe-twin pass on the calibration split |
 | v0.6 | empirical calibration | ⬜ blocked on Chapter 14; the corpus and its cross-PR scenarios are now complete |
 | v0.7 | context agent | ⚠️ **no RAG reasoning** — four hard-coded substring tests |
-| v0.8 | runtime agent (Wasmtime + WASI) | ⬜ does not exist |
+| v0.8 | runtime agent (Wasmtime + WASI) | ✅ **complete** (Ch 13) — network denied at link time, guest environment empty, four caps enforced; 9/9 recall and 0/23 false positives on the calibration split |
 | v0.9 | learned scorer + fine-tuned semantic model | ⬜ |
 | v1.0 | dashboard, patch loop, full evaluation | ⬜ |
 
@@ -903,7 +912,7 @@ uv run codesheriff-corpus validate                                  # 76 cases, 
 uv run codesheriff-worker precedent backfill --help                 # the only writer
 ```
 
-## Chapter 13 — Runtime agent ⬜
+## Chapter 13 — Runtime agent ✅
 
 Wasmtime + WASI. **Isolation infrastructure first, detection agent second** — the sandbox earns its
 place because running untrusted PR code is how CI systems get compromised; evidence is a secondary
@@ -915,6 +924,88 @@ expected, not a defect.
 
 **Done when:** a network-attempting fixture is observed and denied, and the sandbox holds no
 credentials.
+
+**Delivered.** D-073 through D-079. Both "Done when" criteria hold, each as a named test, and each
+is proved **twice** — once by a hand-written WebAssembly module that calls one WASI function and
+exits with its errno, and once by real CPython running real attack code inside the same sandbox.
+The first proof needs no interpreter and runs everywhere in milliseconds; the second is what stops
+the first from being a statement about a toy.
+
+- **`test_a_module_that_asks_to_connect_cannot_even_load`** — WASI preview1 defines no
+  `sock_connect`, so the module **fails to instantiate** and the guest never executes an
+  instruction. The test asserts `fuel_used == 0` to say exactly that. `sock_accept` does exist and
+  is useless: accepting needs a listening descriptor and nothing creates one. From Python inside,
+  `socket.socket().connect(...)` and `urllib.request.urlopen(...)` both fail.
+- **`test_the_guest_environment_is_empty_even_when_the_host_is_not`** — the host holds a
+  `GITHUB_TOKEN`, a `DATABASE_URL` and an LLM key at the moment the guest runs, and the guest counts
+  **zero** environment variables. Emptiness by construction, not by filter (D-075). Asserted against
+  a host that genuinely holds them, because the same assertion against an empty host proves nothing.
+
+Also asserted: no filesystem (`/` does not exist from inside; `path_open` on every namable
+descriptor returns EBADF), no process spawn, fuel caps a spinning guest deterministically, the
+wall clock caps a guest that fuel would not, memory growth stops at the ceiling, and two runs of one
+compiled module share no state.
+
+**The detection agent, and it is measured.** `runtime.sfi` executes the changed function once with
+every parameter bound to a uniquely tokenised untrusted value, and reports which dangerous
+operations that value actually reached (D-073). Taint is a **substring**, not a wrapper: the token
+rides through f-strings, `+`, `%`, `.format()` and `os.path.join` for free, so D-061's composition
+rule — a path handed over whole is not a traversal — is a string comparison rather than a dataflow
+analysis.
+
+On the calibration split, and only that split: **9/9 recall** on the cases the corpus predicts for
+this agent, and **0 false positives across 23 safe twins**. 46 cases in ~14 s.
+
+**The five CWEs it claims are the mechanism, not a limitation.** CWE-22, 78, 94, 502 and 918.
+CWE-89 and CWE-79 are absent because their sinks are methods on objects the probe itself
+fabricated, so an "observation" would be the harness observing itself — a weaker restatement of the
+structural witness, which is the correlation D-011 exists to prevent. CWE-862, CWE-639 and CWE-798
+are absent because there is nothing to observe: a missing check is the absence of an event. The
+corpus pre-registered exactly these five in `detectable_by` before this agent existed (D-047), so
+the narrowness is a claim rather than a convenience.
+
+**A guard the probe could not evaluate produces an abstention, not a verdict** (D-079). When the
+exact value that reached a sink had first been handed to an unmodelled call, the run reached that
+sink only because the harness answered the guard. Reporting would be a false positive on precisely
+the code that defends itself; silence would argue that guarded code is clean on the strength of a
+guard nobody read. Two safe twins land here rather than as false positives.
+
+**The interpreter is not committed** (D-074). `python-3.12.0.wasm` is 26 MB, lives in a gitignored
+`.wasm-runtimes/`, is pinned by SHA-256 and verified on load, and is fetched deliberately by a
+person — an agent that downloaded executable code at analysis time would be the supply-chain
+problem this project exists to notice. Without it the agent abstains `interpreter_unavailable` on
+every unit, under its own name, at exactly 1.0, and `runtime-agent doctor` reports every path it
+consulted (D-077). Tests that need it carry the new `wasm` marker and skip, on the `db` precedent
+(D-029).
+
+**There is no second execution backend, not even for tests** (D-076). A host executor would be
+reached the first time a `wasm`-marked test was inconvenient, and from then on the measurement would
+be of untrusted code running on the machine holding the database credentials. This repository has
+shipped that shape twice already — the MD5 term-hasher (`AUDIT.md` 3.8) and the substring debate
+matcher (D-053) — and both became the default path silently.
+
+**The worker's fourth seat now holds an agent.** `_load_runtime` imports `RuntimeAgent`; the sandbox
+is built lazily on the first unit that needs it, because compiling 26 MB costs seconds and a worker
+that paid it at start-up would pay it again on every restart. `apps/worker/tests` had a test
+asserting the seat held a stand-in *because Chapter 13 had not happened*; it now asserts every seat
+holds its real agent, and the stand-in path is tested by a loader that genuinely raises.
+
+⚠️ **Two things this chapter did not measure**, both Chapter 14's by construction:
+
+- **p95 latency.** ~0.3 s per unit after a 2.6 s one-time compile, on this machine, on corpus-sized
+  functions. `CLAUDE.md`'s target is stated for the static agent; the runtime agent has none yet,
+  and one set from a Windows dev box would not be the number.
+- **pgvector-scale units.** Corpus cases are small by design. The behaviour of the fuel budget on a
+  600-line function is unknown, and `fuel_exhausted` is the abstention that would report it.
+
+**Gates.** All five Python gates green: **1204 tests** — 1076 passing with 128 skipped on a machine
+with no database, and 67 more skipped on one with no WASI interpreter, of which 43 of this chapter's
+run regardless because the isolation proofs are hand-written WebAssembly. `ruff` clean, `ruff
+format` clean, `mypy --strict` clean across **103 source files**, `lint-imports` **5 contracts
+kept** — including the two this chapter most risked, agent isolation and the corpus-label ban.
+`agent_runtime` imports `codesheriff_contracts` and `wasmtime` and nothing else.
+
+---
 
 ## Chapter 14 — Bayesian fusion and empirical calibration ⬜
 

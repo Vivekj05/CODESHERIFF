@@ -52,6 +52,7 @@ docstring, killed taint before the sink" is a cause. Only the second is useful l
 | ID | Date | Case | CWE | Agent | Posterior | Cause | Fixed |
 |---|---|---|---|---|---|---|---|
 | FN-001 | 2026-08-29 | `cwe-798-warehouse-connect-vuln` | CWE-798 | `semantic.hosted` | n/a — agent-level, fusion ratios unfitted until Ch 14 | The prompt reports only when "untrusted input enters, it reaches a dangerous sink, and no invariant protects it". A hardcoded DSN has no untrusted input, so the three-stage gate structurally excludes CWE-798 — all three samples returned no findings on a literal password. The framework, not the model, is what missed it | open |
+| FN-002 | 2026-09-01 | `cwe-022-template-delete-vuln` | CWE-22 | `runtime.sfi` | n/a — agent-level, fusion ratios unfitted until Ch 14 | The taint proxy subclasses `str` so tokens ride through string operations, and `str` therefore answered for every attribute the proxy did not define. `os.path.join(dir, name)` resolved to `str.join` with two arguments, raised `TypeError`, and the unit reported `unit_raised` instead of the composed path it had built — losing the composition rule (D-061) on the one function everybody uses to build a path. Fixed by splitting `__getattribute__`: a *tainted* proxy stands in for a string and keeps `str`'s methods, a *clean* one stands in for a module and does not (D-073) | fixed 2026-09-01, same session |
 
 ---
 
