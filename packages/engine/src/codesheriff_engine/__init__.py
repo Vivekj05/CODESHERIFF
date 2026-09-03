@@ -8,10 +8,16 @@ put the layering the import-linter contracts describe one import away from being
 
 What is left is what the engine is for: deciding what a change unit is, and turning
 evidence into a posterior. Neither needs a credential, a socket or a database session,
-which is what lets Chapter 14 run both over the corpus with nothing configured.
+which is what lets the calibration harness run both over the corpus with nothing configured.
+
+Chapter 14 added one thing: `codesheriff_engine.calibration`, which fits the numbers fusion
+multiplies with. It imports no agent and opens no session either — it takes labelled claims and
+returns a table — so the reproducibility §6 asks for is a property of the code rather than a
+promise about how it is used.
 """
 
 from codesheriff_contracts import Artifact, ChangeUnit, Evidence, finding_key
+from codesheriff_engine.calibration import CalibrationArtifact, CalibrationError, active_artifact
 from codesheriff_engine.config import EngineConfig, WitnessRatios
 from codesheriff_engine.fusion import (
     WITNESSES,
@@ -28,6 +34,8 @@ __version__ = "0.1.0"
 __all__ = [
     "WITNESSES",
     "Artifact",
+    "CalibrationArtifact",
+    "CalibrationError",
     "ChangeUnit",
     "EngineConfig",
     "Evidence",
@@ -35,6 +43,7 @@ __all__ = [
     "Stance",
     "WitnessContribution",
     "WitnessRatios",
+    "active_artifact",
     "compute_bayesian_fusion",
     "finding_key",
     "fuse_all_evidence",

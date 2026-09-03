@@ -17,7 +17,10 @@ from codesheriff_engine.fusion.bayes import (
     compute_bayesian_fusion,
     fuse_all_evidence,
     normalize_evidence,
+    posterior_from_cells,
 )
+from codesheriff_engine.fusion.cells import RatioCell, cell_for, tier_for_score
+from codesheriff_engine.fusion.ratios import LR_MAX, LR_MIN, WitnessRatios
 from codesheriff_engine.fusion.witnesses import (
     CONTEXT,
     RUNTIME,
@@ -33,18 +36,25 @@ from codesheriff_engine.fusion.witnesses import (
 __all__ = [
     "ABSTENTION_LR",
     "CONTEXT",
+    "LR_MAX",
+    "LR_MIN",
     "RUNTIME",
     "SEMANTIC",
     "STRUCTURAL",
     "WITNESSES",
     "WITNESS_OF_AGENT",
     "FusionResult",
+    "RatioCell",
     "Stance",
     "UnknownAgentError",
     "WitnessContribution",
+    "WitnessRatios",
     "agents_of",
+    "cell_for",
     "compute_bayesian_fusion",
     "fuse_all_evidence",
     "normalize_evidence",
+    "posterior_from_cells",
+    "tier_for_score",
     "witness_for",
 ]

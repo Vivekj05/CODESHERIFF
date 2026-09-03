@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session as DbSession
 
+from codesheriff_engine.calibration import CalibrationArtifact
 from codesheriff_storage.models import (
     OPEN_AUDIT_STATUSES,
     Audit,
@@ -28,50 +29,49 @@ from codesheriff_storage.models import (
     CalibrationRun,
 )
 
-PROVISIONAL_NOTES = (
-    "Provisional placeholder. No corpus exists yet, so the prior and the threshold are asserted "
-    "values, not fitted ones (PLAN.md Chapter 7 and Chapter 14). Nothing derived from this run may "
-    "be presented as a calibrated probability."
-)
 
+def calibration_run_for(db: DbSession, artifact: CalibrationArtifact) -> CalibrationRun:
+    """The stored record of one fitted calibration artifact, created once and reused.
 
-def provisional_calibration_run(
-    db: DbSession,
-    *,
-    contract_version: str,
-    prior_probability: float,
-    alert_threshold: float,
-) -> CalibrationRun:
-    """The provisional calibration artifact for these numbers, created once and reused.
+    Every audit points at a calibration run, and that run says on its face what it was fitted
+    from (D-032). Before Chapter 14 there was nothing fitted, so this function's predecessor
+    wrote a row with `is_provisional=True`, no corpus hash and no ECE — the honest record of
+    hand-set numbers. `calibration.json` replaced them, so the provisional row is gone rather
+    than kept as a fallback: a fallback would be reached the first time the artifact failed to
+    load, and it would quietly re-introduce numbers nobody fitted.
 
-    Every audit points at a calibration run, and that run says on its face whether it was fitted
-    (D-032). Until Chapter 14 there is nothing fitted, so the honest record is a row with
-    `is_provisional=True`, no corpus hash and no ECE — not a NULL foreign key, which would leave a
-    reader to guess, and not a fabricated artifact, which would let an uncalibrated number be
-    displayed as if it were calibrated.
-
-    Matched on the values themselves: change the prior or the threshold and a new provisional row
-    appears, so a past audit still records the numbers it actually ran under.
+    Matched on the artifact's own identity — the corpus and split it was fitted on, plus the
+    prior and threshold it carries — so re-fitting produces a new row and a past audit still
+    records the numbers it actually ran under. The `ck_calibration_fitted_is_reproducible`
+    constraint holds the other half: a non-provisional row without both hashes cannot exist.
     """
+    validation = artifact.metrics.get("validation")
     stmt = select(CalibrationRun).where(
-        CalibrationRun.is_provisional.is_(True),
-        CalibrationRun.contract_version == contract_version,
-        CalibrationRun.prior_probability == prior_probability,
-        CalibrationRun.alert_threshold == alert_threshold,
+        CalibrationRun.is_provisional.is_(False),
+        CalibrationRun.contract_version == artifact.contract_version,
+        CalibrationRun.corpus_hash == artifact.corpus_hash,
+        CalibrationRun.split_hash == artifact.split_hash,
+        CalibrationRun.prior_probability == artifact.base_rate,
+        CalibrationRun.alert_threshold == artifact.alert_threshold,
     )
     existing = db.execute(stmt).scalars().first()
     if existing is not None:
         return existing
 
     run = CalibrationRun(
-        contract_version=contract_version,
-        is_provisional=True,
-        corpus_hash=None,
-        split_hash=None,
-        fitted_likelihoods={},
-        prior_probability=prior_probability,
-        alert_threshold=alert_threshold,
-        notes=PROVISIONAL_NOTES,
+        contract_version=artifact.contract_version,
+        is_provisional=False,
+        corpus_hash=artifact.corpus_hash,
+        split_hash=artifact.split_hash,
+        fitted_likelihoods={
+            witness: ratios.model_dump() for witness, ratios in artifact.table().items()
+        },
+        prior_probability=artifact.base_rate,
+        alert_threshold=artifact.alert_threshold,
+        ece=validation.ece if validation else None,
+        brier=validation.brier if validation else None,
+        n_cases=validation.n_claims if validation else None,
+        notes=artifact.summary(),
     )
     db.add(run)
     db.flush()

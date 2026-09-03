@@ -58,8 +58,8 @@ def version() -> None:
 @app.command()
 def fuse(
     evidence_path: Path = typer.Argument(..., help="JSON file holding a list of Evidence"),
-    prior: float = typer.Option(None, help="Override the provisional prior"),
-    threshold: float = typer.Option(None, help="Override the provisional alert threshold"),
+    prior: float = typer.Option(None, help="Override the fitted base rate for this run"),
+    threshold: float = typer.Option(None, help="Override the fitted alert threshold"),
 ) -> None:
     """Fuse one unit's evidence and show every witness's contribution to the posterior."""
     if not evidence_path.exists():
@@ -117,6 +117,7 @@ def fuse(
             typer.echo(
                 f"     x {contribution.likelihood_ratio:>6.2f}  "
                 f"{contribution.witness:<11} {_STANCE_TAG[contribution.stance]:<9} "
+                f"{(contribution.cell.value if contribution.cell else 'abstention'):<16} "
                 f"{contribution.note}"
             )
 

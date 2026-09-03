@@ -35,12 +35,17 @@ from codesheriff_corpus.models import CorpusCase, Split
 
 SPLITS_FILENAME = "splits.json"
 
-DEFAULT_RATIOS: dict[Split, float] = {
+DEFAULT_SPLIT_RATIOS: dict[Split, float] = {
     Split.CALIBRATION: 0.6,
     Split.VALIDATION: 0.2,
     Split.TEST: 0.2,
 }
 """60/20/20 by pair.
+
+Named `..._SPLIT_RATIOS` because "ratios" means *likelihood* ratios everywhere else in this
+codebase, and these are proportions of a corpus. The collision was harmless while nothing was
+fitted; it stopped being harmless the moment a test had to assert that no module anywhere
+defines a default ratio table.
 
 Weighted toward calibration because that is where the work is: four agents times
 three evidence kinds is twelve cells to fit, and a cell with two observations in it
@@ -200,7 +205,7 @@ def assign(
     below its share, so the ratios are approached over time rather than enforced by
     moving things.
     """
-    resolved_ratios = dict(DEFAULT_RATIOS) if ratios is None else ratios
+    resolved_ratios = dict(DEFAULT_SPLIT_RATIOS) if ratios is None else ratios
     settled = dict(existing or {})
 
     cwe_of = {pair_id: vuln.cwe for pair_id, (vuln, _safe) in load_pairs().items()}

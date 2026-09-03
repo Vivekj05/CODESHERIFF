@@ -17,14 +17,15 @@ One chapter per session. Start a session by reading this file, take the first ch
 
 ## Where the project actually is
 
-Roughly: **v0.1–v0.5 built and measured; v0.6 onward not started.**
+Roughly: **v0.1–v0.6 built and measured; v0.7 onward not started.**
 
 Four packages exist with a passing test suite and a webhook that reaches GitHub. But the conformance
 audit found three of four analysis components non-functional, the fusion engine implementing the
 pre-reversal form of nearly every finalized decision, and the webhook unauthenticated. Nothing
-numeric is calibrated, because no corpus exists.
+numeric was calibrated, because no corpus existed.
 
-The test suite reports 100% and cannot detect any of this.
+The test suite reported 100% and could not detect any of this. *(That paragraph is the state the
+audit found, kept as written. Every finding in it is now closed — see below and `AUDIT.md`.)*
 
 As of Chapter 2 the workspace installs, runs and passes its gates, and the contract every other
 component serialises is frozen at v2.0.0. As of Chapter 6 the seam around the analysis is real: a
@@ -50,6 +51,14 @@ Chapter 13 the runtime witness executes the changed function inside a Wasmtime s
 the network at link time and hands the guest an empty environment, and reports what an untrusted
 value actually reached: 9/9 on the cases the corpus predicts for it and 0 false positives across 23
 safe twins.
+
+**As of Chapter 14 the numbers are fitted.** Every likelihood ratio comes from the calibration
+split, the alert threshold from a weighted precision–recall sweep on the validation split, and both
+travel in `calibration.json` with the corpus hash they were measured against. There is no hand-set
+prior, threshold or ratio table left anywhere in the codebase — not renamed, deleted — so a missing
+artifact raises rather than quietly producing a number nobody measured. Weighted ECE is 0.027 and
+Brier 0.013 at selection time; the honest version of both is the test split's, which stays sealed
+until Chapter 18.
 
 The four are **heterogeneous in the way the thesis needs**, and the measurements are the first
 evidence for it rather than an argument about it. Their errors do not coincide. The semantic agent's
@@ -88,7 +97,7 @@ result with a price, since a silence carries a likelihood ratio below 1.0.
 | v0.3 | Semgrep backend + fusion engine | ✅ **complete** (Ch 9) — all 7 fusion defects closed; four witnesses, one factor each. Ratios still asserted until Ch 14 |
 | v0.4 | taint engine | ✅ **complete** (Ch 10) — worklist propagation over a real def-use graph; 13/13 recall and 0/18 false positives on the calibration split |
 | v0.5 | semantic agent | ✅ **complete** (Ch 11) — exemplars wired, gate complete, sentinel-bounded prompt; 0% injection subversion and 94% safe-twin pass on the calibration split |
-| v0.6 | empirical calibration | ⬜ blocked on Chapter 14; the corpus and its cross-PR scenarios are now complete |
+| v0.6 | empirical calibration | ✅ **complete** (Ch 14) — ratios fitted on calibration, threshold selected on validation, `calibration.json` committed; weighted ECE 0.027 / Brier 0.013 at selection. No unfitted number remains |
 | v0.7 | context agent | ⚠️ **no RAG reasoning** — four hard-coded substring tests |
 | v0.8 | runtime agent (Wasmtime + WASI) | ✅ **complete** (Ch 13) — network denied at link time, guest environment empty, four caps enforced; 9/9 recall and 0/23 false positives on the calibration split |
 | v0.9 | learned scorer + fine-tuned semantic model | ⬜ |
@@ -1007,21 +1016,96 @@ kept** — including the two this chapter most risked, agent isolation and the c
 
 ---
 
-## Chapter 14 — Bayesian fusion and empirical calibration ⬜
+## Chapter 14 — Bayesian fusion and empirical calibration ✅
 
 **The thesis. Everything before this is setup.**
-**Closes** `AUDIT.md` 2.1.
+**Closes** `AUDIT.md` 2.1 — the last open Tier 2 finding.
 
-Fit likelihood ratios on the **calibration split** with Laplace smoothing and clamps. Measure the
-prior, then rescale from the balanced corpus (~50%) to the real base rate (~2–5%) — and **record the
-rescaling**. Select the threshold from a precision-recall sweep on the **validation split**. Emit
-`calibration.json` recording the corpus commit hash.
+Fitted likelihood ratios on the **calibration split**, selected the alert threshold on the
+**validation split**, and left the test split sealed. `packages/engine/src/codesheriff_engine/
+calibration/calibration.json` is the artifact, and it is now the only place in the codebase a
+likelihood ratio, a prior or a threshold comes from — `PROVISIONAL_RATIOS`, `PROVISIONAL_PRIOR`,
+`PROVISIONAL_ALERT_THRESHOLD` and `FALLBACK_RATIOS` are **deleted**, not relabelled (D-080, D-082).
 
-Research integrity (§6, non-negotiable): weights fitted only on calibration, threshold only on
-validation, **test split untouched until Chapter 18**.
+**What was built.**
 
-**Done when:** `calibration.json` is reproducible from its recorded corpus hash, and no hardcoded LR,
-prior, or threshold remains anywhere in the codebase.
+- **`codesheriff_engine.calibration`** — the fitting arithmetic, and nothing else. No agent, no
+  corpus, no session: it takes labelled `Claim`s and returns a table, which is what makes §6's
+  "reproducible from the calibration split and a recorded corpus hash" a property of the code
+  rather than a promise about how it is used. `observations.py` (what a claim is), `fit.py`
+  (Laplace, clamps, per-cell counts), `prior.py` (declared base rate and rescaling), `metrics.py`
+  (ECE, Brier, reliability bins), `threshold.py` (the weighted sweep), `artifact.py`.
+- **`fusion/cells.py`** — the single definition of *what a witness said*. `bayes.py` reads a cell
+  to look a ratio **up**; `fit.py` reads the same cell to count observations and fit that ratio
+  **in**. Two implementations would fit one quantity and apply another, and both halves would pass
+  their own tests. `posterior_from_cells` is likewise the one piece of arithmetic, shared by the
+  audit path and the threshold sweep.
+- **`codesheriff-worker calibrate observe|record|fit|show`** — the harness. It runs the
+  **production** `load_agents` / `analyse_unit` with per-case bindings (D-085), and refuses the
+  test split by name (D-086's sibling: `TestSplitSealedError`).
+- **`calibration/observations/{calibration,validation}.jsonl`** — committed, so a fit is
+  reproducible without a WASI interpreter, an API key or a Semgrep build. `calibration/responses/`
+  holds the 14 validation model responses, recorded once and read by no test.
+
+**The numbers.** 49 claims from 46 calibration cases, 15 from 14 validation cases.
+
+| witness | high | medium | low | silence | spoke (+/−) | abstained |
+|---|---|---|---|---|---|---|
+| structural | 2.22 | 15.56 | 1.00 | 0.07 | 14 / 16 | 19 |
+| semantic | 9.48 | 0.56 | 0.74 | 0.30 | 22 / 25 | 2 |
+| context | 2.00 | 4.00 | 2.00 | 0.17 | 5 / 5 | 39 |
+| runtime | 6.92 | 1.00 | 1.00 | 0.12 | 9 / 5 | 35 |
+
+Base rate **3%**, declared and recorded as declared (D-083). Alert threshold **0.227**, selected by
+maximum weighted F1 on validation: F1 0.923, precision 1.000, recall 0.857, 6 of 15 claims alerting.
+Weighted **ECE 0.027** and **Brier 0.013** on validation; 0.009 / 0.010 in-sample on calibration.
+
+**Read the table with its counts, not as four confident rows.** Three things in it are thin, and
+all three are recorded in the artifact rather than smoothed away:
+
+- **`structural.detection_medium` (15.56) exceeds `detection_high` (2.22).** Not because a
+  confident taint path is weaker evidence — because 13 of the taint engine's 14 true detections
+  score in the medium band and exactly one scores high. The high cell is nearly all smoothing
+  prior. It says the agent's `raw_score` rarely reaches 0.8, which is a scoring-calibration
+  question for the static agent and not a fusion one.
+- **`context` fits from 10 claims** and `runtime` from 14. Both witnesses abstain on most units by
+  construction — that is the design (a repository with no relevant history, a function that will
+  not run in a sandbox), and it means their ratios rest on the fewest observations.
+- **A cell nobody selected is exactly 1.0** (D-087), not the smoothed value, which would have made
+  `runtime`'s two unobserved detection tiers argue mildly for *safety*.
+
+**Two production defects, found by the harness rather than by the suite** (D-088). The semantic
+agent's `budget_usd_per_unit` never reset, so one agent analysing many units enforced a
+per-*process* budget — the first few units of a pull request were analysed and every one after them
+abstained. And a unit whose budget stopped the loop before its first sample fell through to
+**SILENCE**, reporting "reviewed the unit and found nothing" across all ten in-scope CWEs at a
+likelihood ratio below 1.0, having read nothing. Both fixed, both with regression tests. Neither is
+visible from a single-unit test, which is why 46 units through one production-shaped agent found
+them.
+
+⚠️ **Three things this chapter did not do.**
+
+1. **`structural.semgrep` abstained on every unit.** There is no Semgrep build for Windows, so the
+   structural ratios describe a **one-backend witness** and the artifact's provenance says so on its
+   face. Chapter 18 must re-observe on Linux or CI before any structural number reaches the paper.
+2. **The prior is declared, not measured.** A twin-paired corpus cannot supply one — its prevalence
+   is 0.5 by construction. The ratios are prevalence-invariant, so changing the base rate rescales
+   every posterior by a recorded factor and refits nothing.
+3. **p95 latency and the fuel budget on a 600-line function** are still unmeasured, as Chapter 13
+   noted. They need CI hardware, not a corpus.
+
+**Done when — all four met.** `calibration.json` is reproducible from its recorded corpus hash
+(`test_it_names_the_corpus_it_was_fitted_on_and_that_corpus_is_this_one` compares the artifact's
+hash against the live corpus, so an edited case turns the suite red rather than silently
+invalidating the fit); no hardcoded LR, prior or threshold remains anywhere
+(`test_no_unfitted_numbers.py` parses the tree, and bans `DEFAULT_PRIOR` as well as
+`PROVISIONAL_PRIOR`); ratios were fitted only on calibration and the threshold only on validation
+(`fit_from_observations` refuses a set from the wrong split); the test split was never read.
+
+**Gates.** All five Python gates green: **1128 tests** passing with 128 skipped on a machine with no
+database (the WASI interpreter is present here). `ruff` clean, `ruff format` clean, `mypy --strict`
+clean across **117 source files**, `lint-imports` **6 contracts kept** — the sixth is new, and it is
+what keeps the audit path blind to the corpus now that the harness shares the worker process (D-086).
 
 ---
 

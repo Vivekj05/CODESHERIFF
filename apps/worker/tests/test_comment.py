@@ -17,10 +17,11 @@ import uuid
 
 from codesheriff_contracts import CONTRACT_VERSION, ChangeUnit, Evidence
 from codesheriff_engine.extraction import ExtractionResult, SkippedFile, SkipReason
-from codesheriff_engine.fusion import fuse_all_evidence
+from codesheriff_engine.fusion import WitnessRatios, fuse_all_evidence
 from codesheriff_worker.comment import (
     SKIP_WORDING,
     STANCE_WORDING,
+    CalibrationFacts,
     marker_for,
     render,
 )
@@ -70,19 +71,57 @@ ALL_ABSTAINED = [
 ]
 
 
+TABLE: dict[str, WitnessRatios] = {
+    "structural": WitnessRatios(
+        detection_high=8.5, detection_medium=3.2, detection_low=0.8, silence=0.60
+    ),
+    "semantic": WitnessRatios(
+        detection_high=12.0, detection_medium=4.5, detection_low=0.5, silence=0.50
+    ),
+    "context": WitnessRatios(
+        detection_high=4.2, detection_medium=2.1, detection_low=0.9, silence=0.85
+    ),
+    "runtime": WitnessRatios(
+        detection_high=15.0, detection_medium=5.0, detection_low=0.7, silence=0.40
+    ),
+}
+"""A fixture table. These tests are about what the comment says, not about what the fit
+produced, and a rendering test that moved with every re-fit would be measuring the wrong
+thing."""
+
+FITTED = CalibrationFacts(
+    corpus_hash="1ea6d1cdbf24" + "0" * 52,
+    split_hash="e5bf1bb56bde" + "0" * 52,
+    base_rate=0.03,
+    alert_threshold=0.23,
+    is_provisional=False,
+    ece=0.03,
+    brier=0.01,
+)
+"""A fitted run, as the audit row records it.
+
+Values rather than the live artifact: the comment renders what its audit ran under, and a
+test that read `calibration.json` would change its expectations every time anything is
+re-fitted while testing nothing about the rendering.
+"""
+
+
 def body(
     evidence: list[Evidence] | None = None,
     extraction: ExtractionResult | None = None,
+    calibration: CalibrationFacts | None = FITTED,
 ) -> str:
+
     statements = ALL_ABSTAINED if evidence is None else evidence
     return render(
         AUDIT_ID,
         statements,
-        fuse_all_evidence(statements, prior_p=0.05, alert_threshold=0.70),
+        fuse_all_evidence(statements, prior_p=0.05, alert_threshold=0.70, ratios=TABLE),
         DASHBOARD_URL,
         extraction,
         prior_probability=0.05,
         alert_threshold=0.70,
+        calibration=calibration,
     )
 
 
@@ -100,15 +139,21 @@ def test_the_comment_never_says_the_code_is_clean() -> None:
 
 
 def test_a_finding_never_appears_without_its_calibration_state() -> None:
-    """D-032, and the one assertion in this file that must never be relaxed."""
-    rendered = body([detection("structural.taint")])
+    """D-032, and the one assertion in this file that must never be relaxed.
 
-    assert "%" in rendered, "sanity: this render does contain a probability"
-    assert "Provisional, not calibrated" in rendered
-    assert "provisional" in rendered.lower()
-    # Stated beside the number itself, not only in a footer a reader can scroll past.
-    heading = next(line for line in rendered.splitlines() if "P(vulnerable)" in line)
-    assert "provisional" in heading.lower()
+    The state used to be "provisional" on every render because nothing was fitted. It is now
+    whichever state the audit actually ran in, and both readings are asserted — a comment that
+    could only say one of them would be a banner rather than a statement.
+    """
+    fitted = body([detection("structural.taint")])
+    assert "%" in fitted, "sanity: this render does contain a probability"
+    assert "Calibrated" in fitted
+    assert "1ea6d1cdbf24" in fitted, "the corpus the ratios were fitted on is named"
+    assert "base rate of 3.0%" in fitted, "a posterior without its base rate cannot be read"
+
+    unfitted = body([detection("structural.taint")], calibration=None)
+    assert "Uncalibrated run" in unfitted
+    assert "rather than measured against ground truth" in unfitted
 
 
 def test_a_quiet_audit_carries_no_probability_at_all() -> None:
@@ -120,7 +165,10 @@ def test_a_quiet_audit_carries_no_probability_at_all() -> None:
 
 
 def test_the_comment_explains_what_the_number_is_not() -> None:
-    assert "not yet measured" in body([detection("structural.taint")])
+    """A probability, not a proof — and the footer says which."""
+    rendered = body([detection("structural.taint")])
+    assert "held-out calibration split" in rendered
+    assert "What it is not is a proof" in rendered
 
 
 # -- the witness table -------------------------------------------------------------------------

@@ -2282,3 +2282,173 @@ the value that reached the sink is the value that was inspected.
 On the calibration split this converts two safe twins — `cwe-918-link-preview-safe` and
 `cwe-918-webhook-test-safe` — from would-be false positives into abstentions. Both are exactly the
 shape the rule describes: an unmodelled predicate consulted on the URL that is then fetched.
+
+---
+
+## D-080 — The fitted artifact is the only source of a ratio, a prior or a threshold
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14
+
+**Decision.** `calibration.json` — fitted on the calibration split, committed inside
+`codesheriff_engine` — is where every likelihood ratio, the base rate and the alert threshold come
+from. `fusion/ratios.py` keeps the *type* and the clamp bounds and holds no numbers at all.
+`PROVISIONAL_RATIOS`, `PROVISIONAL_PRIOR`, `PROVISIONAL_ALERT_THRESHOLD` and `FALLBACK_RATIOS` are
+deleted rather than relabelled.
+
+**Because a number that announces its own provisionality still gets multiplied in.** Every one of
+those constants carried a comment saying it was not fitted, and `apps/worker/comment.py` printed a
+banner saying so on every render. The system was scrupulously honest and completely uncalibrated —
+which is the practice the paper criticises, carried out carefully. Deleting the constants is what
+makes the claim structural: with no fallback table, a missing artifact raises instead of quietly
+producing a number nobody measured.
+
+`packages/engine/tests/test_no_unfitted_numbers.py` parses the whole source tree rather than
+grepping it, and bans `DEFAULT_PRIOR` alongside `PROVISIONAL_PRIOR` — the objection was never the
+word "provisional".
+
+---
+
+## D-081 — A silence that fits at or above 1.0 is clamped, and the raw value is recorded
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14
+
+**Decision.** `WitnessRatios.silence` is typed `lt=1.0`. A witness whose fitted silence exceeds
+that is clamped to `SILENCE_CEILING = 0.999`, `CellFit.raw_ratio` keeps the fitted value, and the
+fit logs a warning naming the witness.
+
+**Because §5's invariant and the data can disagree, and the invariant is the one with a reason.** A
+silence at or above 1.0 would make "looked and found nothing" evidence *for* a vulnerability, which
+is not a claim any silence supports. But a weak witness really can be silent on vulnerable code more
+often than on safe code, and that is a fact about the witness rather than about the code. The clamp
+keeps the semantics; the recorded raw value keeps the honesty. Absorbing it silently would mean the
+artifact showed a number no observation produced.
+
+No witness hit the ceiling in the Chapter 14 fit. The path is exercised by a unit test rather than
+by the corpus, which is the right way round: the constraint has to hold for the fit after next.
+
+---
+
+## D-082 — There is no fallback ratio table; a witness missing from a fit is an error
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14 · **Supersedes** part of D-011
+
+**Decision.** `CalibrationArtifact.load` refuses an artifact whose witness set is not exactly
+`fusion.witnesses.WITNESSES`, and `_ratios_for` raises on a table missing a row. `FALLBACK_RATIOS`
+is gone.
+
+**Because the roster is fixed, so a missing row means an incomplete fit.** The fallback existed to
+keep an unregistered witness timid, and `fit_ratios` now covers every registered witness whether or
+not it ever spoke — a witness that abstained throughout fits to 1.0 in its detection cells, which is
+the correct value for a witness nothing is known about and is *derived* rather than asserted. A
+fallback would only ever be reached by a partial table, and filling one in is how an unfitted factor
+gets into a posterior nobody can later account for.
+
+---
+
+## D-083 — Rates measured on a balanced split are reweighted to the declared base rate
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14
+
+**Decision.** The prior is **declared**, not measured (`DEFAULT_BASE_RATE = 0.03`), and the artifact
+records the corpus prevalence it was rescaled from plus the rescaling factor. Every rate computed on
+a split — precision and recall in the threshold sweep, ECE and Brier — is importance weighted to
+that base rate before it is reported.
+
+**Because the corpus is twin-paired, so its prevalence is 0.5 by construction.** Reading a prior off
+it would state that one changed function in two is vulnerable. What the corpus legitimately supplies
+is the likelihood ratios, which are conditioned on the label and therefore prevalence-invariant —
+which is exactly why a balanced corpus is the right shape for fitting them. Prevalence enters once,
+as a stated assumption that can be changed without refitting anything.
+
+The weighting matters most for the threshold. Unweighted, a 50/50 split makes almost any cut point
+look precise, because half the changes really are vulnerable; the threshold selected under that
+assumption would be far too low for a repository where 3% are.
+
+---
+
+## D-084 — `CALIBRATION_PATH` selects an artifact; nothing else about the numbers is configurable
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14
+
+**Decision.** `EngineConfig` has no `prior_probability`, `alert_threshold` or `ratios` fields. It
+has one setting — which artifact to load — and the artifact ships inside the package, so the setting
+is normally unset.
+
+**Because an operator who can raise the threshold from an environment variable can make a calibrated
+system uncalibrated without changing a line of code or leaving a trace.** Every audit records the
+calibration run it was opened under precisely so that what it ran under is knowable afterwards; a
+settings object that could override the artifact's numbers would make that record a description of
+the artifact rather than of the run.
+
+---
+
+## D-085 — The calibration harness runs the production agent loader, with per-case bindings
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14
+
+**Decision.** `codesheriff-worker calibrate observe` calls the same `load_agents` and `analyse_unit`
+an audit calls, with `AgentDeps` extended to carry an optional `llm_client`. The per-case
+dependencies — the corpus retriever and the replayed model responses — are **rebound** between cases
+rather than rebuilt with the agents.
+
+**Because a ratio fitted against a differently assembled agent describes an object production never
+builds.** A research harness that constructed its own `SemanticAgent` and `RuntimeAgent` would be
+the same class of mistake as a test that passes against a shell: everything would look measured.
+Rebinding rather than reloading is the one concession, and it is a performance one — the runtime
+sandbox compiles a 26 MB CPython module, and rebuilding it 76 times measures patience.
+
+It paid for itself immediately: running 46 units through one production-shaped agent is what
+surfaced D-088, a defect that only appears on the second unit of an audit.
+
+---
+
+## D-086 — The audit path cannot import the corpus, even though the worker can
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14
+
+**Decision.** A new `import-linter` contract forbids `codesheriff_worker.tasks`, `.pipeline`,
+`.analysis`, `.comment` and all of `codesheriff_api` from importing `codesheriff_corpus`. The
+harness under `codesheriff_worker.calibration` may.
+
+**Because putting the harness in `apps/worker` (D-085) gave the production process an import path to
+`label` and `detectable_by`.** D-047 stops the agents; this stops the pipeline around them. The leak
+would not look like cheating — it would look like a convenient import in the pipeline for "just
+checking" whether a unit matches a known case.
+
+---
+
+## D-087 — A cell with no observations contributes exactly 1.0, not a smoothed ratio
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14
+
+**Decision.** Where a cell was selected by neither a vulnerable nor a safe claim, its ratio is 1.0.
+The Laplace value the counts would have implied is recorded as `CellFit.smoothed_ratio`.
+
+**Because smoothing an empty cell reports the class balance of a different cell's observations.**
+With both counts at zero the ratio reduces to `(N_safe + 4α) / (N_vulnerable + 4α)`. `runtime.sfi`
+spoke on 9 vulnerable claims and 5 safe ones, so its two never-observed detection tiers came out at
+0.69 — mild evidence of *safety*, on a tier no witness has ever selected. That is the abstention
+principle in another costume: no observation is no evidence, and no evidence is 1.0 (D-005).
+
+---
+
+## D-088 — Budget exhaustion abstains, and the budget is per unit
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14
+
+**Decision.** `BudgetTracker.reset()` is called at the top of every `SemanticAgent.analyze`, and a
+unit whose budget stopped the sampling loop before any sample completed abstains `budget_exceeded`
+rather than falling through to SILENCE.
+
+**Two production defects, both found by running 46 corpus cases through one agent.**
+
+`budget_usd_per_unit` accumulated for the life of the agent object, and one agent analyses every
+unit of an audit — so it was a per-*process* budget wearing a per-unit name. The first few units of
+a pull request were analysed and every unit after them abstained. In the harness it showed up as
+"Budget reached after 0 of 3 samples" on thirty consecutive cases.
+
+With that fixed, the remaining path was worse. Zero samples with no provider failure and no schema
+failure fell through to the SILENCE a completed analysis returns — an agent that stopped before its
+first call reporting "reviewed the unit and reported no in-scope finding" across all ten in-scope
+CWEs, at a likelihood ratio below 1.0. That is `AUDIT.md` 3.12 reached by a different road, and it
+would have pushed posteriors *down* on units nobody looked at.

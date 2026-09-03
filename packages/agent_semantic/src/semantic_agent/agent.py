@@ -179,6 +179,10 @@ class SemanticAgent:
                     "part of it would produce confident findings from half-read code.",
                 )
 
+            # The ceiling is per unit, so the count starts here. Without this the agent
+            # analyses the first few units of an audit and abstains `budget_exceeded` on every
+            # one after them — a per-process budget under a per-unit name.
+            self.budget_tracker.reset()
             if self.budget_tracker.is_exceeded():
                 return self._abstain(
                     unit, "budget_exceeded", "Unit USD budget ceiling exceeded before analysis."
@@ -210,6 +214,20 @@ class SemanticAgent:
                     "schema_violation",
                     f"The model returned output that did not match the schema on all "
                     f"{parse_failures} attempt(s).",
+                )
+
+            # Zero samples, and neither the provider nor the schema is why: the budget stopped
+            # the loop before the first call. That is an agent that did not look, and it must
+            # abstain. Falling through to the SILENCE below would have it report "reviewed the
+            # unit and found nothing" across all ten in-scope CWEs, at a likelihood ratio under
+            # 1.0, having read nothing — the shape of `AUDIT.md` 3.12, reached by a different
+            # road. Found by the Chapter 14 harness (D-088).
+            if not valid_responses:
+                return self._abstain(
+                    unit,
+                    "budget_exceeded",
+                    f"The unit budget of ${self.config.budget_usd_per_unit:.4f} was reached "
+                    f"before any sample completed; no model output was examined.",
                 )
 
             evidence = aggregate_self_consistency(

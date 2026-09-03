@@ -34,21 +34,15 @@ quiet unit produces is evidence rows, which the worker persists regardless.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from codesheriff_contracts import Evidence, EvidenceKind
-from codesheriff_engine.fusion.ratios import (
-    FALLBACK_RATIOS,
-    LR_MAX,
-    LR_MIN,
-    PROVISIONAL_ALERT_THRESHOLD,
-    PROVISIONAL_PRIOR,
-    PROVISIONAL_RATIOS,
-    WitnessRatios,
-)
+from codesheriff_engine.fusion.cells import RatioCell, cell_for
+from codesheriff_engine.fusion.ratios import LR_MAX, LR_MIN, WitnessRatios
 from codesheriff_engine.fusion.witnesses import WITNESSES, witness_for
 
 logger = logging.getLogger(__name__)
@@ -79,6 +73,15 @@ class WitnessContribution(BaseModel):
 
     witness: str
     stance: Stance
+    cell: RatioCell | None = None
+    """The ratio-table cell this witness's statements selected, or None for an abstention.
+
+    Recorded because it is the join between a published posterior and the artifact that
+    produced it: `calibration.json` states a ratio per cell, and this says which one was
+    read. A breakdown that named only the number would leave a reader unable to check it
+    against the fit.
+    """
+
     likelihood_ratio: float
     agent_ids: list[str] = Field(default_factory=list)
     """The backends that spoke for this witness on this finding. Empty when NEUTRAL."""
@@ -147,16 +150,47 @@ def _clamp_lr(lr: float) -> float:
     return max(LR_MIN, min(LR_MAX, lr))
 
 
-def _ratios_for(witness: str, table: dict[str, WitnessRatios]) -> WitnessRatios:
+def _ratios_for(witness: str, table: Mapping[str, WitnessRatios]) -> WitnessRatios:
+    """This witness's row, or a refusal.
+
+    There is no fallback table any more (D-082). A fitted artifact covers every registered
+    witness — `CalibrationArtifact.load` refuses one that does not — so a missing row here
+    means the caller assembled a partial table by hand, and inventing timid numbers for it
+    would put an unfitted factor into a posterior nobody could later account for.
+    """
     ratios = table.get(witness)
     if ratios is None:
-        logger.warning(
-            "No likelihood ratios configured for witness %r; using the timid fallback. "
-            "A witness fusing on unfitted ratios should be recorded, not assumed.",
-            witness,
+        raise KeyError(
+            f"no likelihood ratios for witness {witness!r}. Fusion multiplies one factor per "
+            f"registered witness, so a table missing one cannot produce a posterior; supply a "
+            f"complete table or use the fitted artifact. Known: {sorted(table)}"
         )
-        return FALLBACK_RATIOS
     return ratios
+
+
+def posterior_from_cells(
+    cells: Mapping[str, RatioCell | None],
+    table: Mapping[str, WitnessRatios],
+    prior_p: float,
+) -> float:
+    """The odds product, from one cell per witness. **The** arithmetic, used by both halves.
+
+    `compute_bayesian_fusion` calls this to produce the number a developer is shown, and
+    `calibration.scoring` calls it to sweep a threshold and measure ECE. A sweep with its own
+    copy of these four lines would be selecting a cut point for a quantity the engine does not
+    emit, and the two would agree exactly until one of them was edited.
+
+    A witness whose cell is `None` contributes `ABSTENTION_LR`, which is 1.0 by definition.
+    """
+    clamped_prior = max(0.001, min(0.999, prior_p))
+    odds = clamped_prior / (1.0 - clamped_prior)
+    for witness in WITNESSES:
+        cell = cells.get(witness)
+        if cell is None:
+            odds *= ABSTENTION_LR
+            continue
+        odds *= _clamp_lr(_ratios_for(witness, table).for_cell(cell))
+    return odds / (1.0 + odds)
 
 
 def _contribution(
@@ -165,30 +199,28 @@ def _contribution(
     detections: list[Evidence],
     silences: list[Evidence],
     abstentions: list[Evidence],
-    table: dict[str, WitnessRatios],
+    table: Mapping[str, WitnessRatios],
 ) -> WitnessContribution:
     """This witness's single factor, after combining whatever its backends said.
 
-    Backends combine by **plain max** (D-011, provisional). One witness makes one
-    statement, and its strongest claim is that statement: two structural backends both
-    firing high stay at 8.5 rather than compounding to 59.5, two silences stay one
-    silence rather than squaring, and one backend's silence does not retract its
-    sibling's detection. D-011 leaves the combination rule explicitly open pending corpus
-    data; max is the conservative fixed point, because it can never exceed what a single
-    backend claimed alone. Chapter 14 replaces it.
+    Backends combine by **plain max** (D-011, and Chapter 14 kept it). One witness makes one
+    statement, and its strongest claim is that statement: two structural backends both firing
+    high stay at one high detection rather than compounding, two silences stay one silence
+    rather than squaring, and one backend's silence does not retract its sibling's detection.
+    Max can never exceed what a single backend claimed alone, and the fit counts observations
+    the same way — `cells.cell_for` is the one definition of what a witness said, and it is
+    what both this function and `calibration.fit` ask.
     """
     ratios = _ratios_for(witness, table)
-
-    candidates: list[float] = [ratios.for_score(ev.raw_score) for ev in detections]
+    cell = cell_for(cwe, detections, silences)
     covering = [ev for ev in silences if ev.covers(cwe)]
-    if covering:
-        candidates.append(ratios.silence)
 
     if detections:
         return WitnessContribution(
             witness=witness,
             stance=Stance.DETECTED,
-            likelihood_ratio=_clamp_lr(max(candidates)),
+            cell=cell,
+            likelihood_ratio=_clamp_lr(ratios.for_cell(cell)) if cell else ABSTENTION_LR,
             agent_ids=sorted({ev.agent_id for ev in detections}),
             note=f"Detected {cwe}.",
         )
@@ -197,6 +229,7 @@ def _contribution(
         return WitnessContribution(
             witness=witness,
             stance=Stance.SILENT,
+            cell=cell,
             likelihood_ratio=_clamp_lr(ratios.silence),
             agent_ids=sorted({ev.agent_id for ev in covering}),
             note=f"Ran to completion and found no {cwe}.",
@@ -222,6 +255,7 @@ def _contribution(
     return WitnessContribution(
         witness=witness,
         stance=Stance.NEUTRAL,
+        cell=None,
         likelihood_ratio=ABSTENTION_LR,
         agent_ids=sorted({ev.agent_id for ev in abstentions}),
         note=note,
@@ -260,12 +294,39 @@ def _line_numbers(detections: list[Evidence]) -> list[int]:
     return sorted(lines)
 
 
+def _defaults(
+    prior_p: float | None,
+    alert_threshold: float | None,
+    ratios: Mapping[str, WitnessRatios] | None,
+) -> tuple[float, float, Mapping[str, WitnessRatios]]:
+    """Fill unset arguments from the fitted artifact.
+
+    Resolved per call rather than as parameter defaults, for two reasons. A default evaluated
+    at import time would freeze whichever artifact was on disk when the module was first
+    imported, which is wrong for a long-lived worker and wrong for a re-fit during
+    development. And the import is local because `calibration.scoring` imports this module —
+    the arithmetic belongs to fusion, the fitted numbers belong to calibration, and only one
+    of those two directions can be a module-level import.
+    """
+    from codesheriff_engine.calibration.artifact import active_artifact
+
+    if prior_p is not None and alert_threshold is not None and ratios is not None:
+        return prior_p, alert_threshold, ratios
+
+    artifact = active_artifact()
+    return (
+        artifact.base_rate if prior_p is None else prior_p,
+        artifact.alert_threshold if alert_threshold is None else alert_threshold,
+        artifact.table() if ratios is None else ratios,
+    )
+
+
 def compute_bayesian_fusion(
     finding_key: str,
     evidence_list: list[Any],
-    prior_p: float = PROVISIONAL_PRIOR,
-    alert_threshold: float = PROVISIONAL_ALERT_THRESHOLD,
-    ratios: dict[str, WitnessRatios] | None = None,
+    prior_p: float | None = None,
+    alert_threshold: float | None = None,
+    ratios: Mapping[str, WitnessRatios] | None = None,
 ) -> FusionResult:
     """One posterior for one finding, from **every** witness's statement about the unit.
 
@@ -274,7 +335,7 @@ def compute_bayesian_fusion(
     key, and passing only the keyed group is precisely how the silences and abstentions
     used to fall out of the arithmetic.
     """
-    table = ratios if ratios is not None else PROVISIONAL_RATIOS
+    prior, threshold, table = _defaults(prior_p, alert_threshold, ratios)
     normalized = normalize_evidence(evidence_list)
 
     detections = [
@@ -310,30 +371,32 @@ def compute_bayesian_fusion(
             continue
         by_witness[witness_for(ev.agent_id)][ev.kind].append(ev)
 
-    clamped_prior = max(0.001, min(0.999, prior_p))
-    odds = clamped_prior / (1.0 - clamped_prior)
-
-    contributions: list[WitnessContribution] = []
-    for witness in WITNESSES:
-        buckets = by_witness[witness]
-        contribution = _contribution(
+    contributions = [
+        _contribution(
             witness=witness,
             cwe=cwe,
-            detections=buckets[EvidenceKind.DETECTION],
-            silences=buckets[EvidenceKind.SILENCE],
-            abstentions=buckets[EvidenceKind.ABSTENTION],
+            detections=by_witness[witness][EvidenceKind.DETECTION],
+            silences=by_witness[witness][EvidenceKind.SILENCE],
+            abstentions=by_witness[witness][EvidenceKind.ABSTENTION],
             table=table,
         )
-        contributions.append(contribution)
-        odds *= contribution.likelihood_ratio
+        for witness in WITNESSES
+    ]
 
-    posterior = odds / (1.0 + odds)
+    # Through the shared arithmetic, from the cells the contributions recorded. The
+    # breakdown above and the number below therefore cannot disagree, and the threshold
+    # sweep in `calibration` scores the identical function.
+    posterior = posterior_from_cells(
+        {c.witness: c.cell for c in contributions},
+        table,
+        prior,
+    )
 
     primary = max(detections, key=lambda ev: ev.raw_score)
     return FusionResult(
         finding_key=finding_key,
         posterior_probability=round(posterior, 4),
-        is_alert_worthy=posterior >= alert_threshold,
+        is_alert_worthy=posterior >= threshold,
         # Everything that shaped this number: this key's detections, plus every
         # unit-level statement. Detections of other CWEs belong to other findings.
         evidence_list=[
@@ -351,9 +414,9 @@ def compute_bayesian_fusion(
 
 def fuse_all_evidence(
     evidence_list: list[Any],
-    prior_p: float = PROVISIONAL_PRIOR,
-    alert_threshold: float = PROVISIONAL_ALERT_THRESHOLD,
-    ratios: dict[str, WitnessRatios] | None = None,
+    prior_p: float | None = None,
+    alert_threshold: float | None = None,
+    ratios: Mapping[str, WitnessRatios] | None = None,
 ) -> list[FusionResult]:
     """Every finding in one unit's evidence, most probable first.
 

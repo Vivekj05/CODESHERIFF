@@ -46,6 +46,8 @@ docstring, killed taint before the sink" is a cause. Only the second is useful l
 | ID | Date | Case | CWE | Agent | Posterior | Cause | Fixed |
 |---|---|---|---|---|---|---|---|
 | FP-001 | 2026-08-29 | `cwe-079-search-summary-safe` | CWE-79 | `semantic.hosted` | n/a — agent-level, fusion ratios unfitted until Ch 14 | `format_html` escapes its arguments, but the guarantee lives in the library and not in the unit; the model hedged on the off-screen contract ("while format_html in frameworks like Django is intended to be safe...") and reported anyway. Doubt about an unseen callee resolves toward reporting | open |
+| FP-002 | 2026-09-03 | `cwe-862-xpr-audit-export-safe` and `-vuln` | CWE-89 (the pair is CWE-862) | `semantic.hosted` | 0.0015 at the fitted ratios; threshold 0.23, so no alert | Fires on **both** twins, the signature of a rule keyed on the shape of the code rather than on the flaw: the export builds a query string, and the model called it injection on the safe twin too. Both land in `detection_low`, whose fitted ratio for this witness is 0.74 - the fit discounts this witness's weak alerts, which is what a low tier below 1.0 is for | open |
+| FP-003 | 2026-09-03 | `cwe-639-document-delete-vuln` | CWE-862 (the pair is CWE-639) | `semantic.hosted` | 0.017 at the fitted ratios; no alert | The case *is* an authorization bug and the model reported it under the neighbouring authz CWE. Scored as a false claim because the corpus states what each pair is about and a finding key is a CWE. Whether CWE-862/639 confusion should score as a miss or as a hit under a coarser label is a scoring question to settle **before** Chapter 18 - answering it after seeing the test split would be fitting on it | open |
 
 ## False negatives
 

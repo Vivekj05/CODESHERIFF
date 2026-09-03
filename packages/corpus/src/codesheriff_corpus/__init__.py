@@ -23,7 +23,7 @@ from codesheriff_corpus.models import (
     Split,
 )
 from codesheriff_corpus.splits import (
-    DEFAULT_RATIOS,
+    DEFAULT_SPLIT_RATIOS,
     SplitFile,
     cases_in,
     load_splits,
@@ -33,7 +33,7 @@ from codesheriff_corpus.splits import (
 
 __all__ = [
     "CORPUS_REPO",
-    "DEFAULT_RATIOS",
+    "DEFAULT_SPLIT_RATIOS",
     "KNOWN_AGENT_IDS",
     "CorpusCase",
     "CorpusError",

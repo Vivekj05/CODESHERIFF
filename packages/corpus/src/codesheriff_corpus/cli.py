@@ -17,7 +17,7 @@ from codesheriff_corpus.hashing import corpus_hash, split_hash
 from codesheriff_corpus.loader import CorpusError, load_cases, load_pairs
 from codesheriff_corpus.models import KNOWN_AGENT_IDS, Label, Split
 from codesheriff_corpus.splits import (
-    DEFAULT_RATIOS,
+    DEFAULT_SPLIT_RATIOS,
     SPLITS_FILENAME,
     SplitFile,
     assign,
@@ -125,7 +125,7 @@ def assign_(
         SplitFile(
             generated=dt.date.today().isoformat(),
             seed=seed,
-            ratios=DEFAULT_RATIOS,
+            ratios=DEFAULT_SPLIT_RATIOS,
             assignments=assignments,
             notes=notes,
         ),

@@ -18,11 +18,12 @@ from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.orm import sessionmaker
 
 from codesheriff_contracts import CONTRACT_VERSION
+from codesheriff_engine.calibration import active_artifact
 from codesheriff_storage import (
+    calibration_run_for,
     claim_audit,
     finish_audit,
     open_audit,
-    provisional_calibration_run,
     supersede_open_audits,
     upsert_installation,
     upsert_repository,
@@ -65,12 +66,7 @@ def audit(db: DbSession) -> Audit:
         default_branch="main",
         is_private=True,
     )
-    calibration = provisional_calibration_run(
-        db,
-        contract_version=CONTRACT_VERSION,
-        prior_probability=0.05,
-        alert_threshold=0.70,
-    )
+    calibration = calibration_run_for(db, active_artifact())
     row = open_audit(
         db,
         repository_id=REPO_ID,
@@ -243,9 +239,7 @@ def test_a_push_edits_the_comment_rather_than_adding_another(
     first_comment_id = gateway.posted[0].comment_id
     assert first_comment_id is None
 
-    calibration = provisional_calibration_run(
-        db, contract_version=CONTRACT_VERSION, prior_probability=0.05, alert_threshold=0.70
-    )
+    calibration = calibration_run_for(db, active_artifact())
     second = open_audit(
         db,
         repository_id=REPO_ID,

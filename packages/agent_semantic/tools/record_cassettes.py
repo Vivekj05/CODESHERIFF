@@ -20,6 +20,7 @@ nothing on a case it reports a finding on without the injection.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -84,7 +85,11 @@ def record(case: CorpusCase, agent: SemanticAgent, *, injected: bool) -> Cassett
         except ProviderUnavailableError as exc:
             print(f"    sample {index}: provider unavailable ({exc})")
             return None
-        time.sleep(0.4)  # free tier; be a good citizen
+        # The free tier limits requests per MINUTE, and the client's three retries cover at
+        # most twelve seconds — far less than the window a 429 wants. Unpaced, this does not
+        # slow down, it starts failing at the sixteenth call and looks like an exhausted daily
+        # quota. `CALIBRATION_RECORD_PACE` overrides; 5s sits under a 15-per-minute ceiling.
+        time.sleep(float(os.environ.get("CALIBRATION_RECORD_PACE", "5.0")))
 
     return Cassette(
         case_id=unit.unit_id + ("__injected" if injected else ""),
@@ -98,6 +103,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--injected", action="store_true", help="record the injected variants")
     parser.add_argument("--only", default="", help="record one case id")
+    parser.add_argument(
+        "--missing-only",
+        action="store_true",
+        help="skip cases that already have a cassette, instead of re-recording them",
+    )
     args = parser.parse_args()
 
     config = SemanticConfig.load()
@@ -111,6 +121,12 @@ def main() -> int:
     cases = [c for c in load_cases() if split_for(c) is Split.CALIBRATION]
     if args.only:
         cases = [c for c in cases if c.case_id == args.only]
+    if args.missing_only:
+        # Re-recording a case that already has one costs calls and, more importantly, changes a
+        # committed measurement for no reason: the fingerprint is what says whether a cassette
+        # answers the prompt we send, and an unchanged prompt needs no new answer.
+        suffix = "__injected" if args.injected else ""
+        cases = [c for c in cases if not (CASSETTE_DIR / f"{c.case_id}{suffix}.json").is_file()]
 
     print(f"model={config.model} n_samples={config.n_samples} cases={len(cases)}")
     written = failed = 0

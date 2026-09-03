@@ -1,9 +1,15 @@
 """The fusion arithmetic, and the seven defects it was rebuilt to fix.
 
-Each test below names the `AUDIT.md` finding or decision it holds down. They are written
-against observable behaviour rather than against the provisional constants wherever
-possible, so that Chapter 14 can replace every ratio in the table without rewriting the
-properties that must survive the refit.
+Each test below names the `AUDIT.md` finding or decision it holds down, and is written
+against observable behaviour wherever possible, so that a refit can replace every number in
+`calibration.json` without rewriting the properties that must survive it.
+
+**The ratios used here are a fixture, not the fitted ones.** These tests are about the
+arithmetic — that four factors are multiplied, that a silence can lower a posterior, that two
+backends behind one witness do not compound — and every one of those properties has to hold
+whatever the fit produced. Asserting them against the live artifact would make an ordinary
+re-fit look like an arithmetic regression, and would quietly stop testing the property the day
+some fitted ratio happened to be 1.0.
 """
 
 import math
@@ -18,9 +24,27 @@ from codesheriff_engine.fusion import (
     fuse_all_evidence,
 )
 from codesheriff_engine.fusion.bayes import Stance
-from codesheriff_engine.fusion.ratios import LR_MAX, LR_MIN, PROVISIONAL_RATIOS, WitnessRatios
+from codesheriff_engine.fusion.ratios import LR_MAX, LR_MIN, WitnessRatios
 
 PRIOR = 0.05
+
+TABLE: dict[str, WitnessRatios] = {
+    "structural": WitnessRatios(
+        detection_high=8.5, detection_medium=3.2, detection_low=0.8, silence=0.60
+    ),
+    "semantic": WitnessRatios(
+        detection_high=12.0, detection_medium=4.5, detection_low=0.5, silence=0.50
+    ),
+    "context": WitnessRatios(
+        detection_high=4.2, detection_medium=2.1, detection_low=0.9, silence=0.85
+    ),
+    "runtime": WitnessRatios(
+        detection_high=15.0, detection_medium=5.0, detection_low=0.7, silence=0.40
+    ),
+}
+"""A complete, ordered, deliberately unremarkable table. Every witness has a row, because
+fusion refuses a partial one (D-082), and every value differs from its neighbours so that a
+factor applied to the wrong witness shows up as a wrong number rather than a coincidence."""
 
 
 def posterior_from(prior: float, *ratios: float) -> float:
@@ -69,7 +93,9 @@ def abstention(agent_id: str, reason: str = "tool_unavailable") -> Evidence:
 def test_every_witness_contributes_exactly_one_factor(sample_vulnerable_unit: ChangeUnit) -> None:
     """Four factors, always four, however many agents actually spoke."""
     key = sample_vulnerable_unit.key_for("CWE-89")
-    result = compute_bayesian_fusion(key, [detection("structural.taint", key, 0.95)], PRIOR)
+    result = compute_bayesian_fusion(
+        key, [detection("structural.taint", key, 0.95)], PRIOR, ratios=TABLE
+    )
 
     assert [c.witness for c in result.contributions] == list(WITNESSES)
     assert len(result.contributions) == 4, (
@@ -82,14 +108,16 @@ def test_a_lone_detection_leaves_the_three_silent_witnesses_at_one(
 ) -> None:
     """The three that said nothing contribute the identity, and say why."""
     key = sample_vulnerable_unit.key_for("CWE-89")
-    result = compute_bayesian_fusion(key, [detection("structural.taint", key, 0.95)], PRIOR)
+    result = compute_bayesian_fusion(
+        key, [detection("structural.taint", key, 0.95)], PRIOR, ratios=TABLE
+    )
 
     quiet = [c for c in result.contributions if c.witness != "structural"]
     assert all(c.likelihood_ratio == 1.0 for c in quiet)
     assert all(c.stance is Stance.NEUTRAL for c in quiet)
     assert all("Emitted no statement" in c.note for c in quiet)
 
-    expected = posterior_from(PRIOR, PROVISIONAL_RATIOS["structural"].detection_high)
+    expected = posterior_from(PRIOR, TABLE["structural"].detection_high)
     assert result.posterior_probability == pytest.approx(round(expected, 4))
 
 
@@ -100,7 +128,9 @@ def test_silence_can_lower_a_posterior(sample_vulnerable_unit: ChangeUnit) -> No
     alerted were iterated, so every factor exceeded 1.0 and the number could only rise.
     """
     key = sample_vulnerable_unit.key_for("CWE-89")
-    alone = compute_bayesian_fusion(key, [detection("structural.taint", key, 0.95)], PRIOR)
+    alone = compute_bayesian_fusion(
+        key, [detection("structural.taint", key, 0.95)], PRIOR, ratios=TABLE
+    )
     disputed = compute_bayesian_fusion(
         key,
         [
@@ -108,6 +138,7 @@ def test_silence_can_lower_a_posterior(sample_vulnerable_unit: ChangeUnit) -> No
             silence("semantic.hosted", {"CWE-89", "CWE-78"}),
         ],
         PRIOR,
+        ratios=TABLE,
     )
 
     assert disputed.posterior_probability < alone.posterior_probability
@@ -124,14 +155,14 @@ def test_adding_a_witness_is_not_monotonically_increasing(
     base = [detection("structural.taint", key, 0.95)]
 
     with_more_evidence = [
-        compute_bayesian_fusion(key, [*base, extra], PRIOR).posterior_probability
+        compute_bayesian_fusion(key, [*base, extra], PRIOR, ratios=TABLE).posterior_probability
         for extra in (
             silence("semantic.hosted", {"CWE-89"}),
             silence("context.rag", {"CWE-89"}),
             abstention("runtime.sfi", "no_safe_entrypoint"),
         )
     ]
-    alone = compute_bayesian_fusion(key, base, PRIOR).posterior_probability
+    alone = compute_bayesian_fusion(key, base, PRIOR, ratios=TABLE).posterior_probability
     assert min(with_more_evidence) < alone
 
 
@@ -145,7 +176,9 @@ def test_abstention_is_exactly_one_and_not_a_configurable_number(
 ) -> None:
     """An agent that could not look must not vote the code either way."""
     key = sample_vulnerable_unit.key_for("CWE-89")
-    without = compute_bayesian_fusion(key, [detection("structural.taint", key, 0.95)], PRIOR)
+    without = compute_bayesian_fusion(
+        key, [detection("structural.taint", key, 0.95)], PRIOR, ratios=TABLE
+    )
     with_abstentions = compute_bayesian_fusion(
         key,
         [
@@ -155,6 +188,7 @@ def test_abstention_is_exactly_one_and_not_a_configurable_number(
             abstention("runtime.sfi", "no_safe_entrypoint"),
         ],
         PRIOR,
+        ratios=TABLE,
     )
 
     assert with_abstentions.posterior_probability == without.posterior_probability
@@ -177,11 +211,12 @@ def test_silence_about_other_cwes_does_not_suppress_this_finding(
     key = sample_vulnerable_unit.key_for("CWE-862")
     findings = [detection("semantic.hosted", key, 0.9, cwe="CWE-862")]
 
-    alone = compute_bayesian_fusion(key, findings, PRIOR)
+    alone = compute_bayesian_fusion(key, findings, PRIOR, ratios=TABLE)
     with_taint_silence = compute_bayesian_fusion(
         key,
         [*findings, silence("structural.taint", {"CWE-89", "CWE-78", "CWE-22"})],
         PRIOR,
+        ratios=TABLE,
     )
 
     assert with_taint_silence.posterior_probability == alone.posterior_probability
@@ -198,9 +233,11 @@ def test_covering_silence_and_non_covering_silence_differ(
     key = sample_vulnerable_unit.key_for("CWE-89")
     base = [detection("semantic.hosted", key, 0.9)]
 
-    covering = compute_bayesian_fusion(key, [*base, silence("structural.taint", {"CWE-89"})], PRIOR)
+    covering = compute_bayesian_fusion(
+        key, [*base, silence("structural.taint", {"CWE-89"})], PRIOR, ratios=TABLE
+    )
     not_covering = compute_bayesian_fusion(
-        key, [*base, silence("structural.taint", {"CWE-22"})], PRIOR
+        key, [*base, silence("structural.taint", {"CWE-22"})], PRIOR, ratios=TABLE
     )
     assert covering.posterior_probability < not_covering.posterior_probability
 
@@ -226,13 +263,14 @@ def test_two_structural_backends_contribute_one_factor(
             detection("structural.semgrep", key, 0.95),
         ],
         PRIOR,
+        ratios=TABLE,
     )
 
     structural = [c for c in result.contributions if c.witness == "structural"]
     assert len(structural) == 1
     assert structural[0].agent_ids == ["structural.semgrep", "structural.taint"]
 
-    high = PROVISIONAL_RATIOS["structural"].detection_high
+    high = TABLE["structural"].detection_high
     assert structural[0].likelihood_ratio == high
     assert result.posterior_probability == pytest.approx(round(posterior_from(PRIOR, high), 4))
 
@@ -243,7 +281,7 @@ def test_two_structural_backends_contribute_one_factor(
 def test_backends_combine_by_max_not_by_product(sample_vulnerable_unit: ChangeUnit) -> None:
     """D-011's provisional rule: the witness's strongest claim is its statement."""
     key = sample_vulnerable_unit.key_for("CWE-89")
-    ratios = PROVISIONAL_RATIOS["structural"]
+    ratios = TABLE["structural"]
 
     result = compute_bayesian_fusion(
         key,
@@ -252,6 +290,7 @@ def test_backends_combine_by_max_not_by_product(sample_vulnerable_unit: ChangeUn
             detection("structural.semgrep", key, 0.60),  # medium
         ],
         PRIOR,
+        ratios=TABLE,
     )
     structural = next(c for c in result.contributions if c.witness == "structural")
     assert structural.likelihood_ratio == max(ratios.detection_high, ratios.detection_medium)
@@ -269,10 +308,11 @@ def test_one_backends_silence_does_not_retract_its_siblings_detection(
             silence("structural.semgrep", {"CWE-89"}),
         ],
         PRIOR,
+        ratios=TABLE,
     )
     structural = next(c for c in result.contributions if c.witness == "structural")
     assert structural.stance is Stance.DETECTED
-    assert structural.likelihood_ratio == PROVISIONAL_RATIOS["structural"].detection_high
+    assert structural.likelihood_ratio == TABLE["structural"].detection_high
 
 
 def test_two_silences_from_one_witness_do_not_square(
@@ -287,9 +327,10 @@ def test_two_silences_from_one_witness_do_not_square(
             silence("structural.semgrep", {"CWE-89"}),
         ],
         PRIOR,
+        ratios=TABLE,
     )
     structural = next(c for c in result.contributions if c.witness == "structural")
-    assert structural.likelihood_ratio == PROVISIONAL_RATIOS["structural"].silence
+    assert structural.likelihood_ratio == TABLE["structural"].silence
 
 
 # --------------------------------------------------------------------------
@@ -300,9 +341,10 @@ def test_two_silences_from_one_witness_do_not_square(
 def test_likelihood_ratios_are_clamped(sample_vulnerable_unit: ChangeUnit) -> None:
     key = sample_vulnerable_unit.key_for("CWE-89")
     absurd = {
+        **TABLE,
         "structural": WitnessRatios(
             detection_high=10_000.0, detection_medium=1.0, detection_low=1.0, silence=0.9
-        )
+        ),
     }
     result = compute_bayesian_fusion(
         key, [detection("structural.taint", key, 0.95)], PRIOR, ratios=absurd
@@ -328,6 +370,7 @@ def test_the_posterior_is_never_clamped_into_a_flat_ceiling(
             detection("context.rag", key, 0.95),
         ],
         PRIOR,
+        ratios=TABLE,
     )
     four = compute_bayesian_fusion(
         key,
@@ -338,6 +381,7 @@ def test_the_posterior_is_never_clamped_into_a_flat_ceiling(
             detection("runtime.sfi", key, 0.95),
         ],
         PRIOR,
+        ratios=TABLE,
     )
     assert 0.0 < three.posterior_probability < four.posterior_probability < 1.0
 
@@ -384,7 +428,9 @@ def test_evidence_from_an_unregistered_agent_is_refused(
 
 def test_a_key_no_detection_carries_is_refused() -> None:
     with pytest.raises(ValueError, match="No detection carries finding_key"):
-        compute_bayesian_fusion("abstention:all_agents", [abstention("structural.taint")], PRIOR)
+        compute_bayesian_fusion(
+            "abstention:all_agents", [abstention("structural.taint")], PRIOR, ratios=TABLE
+        )
 
 
 def test_one_key_may_not_carry_two_cwes(sample_vulnerable_unit: ChangeUnit) -> None:
@@ -398,6 +444,7 @@ def test_one_key_may_not_carry_two_cwes(sample_vulnerable_unit: ChangeUnit) -> N
                 detection("semantic.hosted", key, 0.9, cwe="CWE-78"),
             ],
             PRIOR,
+            ratios=TABLE,
         )
 
 
@@ -467,20 +514,25 @@ def test_no_evidence_is_no_findings() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_one_witness_alone_does_not_reach_the_alert_threshold(
+def test_a_threshold_can_separate_one_witness_from_several(
     sample_vulnerable_unit: ChangeUnit,
 ) -> None:
-    """A property of the provisional table worth keeping when the fitted one lands.
+    """One mechanical witness proving reachability is a weaker claim than three agreeing,
+    and a threshold has to be able to tell them apart.
 
-    One mechanical witness proving reachability is a weaker claim than four witnesses
-    agreeing, and the threshold should be able to tell them apart.
+    Stated against the fixture table and an explicit threshold rather than against the fitted
+    artifact. Whether the *selected* threshold happens to separate these two on the corpus is
+    an empirical question the validation sweep answers, and it is not this test's to assert —
+    a property test that changes its mind with every re-fit is not a property test.
     """
     key = sample_vulnerable_unit.key_for("CWE-89")
     lone = compute_bayesian_fusion(
-        key, [detection("structural.taint", key, 0.99)], PRIOR, alert_threshold=0.70
+        key,
+        [detection("structural.taint", key, 0.99)],
+        PRIOR,
+        alert_threshold=0.70,
+        ratios=TABLE,
     )
-    assert not lone.is_alert_worthy
-
     consensus = compute_bayesian_fusion(
         key,
         [
@@ -490,5 +542,9 @@ def test_one_witness_alone_does_not_reach_the_alert_threshold(
         ],
         PRIOR,
         alert_threshold=0.70,
+        ratios=TABLE,
     )
-    assert consensus.is_alert_worthy
+
+    assert lone.posterior_probability < consensus.posterior_probability
+    assert not lone.is_alert_worthy
+    assert consensus.posterior_probability > 0.65

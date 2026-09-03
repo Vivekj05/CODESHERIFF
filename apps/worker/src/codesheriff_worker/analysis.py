@@ -94,6 +94,17 @@ class AgentDeps:
 
     precedent_retriever: PrecedentRetriever | None = None
 
+    llm_client: Any | None = None
+    """The client `semantic.hosted` calls, when the caller has one to supply.
+
+    `None` in production, and that is the normal case: the agent builds a `HostedLLMClient`
+    from its own configuration. The calibration harness passes a client that replays recorded
+    responses instead, so a corpus run makes no live call and produces the same answer twice
+    (D-085). It arrives here rather than through a second loader because the measured path has
+    to be the shipped path — a harness that assembled its own `SemanticAgent` would be
+    measuring an object production never builds.
+    """
+
 
 def _load_static(deps: AgentDeps) -> Agent:
     from static_agent.agent import StaticAgent
@@ -104,7 +115,9 @@ def _load_static(deps: AgentDeps) -> Agent:
 def _load_semantic(deps: AgentDeps) -> Agent:
     from semantic_agent.agent import SemanticAgent
 
-    return SemanticAgent()
+    # An injected client wins; with none, the agent builds its own from configuration, and
+    # with no API key configured it abstains `llm_unavailable` per unit rather than raising.
+    return SemanticAgent(llm_client=deps.llm_client)
 
 
 def _load_context(deps: AgentDeps) -> Agent:

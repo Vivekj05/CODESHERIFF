@@ -56,7 +56,7 @@ from codesheriff_storage import (
 )
 from codesheriff_worker.analysis import Agent, AgentDeps, analyse_unit, load_agents
 from codesheriff_worker.celery_app import app, config
-from codesheriff_worker.comment import render
+from codesheriff_worker.comment import CalibrationFacts, render
 from codesheriff_worker.github_gateway import GitHubGateway, GitHubKitGateway
 from codesheriff_worker.pipeline import fetch_and_extract
 from codesheriff_worker.precedent import PgVectorPrecedentRetriever, load_embedder
@@ -194,6 +194,7 @@ def _run_claimed_audit(
             extraction,
             prior_probability=audit.prior_probability,
             alert_threshold=audit.alert_threshold,
+            calibration=_calibration_facts(audit),
         ),
         comment_id=previous,
     )
@@ -208,6 +209,27 @@ def _run_claimed_audit(
         comment_id,
     )
     return "succeeded"
+
+
+def _calibration_facts(audit: Audit) -> CalibrationFacts | None:
+    """The audit's own calibration run, in the shape the comment renders.
+
+    Read from the row rather than from the artifact on disk: an audit records what it ran under
+    when it is opened, and a re-fit between opening and posting must not silently re-attribute
+    its numbers (§6).
+    """
+    run = audit.calibration_run
+    if run is None:
+        return None
+    return CalibrationFacts(
+        corpus_hash=run.corpus_hash,
+        split_hash=run.split_hash,
+        base_rate=audit.prior_probability,
+        alert_threshold=audit.alert_threshold,
+        is_provisional=run.is_provisional,
+        ece=run.ece,
+        brier=run.brier,
+    )
 
 
 def _deps_for(factory: sessionmaker[DbSession], audit: Audit) -> AgentDeps:

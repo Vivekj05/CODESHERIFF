@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-862-admin-export-safe",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "5828ec3d54f146d8",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

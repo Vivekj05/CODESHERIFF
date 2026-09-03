@@ -39,15 +39,15 @@ from codesheriff_api.config import MissingCredentialError
 from codesheriff_api.deps import ConfigDep, DbDep
 from codesheriff_api.queue import QueueDep, QueueError, TaskQueue
 from codesheriff_contracts import CONTRACT_VERSION
-from codesheriff_engine.config import PROVISIONAL_ALERT_THRESHOLD, PROVISIONAL_PRIOR
+from codesheriff_engine.calibration import active_artifact
 from codesheriff_storage import (
     audit_for_delivery,
+    calibration_run_for,
     delete_installation,
     delete_repositories,
     ensure_installation,
     ensure_repository,
     open_audit,
-    provisional_calibration_run,
     repository_by_id,
     supersede_open_audits,
     upsert_installation,
@@ -222,12 +222,10 @@ def _handle_pull_request(
                 content={"status": "duplicate", "audit_id": str(existing.id)},
             )
 
-    calibration = provisional_calibration_run(
-        db,
-        contract_version=CONTRACT_VERSION,
-        prior_probability=PROVISIONAL_PRIOR,
-        alert_threshold=PROVISIONAL_ALERT_THRESHOLD,
-    )
+    # The fitted artifact, read here rather than in the worker, because the numbers an audit
+    # runs under are decided when it is opened and recorded on the row (§6). A re-fit between
+    # opening and running must not change what this audit claims to have used.
+    calibration = calibration_run_for(db, active_artifact())
     audit = open_audit(
         db,
         repository_id=repo_id,

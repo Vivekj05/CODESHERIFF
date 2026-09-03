@@ -78,6 +78,9 @@ odd choice and is load-bearing:
 | The runtime witness reports **five** CWEs, not ten | Half the scope, from the witness with the most direct evidence | Its SQL and XSS sinks are methods on objects the probe itself fabricated, so an "observation" there is the harness observing itself — a weaker restatement of the structural witness, correlated with it (D-073) |
 | A guard the probe could not evaluate produces an **abstention**, not a detection | The value demonstrably reached the sink | The run reached it only because the harness answered the guard. Reporting is a false positive on exactly the code that defends itself; silence argues that guarded code is clean on the strength of a guard nobody read (D-079) |
 | There is **no** second execution backend, not even for tests | A subprocess runner would make the suite portable | It would be reached the first time a `wasm` test was inconvenient, and the measurement would then be of untrusted code running beside the database credentials. This repo has shipped that shape twice (D-076) |
+| The fitted artifact is the **only** source of a ratio, prior or threshold | A hand-set fallback would keep the system running when `calibration.json` is missing | A fallback is reached the first time the artifact fails to load, and the system then produces numbers nobody measured while still calling them posteriors. Missing artifact raises (D-080, D-082) |
+| A cell with **no observations** contributes exactly 1.0 | Laplace smoothing already gives it a value | The smoothed value reduces to the class balance of *other* cells: `runtime`'s never-observed tiers came out at 0.69, mild evidence of safety on a tier nothing has ever selected (D-087) |
+| The prior is **declared**, never measured from the corpus | The corpus is right there and its prevalence is computable | It is 0.5 by construction, because every case has a twin. Reading it as a prior states that one changed function in two is vulnerable. The ratios are prevalence-invariant, which is what makes a balanced corpus the right shape for fitting them (D-083) |
 | PR title/description passed as separate `pr_context` | Convenient inside `ChangeUnit` | Attacker-controlled, and absent from corpus cases — embedding it makes corpus runs behave differently from production, corrupting calibration |
 
 ---
@@ -159,8 +162,18 @@ reached — 9/9 recall, 0 false positives across 23 safe twins. On a machine wit
 it abstains under its own name, at a likelihood ratio of exactly 1.0, on the record, per unit — so a
 witness that cannot run costs the posterior nothing and hides from nobody.
 
-Every number is **provisional**. The ratios, the prior and the threshold are hand-set, and D-010
-requires them presented as such until Chapter 14 fits them on the calibration split.
+Chapter 14 fitted the numbers. Every likelihood ratio comes from the calibration split with its
+per-cell counts recorded, the alert threshold from a base-rate-weighted precision–recall sweep on
+the validation split, and both travel in `calibration.json` with the corpus hash they were measured
+against. **The hand-set constants are deleted, not relabelled** — there is no `PROVISIONAL_RATIOS`,
+`PROVISIONAL_PRIOR`, `PROVISIONAL_ALERT_THRESHOLD` or `FALLBACK_RATIOS` anywhere, and
+`packages/engine/tests/test_no_unfitted_numbers.py` parses the source tree to keep it that way.
+
+Two caveats travel with those numbers. `structural.semgrep` has no Windows build and abstained on
+every unit, so the structural ratios describe a **one-backend witness** — Chapter 18 must re-observe
+on Linux or CI. And the **prior is declared, not measured**: a twin-paired corpus has a prevalence
+of 0.5 by construction, so the base rate is a stated 3% that rescales every posterior by a recorded
+factor and refits nothing (D-083).
 
 **The webhook is `apps/api/src/codesheriff_api/webhooks.py`.** It verifies `X-Hub-Signature-256`
 against the raw body *before* parsing it, writes an `audits` row, publishes the id to Celery and
@@ -346,6 +359,28 @@ an agent that will not import, raises, hangs or returns `[]` becomes an abstenti
 reason. If you find yourself adding `import static_agent` to `packages/engine`, that is the
 undeclared dependency Chapter 9 removed — and it is what let a fusion package pull in an LLM client.
 
+**Fitting the numbers.** `codesheriff_engine.calibration` fits one likelihood ratio per witness per
+cell from labelled claims — no agent, no corpus, no session, so §6's "reproducible from the
+calibration split and a recorded corpus hash" is a property of the code. The harness that produces
+those claims is `apps/worker`'s, because running agents is `apps/worker`'s job (D-054, D-085): it
+calls the **production** `load_agents` and `analyse_unit`, rebinding each case's retriever and
+recorded model responses rather than rebuilding the agents, and it refuses the test split by name.
+
+`fusion/cells.py` is the seam. `bayes.py` reads a cell to look a ratio **up**; `fit.py` reads the
+same cell to count observations and fit that ratio **in**. Two implementations of "what did this
+witness say" would fit one quantity and apply another, and both halves would pass their own tests.
+`posterior_from_cells` is the same arithmetic for the same reason — the threshold sweep scores
+exactly what an audit computes.
+
+The order is §6 and it is not negotiable: **ratios on calibration, threshold on validation, test
+split untouched until Chapter 18.** `fit_from_observations` refuses an observation set from the
+wrong split, and `codesheriff_worker.calibration.runner` cannot produce a test-split one at all.
+
+**The audit path cannot import the corpus** (D-086), even though the worker process now can. D-047
+stops the agents; this contract stops `tasks`, `pipeline`, `analysis`, `comment` and all of
+`apps/api`. The leak would look like a convenient import in the pipeline for "just checking"
+whether a unit matches a known case.
+
 **No file path reaches the pull request comment** (D-050). A path is chosen by whoever opened the
 pull request; coverage is reported as counts and plain words. Paths belong on the dashboard, behind
 escaping.
@@ -447,6 +482,14 @@ uv run codesheriff-corpus show cwe-862-admin-export-vuln
 
 uv run codesheriff-engine fuse evidence.json       # posterior + one row per witness. No agents.
 
+# Calibration (Ch 14). `observe` is the slow half and writes committed JSONL; `fit` reads it, so a
+# re-fit needs no interpreter, no API key and no Semgrep build. `record` is the only command here
+# that calls a provider, and only for cases with no recorded response.
+uv run codesheriff-worker calibrate observe --split calibration
+uv run codesheriff-worker calibrate observe --split validation
+uv run codesheriff-worker calibrate fit            # -> packages/engine/.../calibration/calibration.json
+uv run codesheriff-worker calibrate show           # what the active artifact says, and where it is
+
 # The runtime witness's sandbox. `doctor` says whether this machine can run it at all, and where
 # it looked; without the pinned interpreter the agent abstains per unit and `wasm` tests skip.
 uv run runtime-agent doctor
@@ -489,9 +532,11 @@ Signing in needs a registered GitHub App — `docs/github-app-setup.md`. Without
 `501` naming the missing variable rather than failing at import, so `/health` works on a machine
 that has never seen a `.pem`.
 
-All five Python gates and both frontend gates are green as of Chapter 13 (1204 tests with a
-database and the WASI interpreter; 1076 + 128 skips without a database, and 67 more skipped without
-the interpreter — the isolation proofs are hand-written WebAssembly and run everywhere).
+All five Python gates and both frontend gates are green as of Chapter 14 (1128 tests passing with
+the WASI interpreter and no database, 128 skipped; the database-marked tests add more). `mypy
+--strict` covers 117 source files and `lint-imports` keeps **six** contracts — the sixth is what
+holds the audit path away from the corpus now that the calibration harness shares the worker
+process (D-086).
 
 **Measuring an agent.** `packages/agent_static/tests/test_corpus_calibration.py` runs the taint
 engine over the corpus and asserts recall and false positives per case. It reads the **calibration

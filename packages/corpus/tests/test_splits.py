@@ -12,7 +12,7 @@ import pytest
 
 from codesheriff_corpus import Split, load_cases, load_pairs, load_splits, pairs_in
 from codesheriff_corpus.loader import CorpusError
-from codesheriff_corpus.splits import DEFAULT_RATIOS, SplitFile, _targets, assign
+from codesheriff_corpus.splits import DEFAULT_SPLIT_RATIOS, SplitFile, _targets, assign
 
 
 def test_splits_load_and_cover_the_corpus_exactly() -> None:
@@ -145,5 +145,5 @@ def test_ratios_must_be_a_complete_distribution() -> None:
 
 def test_default_ratios_favour_calibration() -> None:
     """Twelve cells to fit against one scalar each for the other two splits."""
-    assert DEFAULT_RATIOS[Split.CALIBRATION] > DEFAULT_RATIOS[Split.VALIDATION]
-    assert sum(DEFAULT_RATIOS.values()) == pytest.approx(1.0)
+    assert DEFAULT_SPLIT_RATIOS[Split.CALIBRATION] > DEFAULT_SPLIT_RATIOS[Split.VALIDATION]
+    assert sum(DEFAULT_SPLIT_RATIOS.values()) == pytest.approx(1.0)

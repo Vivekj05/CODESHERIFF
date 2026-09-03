@@ -6,13 +6,13 @@ Imported by `apps/worker` (writes) and `apps/api` (reads). Never by an agent, an
 
 from codesheriff_storage.audits import (
     audit_for_delivery,
+    calibration_run_for,
     claim_audit,
     fail_audit,
     finish_audit,
     is_superseded,
     latest_comment_id,
     open_audit,
-    provisional_calibration_run,
     supersede_open_audits,
 )
 from codesheriff_storage.config import DEFAULT_DATABASE_URL, StorageConfig
@@ -89,6 +89,7 @@ __all__ = [
     "build_chunk",
     "build_engine",
     "build_session_factory",
+    "calibration_run_for",
     "claim_audit",
     "create_session",
     "delete_installation",
@@ -104,7 +105,6 @@ __all__ = [
     "list_repositories",
     "open_audit",
     "persistable_findings",
-    "provisional_calibration_run",
     "purge_expired_sessions",
     "repository_by_id",
     "revoke_session",

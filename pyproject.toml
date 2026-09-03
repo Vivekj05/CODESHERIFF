@@ -247,3 +247,31 @@ source_modules = [
     "agent_runtime",
 ]
 forbidden_modules = ["codesheriff_corpus"]
+
+# ---------------------------------------------------------------------------
+# The audit path is blind to ground truth too (D-086).
+#
+# Chapter 14 put the calibration harness in `apps/worker`, because running agents is the
+# worker's job and a research harness that loaded them its own way would have measured an
+# object production never builds. The cost is that the process which analyses real pull
+# requests now has an import path to `label` and `detectable_by`.
+#
+# This is where that path stops. `codesheriff_worker.calibration` may read the corpus, because
+# measuring is what it does. The modules that run an audit may not: `tasks` claims the row,
+# `pipeline` drives the analysis and `analysis` runs the agents, and any of the three reaching
+# ground truth would mean the shipped path can see the answers it is scored against.
+#
+# It would not look like cheating. It would look like a convenient import in the pipeline for
+# "just checking" whether a unit is a known case.
+# ---------------------------------------------------------------------------
+[[tool.importlinter.contracts]]
+name = "The audit path cannot see the corpus labels either"
+type = "forbidden"
+source_modules = [
+    "codesheriff_worker.tasks",
+    "codesheriff_worker.pipeline",
+    "codesheriff_worker.analysis",
+    "codesheriff_worker.comment",
+    "codesheriff_api",
+]
+forbidden_modules = ["codesheriff_corpus"]

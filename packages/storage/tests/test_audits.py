@@ -16,15 +16,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
 from codesheriff_contracts import CONTRACT_VERSION
+from codesheriff_engine.calibration import active_artifact
 from codesheriff_storage.audits import (
     audit_for_delivery,
+    calibration_run_for,
     claim_audit,
     fail_audit,
     finish_audit,
     is_superseded,
     latest_comment_id,
     open_audit,
-    provisional_calibration_run,
     supersede_open_audits,
 )
 from codesheriff_storage.identity import upsert_installation, upsert_repository
@@ -58,12 +59,7 @@ def repo_id(session: DbSession) -> int:
 
 @pytest.fixture
 def calibration(session: DbSession) -> CalibrationRun:
-    return provisional_calibration_run(
-        session,
-        contract_version=CONTRACT_VERSION,
-        prior_probability=0.05,
-        alert_threshold=0.70,
-    )
+    return calibration_run_for(session, active_artifact())
 
 
 def make_audit(
@@ -87,31 +83,43 @@ def make_audit(
     )
 
 
-def test_provisional_run_is_marked_provisional_and_reused(session: DbSession) -> None:
-    """Every audit cites a calibration artifact, and this one admits it is not fitted (D-032)."""
-    first = provisional_calibration_run(
-        session, contract_version=CONTRACT_VERSION, prior_probability=0.05, alert_threshold=0.70
-    )
-    second = provisional_calibration_run(
-        session, contract_version=CONTRACT_VERSION, prior_probability=0.05, alert_threshold=0.70
-    )
+def test_the_run_records_the_corpus_it_was_fitted_on_and_is_reused(session: DbSession) -> None:
+    """Every audit cites a calibration artifact, and since Chapter 14 that artifact is fitted.
+
+    The row is matched on the artifact's own identity, so two audits opened under one
+    `calibration.json` share one row and a re-fit produces a new one.
+    """
+    artifact = active_artifact()
+    first = calibration_run_for(session, artifact)
+    second = calibration_run_for(session, artifact)
 
     assert first.id == second.id
-    assert first.is_provisional is True
-    assert first.corpus_hash is None
-    assert first.ece is None
+    assert first.is_provisional is False
+    assert first.corpus_hash == artifact.corpus_hash
+    assert first.split_hash == artifact.split_hash
+    assert first.fitted_likelihoods, "a fitted run with no ratios cannot explain a posterior"
+    assert first.ece is not None and first.brier is not None
 
 
-def test_changing_the_numbers_creates_a_new_provisional_run(session: DbSession) -> None:
-    """A past audit must still record the prior and threshold it actually ran under."""
-    first = provisional_calibration_run(
-        session, contract_version=CONTRACT_VERSION, prior_probability=0.05, alert_threshold=0.70
+def test_a_refit_creates_a_new_run_rather_than_rewriting_the_old_one(
+    session: DbSession,
+) -> None:
+    """A past audit must still record the numbers it actually ran under (§6).
+
+    Re-fitting at a different base rate is the ordinary way that happens: the ratios are
+    unchanged, the prior moves by a recorded factor, and the audits already closed keep
+    pointing at the artifact that produced them.
+    """
+    artifact = active_artifact()
+    rescaled = artifact.model_copy(
+        update={"prior": artifact.prior.model_copy(update={"base_rate": 0.10})}
     )
-    second = provisional_calibration_run(
-        session, contract_version=CONTRACT_VERSION, prior_probability=0.05, alert_threshold=0.60
-    )
+
+    first = calibration_run_for(session, artifact)
+    second = calibration_run_for(session, rescaled)
 
     assert first.id != second.id
+    assert second.prior_probability == 0.10
 
 
 def test_audit_copies_the_numbers_it_ran_under(
