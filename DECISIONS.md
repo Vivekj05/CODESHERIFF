@@ -2494,3 +2494,83 @@ measured against exactly it.
 of them computes a probability; each reads what a run recorded. A future need to suppress alerts
 on a noisy repository should be met by a view filter that says how many it is hiding — never by
 moving the threshold that decided them.
+
+---
+
+## D-090 — The odds product is persisted with the finding, not recomputed for the reader
+
+**Date:** 2026-09-06 · **Status:** ACTIVE · **Chapter:** 16
+
+**Context.** Chapter 16 is the findings page: "finding detail, per-agent evidence breakdown,
+posterior display, taint path rendering". `fusion.bayes` has produced a `WitnessContribution` per
+witness since Chapter 9 — the stance, the ratio-table cell it selected, the likelihood ratio read
+from that cell, and the backends that spoke. It reached the CLI and the pull request comment and
+was then **discarded**. Nothing wrote it to a row, so a stored finding carried a posterior that
+could not be taken apart, and the page whose entire purpose is explaining a number had nothing to
+explain it with.
+
+**Decision.** `findings` gains a nullable JSONB `contributions` column (migration `0004`), written
+by `mapping.to_finding` from what fusion computed. The route reads it. Nothing recomputes it.
+
+**Because the alternative dates every explanation to today.** Recomputing the factors at read time
+means re-running the arithmetic against whichever artifact is active *now*. An audit that ran under
+an earlier calibration would then be explained by ratios it never used, and the breakdown would
+contradict the posterior stored beside it — the same failure `alert_threshold` is stored per
+finding to prevent (§6). It would also put a probability computation behind a read route, and no
+route in this API performs one.
+
+There is deliberately **no backfill**. The factors are a property of a run; recomputing them for
+historical findings would date every one of them to today's artifact, which is the thing this
+decision exists to prevent.
+
+**NULL and empty are different, and JSON `null` is neither.** A CHECK constraint forbids an empty
+array, so the column has exactly two states: a recorded breakdown, or none. "Not recorded" and "no
+witness contributed" are different claims — the same silence-versus-abstention distinction the
+evidence rows are built on (D-005) — and the API reports which one holds through
+`contributions_recorded`, so the page can decline to draw four neutral factors it never measured.
+
+The JSON scalar `null` is the third state that had to be closed off. SQLAlchemy persists Python
+`None` into a JSONB column as `'null'::jsonb` unless the type declares `none_as_null=True`; that
+value reads back as `None` in Python while being NOT NULL in SQL. The model declares the flag and
+the CHECK rejects the value, so a future writer that forgets it fails loudly. This was found by the
+constraint during Chapter 16's first database run, not reasoned about in advance.
+
+**Consequence.** A posterior is auditable factor by factor from the row that recorded it. The
+witness roster on the page comes from `fusion.witnesses`, not from the evidence, so four factors are
+always drawn — a page assembled from the agents that spoke would shorten to the ones that alerted,
+which is D-007 rendered in HTML.
+
+---
+
+## D-091 — A finding is addressed through its audit, never by key alone
+
+**Date:** 2026-09-06 · **Status:** ACTIVE · **Chapter:** 16
+
+**Context.** Chapter 4 scaffolded `/findings/[key]` against mock data. Chapter 16 had to decide
+whether a bare `finding_key` identifies a finding.
+
+**Decision.** The route is `GET /audits/{audit_id}/findings/{finding_key}`, and the page is
+`/audits/[id]/findings/[key]`. The scaffolded `/findings/[key]` is deleted.
+
+**Because the key is not unique.** `finding_key` is a digest of file, symbol and CWE — deliberately
+excluding the sink expression (§5) — so the same key recurs every time the same function is
+re-analysed on a new head SHA. That recurrence is a feature: it is what makes a posterior comparable
+across runs. But it means a bare key names a set, and resolving it to "the most recent one this
+session may see" would silently answer a different question than the one asked. Two installations
+analysing the same open-source function hold the same key exactly.
+
+Routing through the audit also puts the installation filter where it already is. The query scopes
+through `Audit -> Repository -> installation_id` (D-035), so the finding route has no filter of its
+own to forget.
+
+**Consequence.** `codesheriff_storage.reporting.finding_detail` takes both an `audit_id` and a
+`finding_key`, and returns None for "no such audit", "no such finding in it" and "not yours" alike
+— the route answers 404 to all three, because distinguishing them confirms that a finding exists on
+a repository the caller cannot see.
+
+The evidence it returns is the **whole unit's**, not the rows carrying the key. A silence and an
+abstention both have `finding_key IS NULL`: an agent that found nothing has no key to name, and one
+that could not run has nothing to say about anything. Filtering on the key would return only
+detections, which is the subset that makes a posterior look inevitable. Detections of a *different*
+key are excluded, because a DETECTION carries no `covered_cwes` and so says nothing about this
+finding.

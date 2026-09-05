@@ -512,6 +512,30 @@ class Finding(Base):
     line_numbers: Mapped[list[int]] = mapped_column(ARRAY(Integer), nullable=False, default=list)
     title: Mapped[str] = mapped_column(Text, nullable=False, default="")
     consensus_rationale: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    contributions: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    """The odds product, factor by factor, as the run computed it (Chapter 16).
+
+    One entry per witness in `WITNESSES` order, each carrying the stance, the ratio-table cell
+    it selected, the likelihood ratio read from that cell, and the backends that spoke. It is
+    stored rather than recomputed for the reason `alert_threshold` is: a finding must keep
+    explaining itself with the factors it actually used, and re-deriving the breakdown from
+    today's artifact would produce an explanation that contradicts the posterior beside it.
+
+    **NULL means not recorded, and is not the same as an empty breakdown.** Findings written
+    before this column existed have no factors to show, and a page that rendered them as "no
+    witness contributed" would be inventing a claim about a run that never made one — the same
+    silence-versus-abstention distinction the evidence rows are built on (D-005). The CHECK
+    keeps the ambiguous middle case, an empty array, out of the table.
+
+    `none_as_null=True` is load-bearing, not tidiness. Without it SQLAlchemy persists Python
+    `None` into a JSONB column as the JSON scalar `null`, which is a *value* — a third state
+    beside "recorded" and "not recorded", indistinguishable from the second in Python and from
+    neither in SQL. The CHECK rejects it, so the two states stay two.
+    """
+
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
 
     audit: Mapped[Audit] = relationship(back_populates="findings")
@@ -530,6 +554,11 @@ class Finding(Base):
         CheckConstraint(
             "is_alert_worthy = (posterior_probability >= alert_threshold)",
             name="ck_findings_alert_matches_threshold",
+        ),
+        CheckConstraint(
+            "contributions IS NULL OR (jsonb_typeof(contributions) = 'array' "
+            "AND jsonb_array_length(contributions) > 0)",
+            name="ck_findings_contributions_shape",
         ),
     )
 

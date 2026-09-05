@@ -17,6 +17,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
 from codesheriff_contracts import CONTRACT_VERSION, ChangeUnit, Evidence
@@ -30,7 +31,7 @@ from codesheriff_storage.audits import (
 )
 from codesheriff_storage.identity import upsert_installation, upsert_repository
 from codesheriff_storage.mapping import to_change_unit_row, to_evidence_row
-from codesheriff_storage.models import Audit, CalibrationRun, Finding
+from codesheriff_storage.models import Audit, CalibrationRun, ChangeUnitRow, Finding
 from codesheriff_storage.reporting import audit_detail, list_audit_summaries, overview_stats
 
 pytestmark = pytest.mark.db
@@ -368,3 +369,151 @@ def test_the_overview_counts_each_evidence_kind_separately(
     assert by_agent["semantic.hosted"].detections == 0
     assert by_agent["runtime.sfi"].abstentions == 2
     assert by_agent["runtime.sfi"].detections == 0
+
+
+def test_finding_detail_carries_the_silences_and_abstentions_too(
+    session: DbSession, calibration: CalibrationRun, repos: tuple[int, int]
+) -> None:
+    """The whole unit's statements, not only the rows carrying the key (Chapter 16).
+
+    A silence and an abstention both have `finding_key IS NULL` — an agent that found nothing has
+    no key to name, and one that could not run has nothing to say about anything. A query that
+    filtered on the key would return only detections, which is the subset that makes a posterior
+    look inevitable.
+    """
+    ours, _ = repos
+    audit = make_audit(session, calibration, ours)
+    unit = make_unit(1)
+    add_unit_with_statements(session, audit, unit)
+    add_finding(session, audit, unit)
+
+    detail = reporting.finding_detail(
+        session,
+        audit_id=audit.id,
+        finding_key=unit.key_for("CWE-89"),
+        installation_ids=[OURS],
+    )
+
+    assert detail is not None
+    assert detail.unit is not None
+    assert detail.unit.qualified_symbol == unit.qualified_symbol
+    kinds = sorted(row.kind.value for row in detail.evidence)
+    assert kinds == ["abstention", "abstention", "detection", "silence"]
+    assert {row.agent_id for row in detail.evidence} == {
+        "structural.taint",
+        "semantic.hosted",
+        "runtime.sfi",
+        "context.rag",
+    }
+
+
+def test_finding_detail_excludes_detections_of_a_different_finding(
+    session: DbSession, calibration: CalibrationRun, repos: tuple[int, int]
+) -> None:
+    """A detection of another CWE in the same function belongs to another key.
+
+    It says nothing about this finding — a DETECTION carries no `covered_cwes` to say otherwise —
+    and showing it under this posterior's breakdown would attribute evidence to a number it never
+    entered.
+    """
+    ours, _ = repos
+    audit = make_audit(session, calibration, ours)
+    unit = make_unit(1)
+    add_unit_with_statements(session, audit, unit)
+    add_finding(session, audit, unit)
+
+    # A second detection on the same unit, for a different CWE and therefore a different key.
+    unit_row = session.execute(
+        select(ChangeUnitRow).where(ChangeUnitRow.audit_id == audit.id)
+    ).scalar_one()
+    session.add(
+        to_evidence_row(
+            unit_row.id,
+            Evidence.detection(
+                agent_id="semantic.hosted",
+                agent_version="1.0.0",
+                unit_id=unit.unit_id,
+                finding_key=unit.key_for("CWE-79"),
+                cwe="CWE-79",
+                raw_score=0.9,
+                explanation="Unescaped interpolation into a template.",
+            ),
+        )
+    )
+    session.flush()
+
+    detail = reporting.finding_detail(
+        session,
+        audit_id=audit.id,
+        finding_key=unit.key_for("CWE-89"),
+        installation_ids=[OURS],
+    )
+
+    assert detail is not None
+    detections = [row for row in detail.evidence if row.kind.value == "detection"]
+    assert [row.cwe for row in detections] == ["CWE-89"]
+
+
+def test_a_finding_on_another_installation_is_not_readable(
+    session: DbSession, calibration: CalibrationRun, repos: tuple[int, int]
+) -> None:
+    """The scope check again, at the layer that holds it (D-035).
+
+    Scoped through the audit rather than by the key alone — the key is a digest of file, symbol
+    and CWE, so two installations analysing the same open-source function share it exactly.
+    """
+    _ours, theirs = repos
+    theirs_audit = make_audit(session, calibration, theirs)
+    unit = make_unit(1)
+    add_unit_with_statements(session, theirs_audit, unit)
+    add_finding(session, theirs_audit, unit)
+
+    assert (
+        reporting.finding_detail(
+            session,
+            audit_id=theirs_audit.id,
+            finding_key=unit.key_for("CWE-89"),
+            installation_ids=[OURS],
+        )
+        is None
+    )
+    assert (
+        reporting.finding_detail(
+            session,
+            audit_id=theirs_audit.id,
+            finding_key=unit.key_for("CWE-89"),
+            installation_ids=[],
+        )
+        is None
+    )
+    assert (
+        reporting.finding_detail(
+            session,
+            audit_id=theirs_audit.id,
+            finding_key=unit.key_for("CWE-89"),
+            installation_ids=[THEIRS],
+        )
+        is not None
+    )
+
+
+def test_a_finding_key_from_another_audit_is_not_served(
+    session: DbSession, calibration: CalibrationRun, repos: tuple[int, int]
+) -> None:
+    """The same key recurs across audits by design; the audit is what disambiguates it."""
+    ours, _ = repos
+    first = make_audit(session, calibration, ours, pr_number=1)
+    second = make_audit(session, calibration, ours, pr_number=2)
+    unit = make_unit(1)
+    add_unit_with_statements(session, first, unit)
+    add_finding(session, first, unit)
+
+    assert (
+        reporting.finding_detail(
+            session,
+            audit_id=second.id,
+            finding_key=unit.key_for("CWE-89"),
+            installation_ids=[OURS],
+        )
+        is None
+    )

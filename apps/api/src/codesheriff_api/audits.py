@@ -25,18 +25,22 @@ import base64
 import binascii
 import uuid
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 
 from codesheriff_api.deps import DbDep, SessionDep
+from codesheriff_engine.fusion.witnesses import WITNESSES, witness_for
 from codesheriff_storage import (
-    AuditDetail,
     AuditSummary,
+    CalibrationRun,
     ChangeUnitRow,
     EvidenceRow,
     Finding,
+    FindingDetail,
     audit_detail,
+    finding_detail,
     list_audit_summaries,
 )
 
@@ -137,6 +141,23 @@ class EvidenceOut(BaseModel):
     explanation: str
 
 
+class EvidenceDetailOut(EvidenceOut):
+    """A statement with its artifacts — the finding page's version of `EvidenceOut`.
+
+    Artifacts are the witness showing its work: a taint path, a sink location, the merged
+    precedent behind a claim, what the sandbox observed. They are omitted from the audit page,
+    where one response carries every statement of every unit, and included here, where the
+    response is about one function.
+
+    The content is whatever the agent produced, already clipped to the excerpt budget by
+    `codesheriff_storage.redaction` at write time. It reaches the browser as data and is rendered
+    as text — a taint path quotes expressions from the pull request, which is attacker-authored,
+    and the dashboard is the layer that escapes rather than the layer that trusts (D-050).
+    """
+
+    artifacts: list[dict[str, Any]]
+
+
 class ChangeUnitOut(BaseModel):
     """One analysed function. Hashes and metadata, never source (§6, D-027)."""
 
@@ -165,6 +186,67 @@ class FindingOut(BaseModel):
     line_numbers: list[int]
     title: str
     consensus_rationale: str
+
+
+class FindingUnitOut(BaseModel):
+    """The analysed function, without its statements.
+
+    `ChangeUnitOut` carries `evidence`; this deliberately does not. On this page the statements
+    are grouped under the witness whose factor they justify, and a second flat copy of the same
+    rows would be a list a reader could diff against the grouped one and find disagreeing.
+    """
+
+    unit_id: str
+    file: str
+    qualified_symbol: str
+    language: str
+    start_line: int
+    changed_lines: list[int]
+    decorators: list[str]
+    is_test_file: bool
+    post_src_lines: int
+
+
+class WitnessBreakdownOut(BaseModel):
+    """One factor of the odds product, and the statements behind it.
+
+    `likelihood_ratio` is read from the finding's stored breakdown, never recomputed — it is the
+    number this run multiplied in, and `cell` names the entry of `calibration.json` it came from
+    so a reader can check the factor against the fit rather than take it on trust.
+
+    `statements` is every row from this witness's backends, whatever they said. A witness with a
+    neutral factor and an abstention beneath it is the case the page exists to make legible: the
+    odds did not move, and the reason they did not move is that nobody could look.
+    """
+
+    witness: str
+    stance: str
+    cell: str | None
+    likelihood_ratio: float
+    note: str
+    agent_ids: list[str]
+    statements: list[EvidenceDetailOut]
+
+
+class FindingDetailOut(BaseModel):
+    """One finding, and the arithmetic that produced its posterior.
+
+    `contributions_recorded` is the field a renderer may not ignore. False means the finding
+    predates the column that stores the breakdown (migration 0004), and the witnesses carry their
+    statements with no ratio attached. Rendering those as four neutral factors would be inventing
+    an explanation for a number that was produced by factors nobody kept — which is precisely the
+    unfalsifiable confidence this project exists to argue against.
+    """
+
+    audit_id: str
+    repository_full_name: str
+    pr_number: int
+    head_sha: str
+    finding: FindingOut
+    calibration: CalibrationOut | None
+    unit: FindingUnitOut | None
+    contributions_recorded: bool
+    witnesses: list[WitnessBreakdownOut]
 
 
 class AuditDetailOut(BaseModel):
@@ -197,8 +279,7 @@ class AuditDetailOut(BaseModel):
     findings: list[FindingOut]
 
 
-def _to_calibration(detail: AuditDetail) -> CalibrationOut | None:
-    run = detail.calibration
+def _to_calibration(run: CalibrationRun | None) -> CalibrationOut | None:
     if run is None:
         return None
     return CalibrationOut(
@@ -262,6 +343,64 @@ def _to_finding(row: Finding) -> FindingOut:
     )
 
 
+def _to_evidence_detail(row: EvidenceRow) -> EvidenceDetailOut:
+    return EvidenceDetailOut(
+        **_to_evidence(row).model_dump(),
+        artifacts=[dict(item) for item in row.artifacts],
+    )
+
+
+def _to_finding_unit(row: ChangeUnitRow) -> FindingUnitOut:
+    return FindingUnitOut(
+        unit_id=row.unit_id,
+        file=row.file,
+        qualified_symbol=row.qualified_symbol,
+        language=row.language,
+        start_line=row.start_line,
+        changed_lines=list(row.changed_lines),
+        decorators=list(row.decorators),
+        is_test_file=row.is_test_file,
+        post_src_lines=row.post_src_lines,
+    )
+
+
+def _breakdown(detail: FindingDetail) -> list[WitnessBreakdownOut]:
+    """One entry per witness, in `WITNESSES` order, whether or not it spoke.
+
+    The roster comes from `fusion.witnesses` rather than from the stored breakdown or the
+    statements, so the page shows four rows for the same reason fusion multiplies four factors
+    (D-007): a witness that said nothing is part of the answer, and a list built from what was
+    said would quietly shorten to the agents that alerted.
+
+    Ratios are read from the finding's stored `contributions`. Nothing here computes one. Where
+    the column is NULL the statements are still grouped and shown, and the factor is reported as
+    absent rather than as 1.0 — an unrecorded ratio and a neutral witness are different claims.
+    """
+    recorded = {str(item.get("witness", "")): item for item in (detail.finding.contributions or [])}
+    statements: dict[str, list[EvidenceDetailOut]] = {witness: [] for witness in WITNESSES}
+    for row in detail.evidence:
+        # An agent_id no witness claims cannot be shown under an invented heading — the same
+        # refusal fusion makes, for the same reason (D-052). It is a 500, and it should be: an
+        # unregistered agent got its statements into the database.
+        statements[witness_for(row.agent_id)].append(_to_evidence_detail(row))
+
+    out: list[WitnessBreakdownOut] = []
+    for witness in WITNESSES:
+        item = recorded.get(witness, {})
+        out.append(
+            WitnessBreakdownOut(
+                witness=witness,
+                stance=str(item.get("stance", "")),
+                cell=(str(item["cell"]) if item.get("cell") is not None else None),
+                likelihood_ratio=float(item.get("likelihood_ratio", 0.0)),
+                note=str(item.get("note", "")),
+                agent_ids=[str(a) for a in item.get("agent_ids", [])],
+                statements=statements[witness],
+            )
+        )
+    return out
+
+
 def _to_summary(summary: AuditSummary) -> AuditSummaryOut:
     return AuditSummaryOut(
         id=str(summary.id),
@@ -320,6 +459,38 @@ def list_audits(
     return AuditPage(items=[_to_summary(row) for row in summaries], next_cursor=next_cursor)
 
 
+@router.get("/{audit_id}/findings/{finding_key}", response_model=FindingDetailOut)
+def get_finding(
+    audit_id: uuid.UUID, finding_key: str, db: DbDep, session: SessionDep
+) -> FindingDetailOut:
+    """One finding, and the posterior taken apart factor by factor.
+
+    Scoped through its audit, because `finding_key` is unique per audit and not globally: the
+    same key recurs by design when the same function is re-analysed on a new head SHA. 404 covers
+    "no such audit", "no such finding" and "not yours" alike.
+    """
+    detail = finding_detail(
+        db,
+        audit_id=audit_id,
+        finding_key=finding_key,
+        installation_ids=list(session.visible_installation_ids),
+    )
+    if detail is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Finding not found.")
+
+    return FindingDetailOut(
+        audit_id=str(detail.audit.id),
+        repository_full_name=detail.repository_full_name,
+        pr_number=detail.audit.pr_number,
+        head_sha=detail.audit.head_sha,
+        finding=_to_finding(detail.finding),
+        calibration=_to_calibration(detail.calibration),
+        unit=_to_finding_unit(detail.unit) if detail.unit is not None else None,
+        contributions_recorded=detail.finding.contributions is not None,
+        witnesses=_breakdown(detail),
+    )
+
+
 @router.get("/{audit_id}", response_model=AuditDetailOut)
 def get_audit(audit_id: uuid.UUID, db: DbDep, session: SessionDep) -> AuditDetailOut:
     """One audit in full.
@@ -356,7 +527,7 @@ def get_audit(audit_id: uuid.UUID, db: DbDep, session: SessionDep) -> AuditDetai
         contract_version=audit.contract_version,
         prior_probability=audit.prior_probability,
         alert_threshold=audit.alert_threshold,
-        calibration=_to_calibration(detail),
+        calibration=_to_calibration(detail.calibration),
         unit_count=detail.unit_count,
         units_returned=len(detail.units),
         units=[_to_unit(row) for row in detail.units],

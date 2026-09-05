@@ -351,12 +351,28 @@ forget. Counts are correlated subqueries, never joins: an audit has many units, 
 many findings, and joining all three would report `units x findings` change units, which is a
 plausible wrong number.
 
-`apps/api` serves four read routes — `GET /audits`, `GET /audits/{id}`, `GET /stats/overview`,
-`GET /calibration` — and **none of them computes a probability**. Every posterior, prior and
-threshold is read from the row or the artifact that recorded it, so an audit that ran under an
-earlier calibration keeps reporting what it ran under (§6). The audit page renders one statement
-per witness per unit with its kind intact, because collapsing silence and abstention into "found
-nothing" is what makes a posterior unexplainable.
+`apps/api` serves five read routes — `GET /audits`, `GET /audits/{id}`,
+`GET /audits/{id}/findings/{key}`, `GET /stats/overview`, `GET /calibration` — and **none of them
+computes a probability**. Every posterior, prior, threshold and likelihood ratio is read from the
+row or the artifact that recorded it, so an audit that ran under an earlier calibration keeps
+reporting what it ran under (§6). The audit page renders one statement per witness per unit with
+its kind intact, because collapsing silence and abstention into "found nothing" is what makes a
+posterior unexplainable.
+
+**The odds product is stored, not recomputed** (D-090). `findings.contributions` holds one entry
+per witness as the run computed it — stance, ratio-table cell, likelihood ratio, backends — and the
+finding page reads it. Recomputing at read time would explain an old audit with today's artifact,
+contradicting the posterior stored beside it. The column is NULL or a non-empty array and nothing
+else: "not recorded" and "no witness contributed" are different claims, and JSON `null` is a third
+state that `none_as_null=True` plus a CHECK keeps out of the table. There is no backfill, and a
+finding predating the column shows its statements with no ratios rather than four neutral factors.
+
+A finding is addressed **through its audit** — `finding_key` is a digest of file, symbol and CWE
+and recurs by design on every new head SHA, so a bare key names a set (D-091). The evidence served
+is the whole unit's: a silence and an abstention both carry `finding_key IS NULL`, and filtering on
+the key would return only detections, which is the subset that makes a posterior look inevitable.
+The witness roster on the page comes from `fusion.witnesses`, never from the evidence — a list
+built from the agents that spoke would shorten to the ones that alerted.
 
 **The dashboard reports the fitted numbers and cannot choose them** (D-089). The threshold, the
 four-witness roster and the closed CWE set are read-only facts with their provenance; the one
@@ -555,9 +571,9 @@ Signing in needs a registered GitHub App — `docs/github-app-setup.md`. Without
 `501` naming the missing variable rather than failing at import, so `/health` works on a machine
 that has never seen a `.pem`.
 
-All five Python gates and both frontend gates are green as of Chapter 14 (1128 tests passing with
-the WASI interpreter and no database, 128 skipped; the database-marked tests add more). `mypy
---strict` covers 117 source files and `lint-imports` keeps **six** contracts — the sixth is what
+All five Python gates and both frontend gates are green as of Chapter 16 (1136 tests passing with
+no database, 166 skipped; the 167 database-marked tests pass against Postgres). `mypy
+--strict` covers 122 source files and `lint-imports` keeps **six** contracts — the sixth is what
 holds the audit path away from the corpus now that the calibration harness shares the worker
 process (D-086).
 

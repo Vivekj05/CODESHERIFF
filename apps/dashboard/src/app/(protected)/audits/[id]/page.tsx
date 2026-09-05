@@ -120,7 +120,12 @@ export default function AuditPage() {
               <CardHeader className="flex flex-row items-start justify-between gap-4">
                 <div className="min-w-0">
                   <CardTitle className="text-base">
-                    {finding.title || `${finding.cwe} in ${finding.qualified_symbol}`}
+                    <Link
+                      href={`/audits/${audit.id}/findings/${finding.finding_key}`}
+                      className="hover:underline"
+                    >
+                      {finding.title || `${finding.cwe} in ${finding.qualified_symbol}`}
+                    </Link>
                   </CardTitle>
                   <p className="text-muted-foreground mt-1 font-mono text-xs break-all">
                     {finding.file}
@@ -140,11 +145,16 @@ export default function AuditPage() {
                     <p className="mt-2 text-sm">{finding.consensus_rationale}</p>
                   )}
                 </div>
-                <Posterior
-                  value={finding.posterior_probability}
-                  calibration={calibration}
-                  threshold={finding.alert_threshold}
-                />
+                <Link
+                  href={`/audits/${audit.id}/findings/${finding.finding_key}`}
+                  aria-label="How this posterior was reached"
+                >
+                  <Posterior
+                    value={finding.posterior_probability}
+                    calibration={calibration}
+                    threshold={finding.alert_threshold}
+                  />
+                </Link>
               </CardHeader>
             </Card>
           ))

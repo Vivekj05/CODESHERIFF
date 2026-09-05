@@ -112,6 +112,12 @@ def to_finding(
     `prior_probability` and `alert_threshold` are stored per finding rather than looked up from
     configuration at read time. A threshold selected later on the validation split must not
     retroactively change which past findings counted as alerts (§6).
+
+    `contributions` is stored for the same reason and is the Chapter 16 addition: the factors of
+    the odds product as *this* run computed them, so the posterior can be read back apart. A
+    result carrying none is written as NULL rather than as an empty list, because "the breakdown
+    was not recorded" and "no witness contributed" are different claims and only the first is
+    true of a run that predates the column.
     """
     if not is_wellformed_finding_key(result.finding_key):
         raise ValueError(
@@ -138,6 +144,11 @@ def to_finding(
         line_numbers=list(result.line_numbers),
         title=result.title or "",
         consensus_rationale=result.consensus_rationale,
+        contributions=(
+            [c.model_dump(mode="json") for c in result.contributions]
+            if result.contributions
+            else None
+        ),
     )
 
 

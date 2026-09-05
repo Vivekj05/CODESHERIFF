@@ -102,6 +102,29 @@ class AuditDetail:
 
 
 @dataclass(frozen=True, slots=True)
+class FindingDetail:
+    """One finding, with every statement that shaped it.
+
+    `evidence` is the whole unit's, not just the rows carrying this key, and that is the point of
+    the query. A silence and an abstention both have `finding_key IS NULL` — they are statements
+    about a *unit*, since an agent that found nothing has no key to name and an agent that could
+    not run has nothing to say about anything. Filtering on the key would return only detections,
+    which is the subset that makes a posterior look inevitable.
+
+    `unit` is None when no evidence row carries the key at all. That should be impossible — a
+    finding is minted from a detection — but a finding whose unit rows were deleted is a state the
+    reader should see reported rather than crash on.
+    """
+
+    finding: Finding
+    audit: Audit
+    repository_full_name: str
+    calibration: CalibrationRun | None
+    unit: ChangeUnitRow | None
+    evidence: list[EvidenceRow]
+
+
+@dataclass(frozen=True, slots=True)
 class CweCount:
     cwe: str
     findings: int
@@ -301,6 +324,89 @@ def audit_detail(
         units=units,
         unit_count=unit_count,
         findings=findings,
+    )
+
+
+def finding_detail(
+    db: DbSession, *, audit_id: uuid.UUID, finding_key: str, installation_ids: list[int]
+) -> FindingDetail | None:
+    """One finding of one audit, with the unit it is about and every statement about that unit.
+
+    Scoped through the audit rather than by the key alone. `finding_key` is unique per audit, not
+    globally — the same key recurs deliberately when the same function is re-analysed on a new
+    head SHA, which is what makes a posterior comparable across runs — so a bare key identifies a
+    finding only once an audit is named. Routing through the audit also means this inherits the
+    audit's installation filter instead of needing its own.
+
+    None covers "no such audit", "no such finding in it" and "not yours" alike, for the reason
+    `audit_detail` returns None to all three.
+    """
+    if not installation_ids:
+        return None
+
+    stmt = (
+        select(Finding, Audit, Repository.full_name)
+        .join(Audit, Audit.id == Finding.audit_id)
+        .join(Repository, Repository.id == Audit.repository_id)
+        .where(
+            Finding.audit_id == audit_id,
+            Finding.finding_key == finding_key,
+            Repository.installation_id.in_(installation_ids),
+        )
+        .options(selectinload(Audit.calibration_run))
+    )
+    row = db.execute(stmt).first()
+    if row is None:
+        return None
+    finding, audit, full_name = row
+
+    # The unit this finding is about, found through the detections that carry its key rather than
+    # through `Finding.file` — the file column is display metadata and is nullable, while the key
+    # on an evidence row is the same digest fusion grouped by.
+    unit = db.execute(
+        select(ChangeUnitRow)
+        .join(EvidenceRow, EvidenceRow.change_unit_id == ChangeUnitRow.id)
+        .where(
+            ChangeUnitRow.audit_id == audit.id,
+            EvidenceRow.finding_key == finding.finding_key,
+        )
+        .order_by(ChangeUnitRow.start_line, ChangeUnitRow.unit_id)
+        .limit(1)
+    ).scalar_one_or_none()
+    if unit is None:
+        return FindingDetail(
+            finding=finding,
+            audit=audit,
+            repository_full_name=full_name,
+            calibration=audit.calibration_run,
+            unit=None,
+            evidence=[],
+        )
+
+    # Every statement about that unit, except detections of a *different* finding — those belong
+    # to another key and say nothing about this one. Silences and abstentions carry no key and are
+    # kept: they are two thirds of why the posterior is what it is.
+    evidence = list(
+        db.execute(
+            select(EvidenceRow)
+            .where(
+                EvidenceRow.change_unit_id == unit.id,
+                (EvidenceRow.kind != EvidenceKindDB.DETECTION)
+                | (EvidenceRow.finding_key == finding.finding_key),
+            )
+            .order_by(EvidenceRow.agent_id, EvidenceRow.kind, EvidenceRow.id)
+        )
+        .scalars()
+        .all()
+    )
+
+    return FindingDetail(
+        finding=finding,
+        audit=audit,
+        repository_full_name=full_name,
+        calibration=audit.calibration_run,
+        unit=unit,
+        evidence=evidence,
     )
 
 

@@ -59,6 +59,13 @@ over, the observation counts behind each likelihood ratio, the whole validation 
 and which backends were actually running when the observations were made. Settings reports those
 numbers and cannot change them (D-089).
 
+**As of Chapter 16 a single posterior is legible too.** The odds product is stored beside the
+finding it produced, so a number can be taken apart factor by factor: four witnesses always, each
+with the ratio it contributed, the `calibration.json` cell that ratio was read from, and the
+statement its backends made — including the two kinds of statement that report finding nothing.
+Nothing on that page is recomputed, so an audit that ran under an earlier calibration is still
+explained by the ratios it used (D-090).
+
 **As of Chapter 14 the numbers are fitted.** Every likelihood ratio comes from the calibration
 split, the alert threshold from a weighted precision–recall sweep on the validation split, and both
 travel in `calibration.json` with the corpus hash they were measured against. There is no hand-set
@@ -108,7 +115,7 @@ result with a price, since a silence carries a likelihood ratio below 1.0.
 | v0.7 | context agent | ✅ **complete** (Ch 12) — control vocabulary mined from retrieved merged code; 5/5 recall and 0 false positives across 11 twins and negative controls |
 | v0.8 | runtime agent (Wasmtime + WASI) | ✅ **complete** (Ch 13) — network denied at link time, guest environment empty, four caps enforced; 9/9 recall and 0/23 false positives on the calibration split |
 | v0.9 | learned scorer + fine-tuned semantic model | ⬜ |
-| v1.0 | dashboard, patch loop, full evaluation | ⬜ |
+| v1.0 | dashboard, patch loop, full evaluation | 🔨 dashboard done (Ch 15, Ch 16); patch loop and evaluation not started |
 
 ---
 
@@ -1170,12 +1177,56 @@ stale literals are gone: they now assert against `active_artifact()`, so a re-fi
 together. The lesson is the one this repository keeps re-learning — a gate nobody runs is not a
 gate.
 
-## Chapter 16 — Findings page ⬜
+## Chapter 16 — Findings page ✅
 
 Finding detail, per-agent evidence breakdown, posterior display, taint path rendering.
 
 Show **abstentions and silences**, not only detections. That an agent could not look is part of why
 the posterior is what it is; hiding it makes the number unexplainable.
+
+**Delivered.** The page the thesis rests on: one finding, and the posterior taken apart factor by
+factor. D-090 and D-091.
+
+- **The odds product is now persisted (D-090).** `fusion.bayes` has produced a
+  `WitnessContribution` per witness since Chapter 9 — the stance, the ratio-table cell, the
+  likelihood ratio read from it, the backends that spoke — and it reached the CLI and the pull
+  request comment and was then **discarded**. Migration `0004` adds a nullable JSONB
+  `findings.contributions`, `mapping.to_finding` writes it, and the route reads it. Nothing
+  recomputes it: an audit that ran under an earlier calibration keeps being explained by the ratios
+  it used, and no read route computes a probability.
+- **NULL, empty and JSON `null` are three states, and the column holds two.** A CHECK forbids an
+  empty array; `contributions_recorded` tells the page which of the two it has. Findings written
+  before the column show their statements and no ratios, deliberately — four neutral factors drawn
+  in place of factors nobody kept is a fabricated explanation of a real number. **The JSON `null`
+  case was found by the constraint, not foreseen**: SQLAlchemy persists Python `None` into JSONB as
+  `'null'::jsonb` unless the type says `none_as_null=True`, and that value reads back as `None` in
+  Python while being NOT NULL in SQL. Model flag plus CHECK, and a regression test that asserts SQL
+  NULL rather than a Python-side `is None`.
+- **`GET /audits/{id}/findings/{key}` (D-091).** Scoped through the audit, because a `finding_key`
+  is a digest of file, symbol and CWE and recurs by design on every new head SHA — a bare key names
+  a set. The scaffolded `/findings/[key]` route is deleted rather than kept working.
+- **The evidence served is the whole unit's.** A silence and an abstention both carry
+  `finding_key IS NULL`; filtering on the key would return only detections, which is the subset
+  that makes a posterior look inevitable. Detections of another key are excluded — a DETECTION
+  carries no `covered_cwes` and says nothing about this finding.
+- **Four witnesses are always drawn**, from `fusion.witnesses` rather than from the evidence. A
+  list built from the agents that spoke would shorten to the ones that alerted, and since every
+  detection tier exceeds 1.0 that is a page on which the odds can only rise — D-007 rendered in
+  HTML. A neutral witness with an abstention under it is the case the page exists for: the odds did
+  not move, and the reason is that nobody could look.
+- **Taint paths render as an ordered flow**, source to sink, with the line and role of each step —
+  the one artifact that is an argument rather than a note, and one a reader can follow and disagree
+  with. Other artifact types print as the JSON the agent produced, so an agent that starts emitting
+  a new field cannot have it silently dropped. All of it is attacker-authored text rendered as
+  text; nothing reaches `dangerouslySetInnerHTML`.
+- **The last mock data is gone.** `lib/mock-data.ts` and `components/chapter-placeholder.tsx` had
+  no consumer left once the scaffolded findings route was deleted; every page now reads the API.
+
+**Verified.** All five Python gates green — 1136 tests passing with 166 skipped on a machine with
+no database, `ruff` and `ruff format` clean across 207 files, `mypy --strict` clean across **122**
+source files, `lint-imports` 6 contracts kept. Both frontend gates green across **10** routes. The
+**167 `db`-marked tests were run against Postgres and pass**, and migration `0004` was applied,
+rolled back to `0003` and re-applied against a real database.
 
 ## Chapter 17 — Patch generation and verification ⬜
 

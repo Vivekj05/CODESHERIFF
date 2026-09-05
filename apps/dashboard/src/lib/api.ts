@@ -208,6 +208,71 @@ export interface AuditDetail {
   findings: FindingOut[];
 }
 
+/**
+ * A statement with its artifacts — the finding page's version of `EvidenceOut`.
+ *
+ * `artifacts` is the witness showing its work: a taint path, a sink location, the merged precedent
+ * behind a claim, what the sandbox observed. Its shape varies by `artifact_type` and by agent, so
+ * it is `unknown` here rather than a union that would go stale the first time an agent added a
+ * field. The renderer narrows what it recognises and prints the rest as JSON.
+ *
+ * The content quotes code from the pull request, which is authored by whoever opened it. React
+ * escapes it on the way to the DOM; nothing here may reach `dangerouslySetInnerHTML`.
+ */
+export interface EvidenceDetail extends EvidenceOut {
+  artifacts: { artifact_type: string; content: unknown }[];
+}
+
+/**
+ * One factor of the odds product, with the statements behind it.
+ *
+ * `likelihood_ratio` is what the run multiplied in, read from the finding's stored breakdown, and
+ * `cell` names the entry of `calibration.json` it came from — so a reader can check the factor
+ * against the fit instead of taking it on trust. Neither is computed in the browser.
+ */
+export interface WitnessBreakdown {
+  witness: string;
+  stance: string;
+  cell: string | null;
+  likelihood_ratio: number;
+  note: string;
+  agent_ids: string[];
+  statements: EvidenceDetail[];
+}
+
+/** The analysed function, without its statements — those are grouped under their witness. */
+export interface FindingUnit {
+  unit_id: string;
+  file: string;
+  qualified_symbol: string;
+  language: string;
+  start_line: number;
+  changed_lines: number[];
+  decorators: string[];
+  is_test_file: boolean;
+  post_src_lines: number;
+}
+
+/**
+ * One finding and the arithmetic behind its posterior.
+ *
+ * `contributions_recorded` is the field a renderer may not ignore. False means the finding was
+ * written before the breakdown was stored, so the witnesses carry statements and no ratios. Four
+ * factors of 1.0 must not be drawn in their place — that would be an invented explanation of a
+ * real number, which is the failure this page exists to correct.
+ */
+export interface FindingDetail {
+  audit_id: string;
+  repository_full_name: string;
+  pr_number: number;
+  head_sha: string;
+  finding: FindingOut;
+  calibration: AuditCalibration | null;
+  unit: FindingUnit | null;
+  contributions_recorded: boolean;
+  witnesses: WitnessBreakdown[];
+}
+
 export interface WitnessActivity {
   agent_id: string;
   detections: number;
@@ -338,6 +403,12 @@ export function listAudits(cursor?: string | null, limit = 25): Promise<AuditPag
 
 export function getAudit(auditId: string): Promise<AuditDetail> {
   return request<AuditDetail>(`/audits/${encodeURIComponent(auditId)}`);
+}
+
+export function getFinding(auditId: string, findingKey: string): Promise<FindingDetail> {
+  return request<FindingDetail>(
+    `/audits/${encodeURIComponent(auditId)}/findings/${encodeURIComponent(findingKey)}`,
+  );
 }
 
 export function getOverview(): Promise<Overview> {
