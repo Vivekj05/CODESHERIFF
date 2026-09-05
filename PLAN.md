@@ -17,7 +17,8 @@ One chapter per session. Start a session by reading this file, take the first ch
 
 ## Where the project actually is
 
-Roughly: **v0.1–v0.6 built and measured; v0.7 onward not started.**
+Roughly: **v0.1–v0.8 built and measured; the dashboard reads them (Ch 15). v0.9 and v1.0 not
+started.**
 
 Four packages exist with a passing test suite and a webhook that reaches GitHub. But the conformance
 audit found three of four analysis components non-functional, the fusion engine implementing the
@@ -51,6 +52,12 @@ Chapter 13 the runtime witness executes the changed function inside a Wasmtime s
 the network at link time and hands the guest an empty environment, and reports what an untrusted
 value actually reached: 9/9 on the cases the corpus predicts for it and 0 false positives across 23
 safe twins.
+
+**As of Chapter 15 the numbers are legible.** The dashboard reads real audits, and the
+calibration page shows what every posterior rests on: the reliability bins the ECE was computed
+over, the observation counts behind each likelihood ratio, the whole validation threshold sweep,
+and which backends were actually running when the observations were made. Settings reports those
+numbers and cannot change them (D-089).
 
 **As of Chapter 14 the numbers are fitted.** Every likelihood ratio comes from the calibration
 split, the alert threshold from a weighted precision–recall sweep on the validation split, and both
@@ -98,7 +105,7 @@ result with a price, since a silence carries a likelihood ratio below 1.0.
 | v0.4 | taint engine | ✅ **complete** (Ch 10) — worklist propagation over a real def-use graph; 13/13 recall and 0/18 false positives on the calibration split |
 | v0.5 | semantic agent | ✅ **complete** (Ch 11) — exemplars wired, gate complete, sentinel-bounded prompt; 0% injection subversion and 94% safe-twin pass on the calibration split |
 | v0.6 | empirical calibration | ✅ **complete** (Ch 14) — ratios fitted on calibration, threshold selected on validation, `calibration.json` committed; weighted ECE 0.027 / Brier 0.013 at selection. No unfitted number remains |
-| v0.7 | context agent | ⚠️ **no RAG reasoning** — four hard-coded substring tests |
+| v0.7 | context agent | ✅ **complete** (Ch 12) — control vocabulary mined from retrieved merged code; 5/5 recall and 0 false positives across 11 twins and negative controls |
 | v0.8 | runtime agent (Wasmtime + WASI) | ✅ **complete** (Ch 13) — network denied at link time, guest environment empty, four caps enforced; 9/9 recall and 0/23 false positives on the calibration split |
 | v0.9 | learned scorer + fine-tuned semantic model | ⬜ |
 | v1.0 | dashboard, patch loop, full evaluation | ⬜ |
@@ -1111,13 +1118,57 @@ what keeps the audit path blind to the corpus now that the harness shares the wo
 
 # Phase C — Surface and evaluation
 
-## Chapter 15 — Dashboard API, dashboard UI, settings ⬜
+## Chapter 15 — Dashboard API, dashboard UI, settings ✅
 
 FastAPI REST endpoints, audit and finding queries, dashboard data contracts. Stats, recent audits,
 verdict summaries, charts. Per-repo config: alert threshold, enabled agents, CWE scope.
 
 **Confidence must read as calibrated.** A bare "87%" repeats the failure this project attacks —
 surface the reliability the number rests on.
+
+**Delivered.** The read side, end to end: a query layer, four routes, and the pages that render
+them. **§7 open question 2 is closed (D-089).**
+
+- **`codesheriff_storage.reporting`** — the first queries in this project that read an audit back
+  out. Split from `audits.py` because the two have opposite hazards: a lifecycle write must be one
+  conditional UPDATE or two workers race, a dashboard read must be scoped or it discloses another
+  account's pull requests. Every function takes the session's installation snapshot and returns
+  nothing for an empty one, and the counts are correlated subqueries — a join across units,
+  evidence and findings would report `units × findings` change units, and the number would look
+  plausible.
+- **Four routes.** `GET /audits` (keyset-paginated on `(created_at, id)`, cursor opaque so a
+  caller cannot construct one), `GET /audits/{id}`, `GET /stats/overview`, `GET /calibration`.
+  None of them computes a probability: every posterior, prior and threshold is read from the row
+  or the artifact that recorded it, so an audit that ran under an earlier calibration keeps
+  reporting what it ran under (§6).
+- **A calibration page that is the thesis rendered.** The reliability diagram over the validation
+  bins, the whole threshold sweep rather than the winning point, every likelihood ratio beside the
+  counts that produced it, and the provenance naming which backends were actually running. Three
+  things on it are deliberately unflattering and stay: `structural.detection_high` shows the single
+  observation holding it up, `context` and `runtime` show how few claims they were fitted from, and
+  the base rate says it was declared rather than measured.
+- **Settings is read-only, and says why (D-089).** The chapter as written called for a
+  per-repository threshold, per-repository agent toggles and a per-repository CWE scope; all three
+  reverse D-080 or D-084, and the conflict was raised before anything was built (§8). The one
+  writable per-repository setting stays whether CodeSheriff analyses that repository at all.
+- **Overview replaces the repository list as the landing page**, with counts of what happened and
+  no aggregate score — an overall grade would be an uncalibrated number rendered in the same
+  typeface as the calibrated ones. The per-witness statement table is the part worth reading: an
+  agent abstaining on everything is not a quiet agent, it is one that cannot run here.
+
+**Verified.** All five Python gates green — 1134 tests passing with 151 skipped on a machine with
+no database, `ruff` and `ruff format` clean, `mypy --strict` clean across **121** source files,
+`lint-imports` 6 contracts kept. Both frontend gates green across **10** routes. And, for the first
+time in several chapters, **the 145 `db`-marked tests were actually run**: Postgres was started and
+they pass.
+
+⚠️ **Four `db`-marked tests were red before this chapter touched anything**, and had been since
+Chapter 14 — they were never executed because no database was running when it landed. Three
+asserted the deleted "Provisional, not calibrated" banner and the 0.05/0.70 provisional pair; one
+called `_run_claimed_audit` with its pre-Chapter-9 signature. All four are fixed here, and the
+stale literals are gone: they now assert against `active_artifact()`, so a re-fit moves both sides
+together. The lesson is the one this repository keeps re-learning — a gate nobody runs is not a
+gate.
 
 ## Chapter 16 — Findings page ⬜
 

@@ -2452,3 +2452,45 @@ failure fell through to the SILENCE a completed analysis returns — an agent th
 first call reporting "reviewed the unit and reported no in-scope finding" across all ten in-scope
 CWEs, at a likelihood ratio below 1.0. That is `AUDIT.md` 3.12 reached by a different road, and it
 would have pushed posteriors *down* on units nobody looked at.
+
+---
+
+## D-089 — The dashboard reports the fitted numbers; it does not let anyone choose them
+
+**Date:** 2026-09-05 · **Status:** ACTIVE · **Chapter:** 15
+
+**Context.** PLAN.md Chapter 15 lists "per-repo config: alert threshold, enabled agents, CWE
+scope". That was written before Chapter 14 existed. D-080 makes `calibration.json` the only source
+of a ratio, a prior or a threshold, and D-084 removes `alert_threshold` from `EngineConfig`
+entirely on the grounds that an operator who can raise it leaves no trace. Implementing the
+chapter as written would reverse both, so it was raised before anything was built (§8).
+
+**Decision.** Settings is **read-only over the fitted artifact**. The threshold, the four-witness
+roster and the closed CWE set are rendered as facts with their provenance — which split each was
+selected on, which corpus hash it was measured against, and how many observations sit behind each
+cell. The one writable per-repository setting stays what it already was: whether CodeSheriff
+analyses that repository at all.
+
+**Because each of the three would break something specific.**
+
+A **per-repository threshold** would make `findings.alert_threshold` a description of a setting
+rather than of a run. The column exists so that a threshold selected later cannot retroactively
+rewrite which past findings were alerts; a threshold chosen per repository, per week, by whoever
+found the dashboard noisy, makes the evaluation unfalsifiable in the same way and without the
+audit trail.
+
+**Per-repository agent toggles** would leave the fitted ratios describing a system that is not the
+one running. The ratios were fitted over four witnesses with fusion iterating all of them; a
+switched-off witness is not the same object as an abstaining one, because the abstention is
+recorded, named and priced at exactly 1.0, and the switch is invisible in the artifact.
+
+A **narrowed CWE scope** would quietly change what every recall figure means. The set is closed,
+the database enforces it as a constraint generated from the contract, and every fitted number was
+measured against exactly it.
+
+**Consequence.** §7 open question 2 is closed. The dashboard's read contract is: `GET /audits`
+(keyset-paginated summaries), `GET /audits/{id}` (units, statements and findings),
+`GET /stats/overview` (counts, never a score) and `GET /calibration` (the artifact verbatim). None
+of them computes a probability; each reads what a run recorded. A future need to suppress alerts
+on a noisy repository should be met by a view filter that says how many it is hiding — never by
+moving the threshold that decided them.

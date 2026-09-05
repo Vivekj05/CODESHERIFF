@@ -125,13 +125,16 @@ def test_no_number_reaches_the_comment_without_its_calibration_state(
     """D-032. Chapter 9 gave the comment numbers; it did not give them a warrant.
 
     This pull request changes nothing analysable, so there is no posterior at all — and the
-    banner still states what the numbers would be worth if there were.
+    banner still states what the numbers would be worth if there were. Chapter 14 changed which
+    banner that is: the audit now cites a fitted artifact, so the line names the corpus and the
+    split rather than warning that nothing was measured.
     """
     execute_audit(audit.id, factory, gateway, url_for)
 
     body = gateway.posted[0].body
     assert "P(vulnerable)" not in body
-    assert "Provisional, not calibrated" in body
+    assert "**Calibrated.**" in body
+    assert active_artifact().corpus_hash[:12] in body
 
 
 def test_nothing_from_the_pull_request_is_echoed(
@@ -202,7 +205,10 @@ def test_an_audit_superseded_before_the_claim_is_not_run(
 
 
 def test_an_audit_superseded_while_running_posts_nothing(
-    db: DbSession, gateway: FakeGitHubGateway, audit: Audit
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    gateway: FakeGitHubGateway,
+    audit: Audit,
 ) -> None:
     """The second check, immediately before writing to GitHub.
 
@@ -222,7 +228,7 @@ def test_an_audit_superseded_while_running_posts_nothing(
     )
     db.commit()
 
-    state = _run_claimed_audit(db, claimed, gateway, url_for)
+    state = _run_claimed_audit(db, factory, claimed, gateway, url_for)
 
     assert state == "superseded"
     assert gateway.posted == []
@@ -599,6 +605,6 @@ def test_the_comment_shows_one_row_per_witness_for_a_real_finding(
 
     body = analysing_gateway.posted[0].body
     assert "P(vulnerable)" in body
-    assert "Provisional, not calibrated" in body
+    assert "**Calibrated.**" in body
     for witness in ("structural", "semantic", "context", "runtime"):
         assert f"| **{witness}** |" in body

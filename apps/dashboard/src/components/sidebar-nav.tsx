@@ -2,13 +2,18 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FolderGit2, ListChecks, Settings, ShieldAlert } from "lucide-react";
+import { FolderGit2, Gauge, LayoutDashboard, ListChecks, Settings, ShieldAlert } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
 const LINKS = [
+  { href: "/overview", label: "Overview", icon: LayoutDashboard },
   { href: "/repositories", label: "Repositories", icon: FolderGit2 },
   { href: "/audits", label: "Audits", icon: ListChecks },
+  // Its own destination rather than a panel inside Settings. The reliability behind a posterior
+  // is the product, not a configuration detail, and burying it would repeat the failure this
+  // project exists to name.
+  { href: "/calibration", label: "Calibration", icon: Gauge },
   { href: "/settings", label: "Settings", icon: Settings },
 ] as const;
 

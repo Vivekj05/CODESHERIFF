@@ -125,13 +125,20 @@ def test_a_refit_creates_a_new_run_rather_than_rewriting_the_old_one(
 def test_audit_copies_the_numbers_it_ran_under(
     session: DbSession, calibration: CalibrationRun, repo_id: int
 ) -> None:
-    """A threshold chosen later must not retroactively rewrite which past findings were alerts."""
+    """A threshold chosen later must not retroactively rewrite which past findings were alerts.
+
+    Asserted against the artifact rather than against literals. The literals here were the
+    pre-Chapter-14 provisional pair, and they went stale the moment the numbers were fitted —
+    which is the same failure in miniature: a number written down in a second place, describing a
+    run it did not come from. A re-fit changes both sides of these assertions together.
+    """
+    artifact = active_artifact()
     audit = make_audit(session, calibration, repo_id)
 
     assert audit.status is AuditStatus.QUEUED
     assert audit.calibration_run_id == calibration.id
-    assert audit.prior_probability == pytest.approx(0.05)
-    assert audit.alert_threshold == pytest.approx(0.70)
+    assert audit.prior_probability == pytest.approx(artifact.base_rate)
+    assert audit.alert_threshold == pytest.approx(artifact.alert_threshold)
 
 
 def test_one_delivery_cannot_open_two_audits(

@@ -81,6 +81,7 @@ odd choice and is load-bearing:
 | The fitted artifact is the **only** source of a ratio, prior or threshold | A hand-set fallback would keep the system running when `calibration.json` is missing | A fallback is reached the first time the artifact fails to load, and the system then produces numbers nobody measured while still calling them posteriors. Missing artifact raises (D-080, D-082) |
 | A cell with **no observations** contributes exactly 1.0 | Laplace smoothing already gives it a value | The smoothed value reduces to the class balance of *other* cells: `runtime`'s never-observed tiers came out at 0.69, mild evidence of safety on a tier nothing has ever selected (D-087) |
 | The prior is **declared**, never measured from the corpus | The corpus is right there and its prevalence is computable | It is 0.5 by construction, because every case has a twin. Reading it as a prior states that one changed function in two is vulnerable. The ratios are prevalence-invariant, which is what makes a balanced corpus the right shape for fitting them (D-083) |
+| The alert threshold is **read-only** in the dashboard | Every tool has a sensitivity slider; a noisy repository is a real problem | A per-repository threshold makes `findings.alert_threshold` a description of a setting rather than of a run, and the column exists so a threshold chosen later cannot rewrite which past findings were alerts. Per-repo agent toggles are the same argument: a switched-off witness is not a recorded abstention (D-089) |
 | PR title/description passed as separate `pr_context` | Convenient inside `ChangeUnit` | Attacker-controlled, and absent from corpus cases — embedding it makes corpus runs behave differently from production, corrupting calibration |
 
 ---
@@ -133,11 +134,11 @@ CODESHERIFF/
 │   ├── agent_context/    # context.rag (Ch 12)
 │   ├── agent_runtime/    # runtime.sfi — Wasmtime + WASI sandbox (Ch 13)
 │   ├── engine/           # ChangeUnit extraction, fusion, calibration. No DB client, no agents.
-│   └── storage/          # SQLAlchemy models, Alembic, pgvector precedent store
+│   └── storage/          # SQLAlchemy models, Alembic, pgvector store, dashboard reads (Ch 15)
 ├── apps/
-│   ├── api/              # FastAPI: sign-in + repo listing (Ch 5); HMAC + enqueue (Ch 6)
+│   ├── api/              # FastAPI: sign-in (Ch 5), HMAC + enqueue (Ch 6), dashboard reads (Ch 15)
 │   ├── worker/           # Celery: owns the pipeline and all agents. Runs them + fuses (Ch 9)
-│   └── dashboard/        # Next.js 16 — rendering layer only. Shell + mock data (Ch 4)
+│   └── dashboard/        # Next.js 16 — rendering layer only. Real audits + calibration (Ch 15)
 └── docs/history/         # Superseded specs, kept for provenance
 ```
 
@@ -340,6 +341,28 @@ says is taken on trust: the trace is found behind a per-request `secrets` sentin
 name is dropped, and the **CWE is re-derived from our table** — analysed code cannot invent a
 finding or relabel one. Every published word comes from `sinks.py` and the agent's own verbs, which
 is why the explanation needs no screening pass of the kind model prose needs (D-067).
+
+**Reading it back.** `codesheriff_storage.reporting` holds every dashboard query and nothing
+else. It is separate from `audits.py` because the two have opposite hazards: a lifecycle write must
+be a single conditional UPDATE or two workers race, and a dashboard read must be scoped or it
+discloses another account's pull requests. **Every function takes `installation_ids` and returns
+nothing when it is empty** (D-035) — the scoping lives in the query so a route has nothing to
+forget. Counts are correlated subqueries, never joins: an audit has many units, many statements and
+many findings, and joining all three would report `units x findings` change units, which is a
+plausible wrong number.
+
+`apps/api` serves four read routes — `GET /audits`, `GET /audits/{id}`, `GET /stats/overview`,
+`GET /calibration` — and **none of them computes a probability**. Every posterior, prior and
+threshold is read from the row or the artifact that recorded it, so an audit that ran under an
+earlier calibration keeps reporting what it ran under (§6). The audit page renders one statement
+per witness per unit with its kind intact, because collapsing silence and abstention into "found
+nothing" is what makes a posterior unexplainable.
+
+**The dashboard reports the fitted numbers and cannot choose them** (D-089). The threshold, the
+four-witness roster and the closed CWE set are read-only facts with their provenance; the one
+writable per-repository setting is whether CodeSheriff analyses that repository at all. The
+calibration page shows the reliability bins, the per-cell observation counts and the whole
+validation sweep — a ratio held up by smoothing has to look like one on screen.
 
 **Fusing evidence.** `codesheriff_engine.fusion` multiplies one likelihood ratio per **witness**
 — four factors, always four, whatever the agents said. `fusion/witnesses.py` is the only place that

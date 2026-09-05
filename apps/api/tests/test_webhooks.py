@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
+from codesheriff_engine.calibration import active_artifact
 from codesheriff_storage import upsert_installation, upsert_repository
 from codesheriff_storage.models import Audit, AuditStatus, Installation, Repository
 
@@ -267,16 +268,23 @@ def test_a_verified_pull_request_is_queued_and_published(
     assert queue.published == [rows[0].id]
 
 
-def test_the_audit_records_that_its_numbers_are_not_fitted(
+def test_the_audit_records_the_calibration_it_will_be_scored_under(
     client: TestClient, db: DbSession, known_repo: Repository
 ) -> None:
-    """D-032: nothing may present a probability without its calibration state."""
+    """D-032: nothing may present a probability without its calibration state.
+
+    Written when that state was `is_provisional=True` with no corpus hash. Chapter 14 fitted the
+    artifact and deleted the provisional constants (D-080), so the same rule now has the opposite
+    expected values: a fitted run, naming the corpus it was fitted on. The audit still has to cite
+    one at the moment it is opened, which is the part that never changed.
+    """
     deliver(client, pull_request_payload())
 
     audit = audits(db)[0]
     assert audit.calibration_run is not None
-    assert audit.calibration_run.is_provisional is True
-    assert audit.calibration_run.corpus_hash is None
+    assert audit.calibration_run.is_provisional is False
+    assert audit.calibration_run.corpus_hash == active_artifact().corpus_hash
+    assert audit.prior_probability == pytest.approx(active_artifact().base_rate)
 
 
 def test_the_response_is_well_inside_the_three_second_budget(
