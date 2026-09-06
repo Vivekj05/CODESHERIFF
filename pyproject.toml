@@ -1,0 +1,196 @@
+[project]
+name = "codesheriff"
+version = "0.1.0"
+description = "Bayesian multi-agent security review for GitHub pull requests"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.23.0",
+    "syrupy>=4.6.0",
+    "hypothesis>=6.98.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+    "import-linter>=2.0",
+]
+
+# ---------------------------------------------------------------------------
+# uv workspace. One shared `contracts` package; no vendoring.
+# See DECISIONS.md D-002.
+# ---------------------------------------------------------------------------
+[tool.uv.workspace]
+members = ["packages/*", "apps/api", "apps/worker"]
+
+[tool.uv.sources]
+codesheriff-contracts = { workspace = true }
+codesheriff-corpus = { workspace = true }
+codesheriff-agent-static = { workspace = true }
+codesheriff-agent-semantic = { workspace = true }
+codesheriff-agent-context = { workspace = true }
+codesheriff-agent-runtime = { workspace = true }
+codesheriff-engine = { workspace = true }
+codesheriff-storage = { workspace = true }
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["packages/*/src", "apps/*/src"]
+# Never touch Markdown. `ruff format` reformats fenced Python blocks inside .md,
+# which silently rewrote the archived specs in docs/history/ — the provenance
+# record of how the design diverged from its implementation. Those files are
+# evidence; they are not code to be tidied.
+extend-exclude = ["*.md", "docs/history/"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# typer.Argument()/typer.Option() in parameter defaults is how Typer declares a
+# CLI; B008 is a false positive against that idiom, not a defect to fix.
+"**/cli.py" = ["B008"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+# The audit found dead code hidden behind `if False` (AUDIT.md 3.1). Keep this on.
+warn_unused_ignores = true
+# Type-check the shipped source. Every package has a tests/conftest.py, and mypy
+# resolves those to one module name and refuses to continue; there is no way to
+# disambiguate them while each package keeps a directory called `tests`.
+exclude = ["/tests/", "^build/"]
+mypy_path = [
+    "packages/contracts/src",
+    "packages/corpus/src",
+    "packages/agent_static/src",
+    "packages/agent_semantic/src",
+    "packages/agent_context/src",
+    "packages/agent_runtime/src",
+    "packages/engine/src",
+    "packages/storage/src",
+    "apps/api/src",
+    "apps/worker/src",
+]
+
+[[tool.mypy.overrides]]
+# Third-party packages without type information.
+module = [
+    "networkx.*",
+    "tree_sitter.*",
+    "tree_sitter_language_pack.*",
+    "yaml.*",
+    # Optional at runtime and not declared as dependencies. `chromadb` is in fact
+    # REJECTED (CLAUDE.md: pgvector instead) and its remaining import is drift
+    # that Chapter 12 removes; `sentence_transformers` arrives with the real
+    # embedder in the same chapter.
+    "chromadb.*",
+    "sentence_transformers.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["packages", "apps"]
+python_files = ["test_*.py"]
+# Several packages have a tests/test_agent.py. Under the default prepend import
+# mode those collide on module name; importlib mode keeps them distinct without
+# scattering __init__.py through the test trees.
+addopts = "--strict-markers --import-mode=importlib"
+consider_namespace_packages = true
+markers = [
+    # pgvector cannot be faked on SQLite, and a schema built from metadata is not the schema
+    # production runs — so these tests use a real Postgres or they do not run (D-029).
+    "db: needs a live Postgres; skipped unless CODESHERIFF_TEST_DB names a throwaway database",
+]
+
+# ---------------------------------------------------------------------------
+# Agent boundary enforcement (PROJECT_CONTEXT.md §5).
+#
+# Agents may import `contracts` and nothing else. An agent importing a sibling,
+# the engine, GitHub, or a DB client fails CI. This replaces the vendored
+# contracts.py + SHA-256 checksum scheme, which the audit found had been
+# defeated by rewriting the expected hash (AUDIT.md 4.8).
+#
+# Agent isolation is the one architectural property the pre-refactor code got
+# right. This contract is what keeps it.
+# ---------------------------------------------------------------------------
+[tool.importlinter]
+# The "forbidden" contract below names third-party packages (sqlalchemy, celery,
+# fastapi, ...), so external imports have to be graphed too.
+include_external_packages = true
+root_packages = [
+    "codesheriff_contracts",
+    "codesheriff_storage",
+    "static_agent",
+    "semantic_agent",
+    "context_agent",
+    "agent_runtime",
+    "codesheriff_engine",
+    "codesheriff_api",
+    "codesheriff_worker",
+]
+
+[[tool.importlinter.contracts]]
+name = "Agents are independent of each other"
+type = "independence"
+modules = [
+    "static_agent",
+    "semantic_agent",
+    "context_agent",
+    "agent_runtime",
+]
+
+[[tool.importlinter.contracts]]
+name = "Agents know nothing of the engine, apps, or infrastructure"
+type = "forbidden"
+source_modules = [
+    "static_agent",
+    "semantic_agent",
+    "context_agent",
+    "agent_runtime",
+]
+forbidden_modules = [
+    "codesheriff_engine",
+    "codesheriff_storage",
+    "codesheriff_api",
+    "codesheriff_worker",
+    "sqlalchemy",
+    "celery",
+    "githubkit",
+    "fastapi",
+]
+
+[[tool.importlinter.contracts]]
+name = "Layered: apps depend on storage depends on engine depends on contracts"
+type = "layers"
+layers = [
+    "codesheriff_api | codesheriff_worker",
+    "codesheriff_storage",
+    "codesheriff_engine",
+    "codesheriff_contracts",
+]
+
+# ---------------------------------------------------------------------------
+# Research integrity, enforced the same way agent isolation is (D-025).
+#
+# §6 requires every fitted number to be reproducible from the calibration split and a recorded
+# corpus hash. A fusion or calibration module that can open a database session turns that into an
+# honour system: the next person to need a lookup adds one, and the reproducibility claim quietly
+# stops being checkable. Persistence is an application concern — apps/worker writes, apps/api
+# reads — and the engine below them cannot see it.
+# ---------------------------------------------------------------------------
+[[tool.importlinter.contracts]]
+name = "Fusion and calibration cannot reach the database"
+type = "forbidden"
+source_modules = [
+    "codesheriff_contracts",
+    "codesheriff_engine",
+]
+forbidden_modules = [
+    "codesheriff_storage",
+    "sqlalchemy",
+    "alembic",
+    "psycopg",
+]

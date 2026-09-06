@@ -1,0 +1,8 @@
+# Normalise line endings. Contributors are on mixed platforms and the audit
+# already turned up a checksum test whose result depended on CRLF vs LF
+# (AUDIT.md 4.8). Keep the repository LF-only.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.pem binary

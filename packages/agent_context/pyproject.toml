@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codesheriff-agent-context"
+version = "0.1.0"
+description = "RAG-powered cross-PR security regression reviewer for CodeSheriff"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "codesheriff-contracts",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.0",
+    "jinja2>=3.1.0",
+    "typer>=0.12.0",
+]
+
+[project.scripts]
+context-agent = "context_agent.cli:app"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.3.0",
+    "mypy>=1.8.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/context_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+# ruff and mypy are configured once, in the workspace root pyproject.toml. A local
+# [tool.ruff] here shadows it for this package's files and silently applies a
+# different rule set — which is how these packages drifted apart in the first place.

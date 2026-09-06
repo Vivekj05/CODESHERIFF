@@ -1,0 +1,23 @@
+[project]
+name = "codesheriff-storage"
+version = "0.1.0"
+description = "Persistence: SQLAlchemy models, Alembic migrations, pgvector precedent store."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "codesheriff-contracts",
+    "codesheriff-engine",
+    "sqlalchemy>=2.0.30",
+    "alembic>=1.13.0",
+    "psycopg[binary]>=3.1.18",
+    "pgvector>=0.2.5",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codesheriff_storage"]

@@ -1,9 +1,39 @@
-venv/
-.env
+# uv.lock is COMMITTED deliberately: calibration must be reproducible, which means
+# the dependency set that produced it is part of the record.
+
+# Python
 __pycache__/
-.venv/
 *.pyc
+*.egg-info/
+.venv/
+venv/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.import_linter_cache/
+.coverage
+htmlcov/
+
+# Secrets — never commit
+.env
+.env.local
+*.pem
+*.private-key.pem
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.turbo/
+
+# Local data
 .cache/
 .chroma_db/
-*.egg-info/
+postgres-data/
+redis-data/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
