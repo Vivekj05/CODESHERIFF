@@ -38,6 +38,7 @@ from sqlalchemy.orm import sessionmaker
 from codesheriff_contracts import ChangeUnit, Evidence
 from codesheriff_engine.config import EngineConfig
 from codesheriff_engine.fusion import FusionResult, fuse_all_evidence
+from codesheriff_patch import PatchConfig
 from codesheriff_storage import (
     Audit,
     StorageConfig,
@@ -53,11 +54,20 @@ from codesheriff_storage import (
     to_change_unit_row,
     to_evidence_row,
     to_finding,
+    to_patch_proposal_row,
 )
 from codesheriff_worker.analysis import Agent, AgentDeps, analyse_unit, load_agents
 from codesheriff_worker.celery_app import app, config
 from codesheriff_worker.comment import CalibrationFacts, render
 from codesheriff_worker.github_gateway import GitHubGateway, GitHubKitGateway
+from codesheriff_worker.patching import (
+    PatchDeps,
+    PatchRecord,
+    build_patch_model,
+    propose_for_unit,
+    publish,
+    rechecks_for,
+)
 from codesheriff_worker.pipeline import fetch_and_extract
 from codesheriff_worker.precedent import PgVectorPrecedentRetriever, load_embedder
 
@@ -171,7 +181,7 @@ def _run_claimed_audit(
         base_sha=audit.base_sha,
         head_sha=audit.head_sha,
     )
-    evidence, findings = _analyse(db, factory, audit, extraction.units)
+    evidence, findings, patches = _analyse(db, factory, audit, extraction.units)
 
     # Checked immediately before writing to GitHub, not only at the start. The window between the
     # two is the whole pipeline, and a comment about a commit that is no longer at the head is
@@ -180,6 +190,19 @@ def _run_claimed_audit(
     if is_superseded(db, audit.id):
         logger.info("Audit %s was superseded while running; posting nothing", audit.id)
         return "superseded"
+
+    # Suggestions first, so the summary comment can report what actually landed rather than what
+    # was about to be attempted. A suggestion that fails to post is recorded on its row and never
+    # raised: the review is worth more than any one repair (§2 — the report fires on both paths).
+    publish(
+        gateway,
+        patches,
+        installation_id=installation_id,
+        repo_full_name=repository.full_name,
+        pr_number=audit.pr_number,
+        dashboard_url=url_for(audit.id),
+    )
+    _persist_patches(db, patches)
 
     previous = latest_comment_id(db, repository_id=repository.id, pr_number=audit.pr_number)
     comment_id = gateway.post_or_update_comment(
@@ -195,6 +218,7 @@ def _run_claimed_audit(
             prior_probability=audit.prior_probability,
             alert_threshold=audit.alert_threshold,
             calibration=_calibration_facts(audit),
+            patches=patches,
         ),
         comment_id=previous,
     )
@@ -255,7 +279,8 @@ def _analyse(
     audit: Audit,
     units: list[ChangeUnit],
     agents: list[Agent] | None = None,
-) -> tuple[list[Evidence], list[FusionResult]]:
+    patch_deps: PatchDeps | None = None,
+) -> tuple[list[Evidence], list[FusionResult], list[PatchRecord]]:
     """Run the agents over every unit, persist what they said, and fuse it.
 
     Returns everything the comment needs, so the caller does not read it back out of the
@@ -266,12 +291,25 @@ def _analyse(
     **A change unit row is written even when no unit produced a finding, and even when there are
     no units at all.** `change_units` records what this audit *looked at*; an audit with no rows
     is a legible statement that a pull request touched no analysable Python.
+
+    **Patches are drafted here and posted later** (Chapter 17). Drafting is analysis and belongs
+    beside the fusion that decided which findings deserve one; posting is a write to GitHub and
+    belongs after the supersede check, with the comment. A proposal is produced for every persisted
+    finding — including the ones below the alert threshold, which record `not_alert_worthy` without
+    a model call, because §2 makes the report fire on both paths.
     """
     roster = load_agents(deps=_deps_for(factory, audit)) if agents is None else agents
     config = EngineConfig.load()
+    patch_config = PatchConfig.load()
+    patching = (
+        PatchDeps(model=build_patch_model(patch_config), rechecks=rechecks_for(roster))
+        if patch_deps is None
+        else patch_deps
+    )
 
     all_evidence: list[Evidence] = []
     all_findings: list[FusionResult] = []
+    all_patches: list[PatchRecord] = []
 
     for unit in units:
         unit_row = to_change_unit_row(audit.id, unit)
@@ -296,26 +334,63 @@ def _analyse(
         for result in results:
             result.file = unit.file
 
-        for result in persistable_findings(results):
-            db.add(
-                to_finding(
-                    audit.id,
-                    result,
-                    prior_probability=audit.prior_probability,
-                    alert_threshold=audit.alert_threshold,
-                    calibration_run_id=audit.calibration_run_id,
-                    file=unit.file,
-                    qualified_symbol=unit.qualified_symbol,
-                )
+        persisted = persistable_findings(results)
+        rows = {
+            result.finding_key: to_finding(
+                audit.id,
+                result,
+                prior_probability=audit.prior_probability,
+                alert_threshold=audit.alert_threshold,
+                calibration_run_id=audit.calibration_run_id,
+                file=unit.file,
+                qualified_symbol=unit.qualified_symbol,
             )
+            for result in persisted
+        }
+        db.add_all(rows.values())
+        # Flushed before the ids are read. `Finding.id` is a Python-side column default, which
+        # SQLAlchemy fires during flush and not at construction — so `row.id` is None until this
+        # line, and a patch proposal built from it would have no finding to hang off.
+        db.flush()
+        finding_ids = {key: row.id for key, row in rows.items()}
         all_findings.extend(results)
+
+        all_patches.extend(
+            propose_for_unit(
+                unit,
+                persisted,
+                evidence,
+                deps=patching,
+                config=patch_config,
+                finding_ids=finding_ids,
+            )
+        )
 
     all_findings.sort(key=lambda r: r.posterior_probability, reverse=True)
     logger.info(
-        "Audit %s analysed %s unit(s): %s statement(s), %s finding(s)",
+        "Audit %s analysed %s unit(s): %s statement(s), %s finding(s), %s patch proposal(s)",
         audit.id,
         len(units),
         len(all_evidence),
         len(all_findings),
+        len(all_patches),
     )
-    return all_evidence, all_findings
+    return all_evidence, all_findings, all_patches
+
+
+def _persist_patches(db: DbSession, patches: list[PatchRecord]) -> None:
+    """One row per proposal, written after publishing so `published` is a fact rather than a plan.
+
+    Added, not committed: the audit's own commit covers these, the same way it covers the evidence
+    and the findings. A row here is never written for a finding that was not persisted — the
+    proposal's foreign key would have nothing to point at.
+    """
+    for record in patches:
+        db.add(
+            to_patch_proposal_row(
+                record.finding_id,
+                record.proposal,
+                published=record.published,
+                github_comment_id=record.github_comment_id,
+            )
+        )

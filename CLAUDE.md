@@ -82,6 +82,11 @@ odd choice and is load-bearing:
 | A cell with **no observations** contributes exactly 1.0 | Laplace smoothing already gives it a value | The smoothed value reduces to the class balance of *other* cells: `runtime`'s never-observed tiers came out at 0.69, mild evidence of safety on a tier nothing has ever selected (D-087) |
 | The prior is **declared**, never measured from the corpus | The corpus is right there and its prevalence is computable | It is 0.5 by construction, because every case has a twin. Reading it as a prior states that one changed function in two is vulnerable. The ratios are prevalence-invariant, which is what makes a balanced corpus the right shape for fitting them (D-083) |
 | The alert threshold is **read-only** in the dashboard | Every tool has a sensitivity slider; a noisy repository is a real problem | A per-repository threshold makes `findings.alert_threshold` a description of a setting rather than of a run, and the column exists so a threshold chosen later cannot rewrite which past findings were alerts. Per-repo agent toggles are the same argument: a switched-off witness is not a recorded abstention (D-089) |
+| The repository's test suite is **never** run, whether or not it exists | "Verified" ought to mean more where a suite is available | It needs the dependencies, the network and the filesystem the sandbox exists to deny, on a host holding the database credentials. A ladder that changed meaning with a property of the repository would have its stronger meaning be the unsafe one (D-094) |
+| A verification rung has **three** outcomes, not two | `passed: bool` seems sufficient | NOT_RUN is D-005 applied to checks. On a machine with no WASI interpreter, a patch published as "verified in a sandbox" claims an observation nobody made |
+| A patch retry is sent the **rejection reasons**, never the rejected draft | The draft is the obvious context for a fix | It is model output shaped by attacker-controlled source; returning it as instruction puts untrusted text outside the sentinel the whole prompt is built around (D-093) |
+| A verified repair outside `changed_lines` is **not published** | It is a working fix and a code block would still help | GitHub rejects a comment outside a hunk and D-048 keeps `patch` unread, so those are the only lines known to be in the diff. A fenced block in the summary comment would have to carry the path and the source, and that comment carries neither (D-050) |
+| The patcher is absent from `WITNESS_OF_AGENT` | It runs per finding like an agent does | It reads what the four witnesses said, so it is maximally dependent on all of them. A fifth factor drawn from their own output is D-008 wearing a different hat |
 | PR title/description passed as separate `pr_context` | Convenient inside `ChangeUnit` | Attacker-controlled, and absent from corpus cases — embedding it makes corpus runs behave differently from production, corrupting calibration |
 
 ---
@@ -134,6 +139,7 @@ CODESHERIFF/
 │   ├── agent_context/    # context.rag (Ch 12)
 │   ├── agent_runtime/    # runtime.sfi — Wasmtime + WASI sandbox (Ch 13)
 │   ├── engine/           # ChangeUnit extraction, fusion, calibration. No DB client, no agents.
+│   ├── patch/            # patch.hosted — draft, verify, anchor a suggestion (Ch 17). Not a witness.
 │   └── storage/          # SQLAlchemy models, Alembic, pgvector store, dashboard reads (Ch 15)
 ├── apps/
 │   ├── api/              # FastAPI: sign-in (Ch 5), HMAC + enqueue (Ch 6), dashboard reads (Ch 15)
@@ -162,6 +168,13 @@ link time and hands the guest an empty environment, and reports what an untruste
 reached — 9/9 recall, 0 false positives across 23 safe twins. On a machine with no WASI interpreter
 it abstains under its own name, at a likelihood ratio of exactly 1.0, on the record, per unit — so a
 witness that cannot run costs the posterior nothing and hides from nobody.
+
+Chapter 17 gave a finding somewhere to go. An alert-worthy finding is drafted a repair, the repair is
+checked against a fixed six-rung ladder, and one that survives is posted as a GitHub suggested change
+anchored inside the diff — suggestions only, never a commit or a merge. What is *not* there is the
+"test-suite run where available" the plan asked for: CodeSheriff does not run a repository's tests
+and the ladder does not change when one exists (D-094), which is §7's open question 3 answered as a
+refusal rather than a feature.
 
 Chapter 14 fitted the numbers. Every likelihood ratio comes from the calibration split with its
 per-cell counts recorded, the alert threshold from a base-rate-weighted precision–recall sweep on
@@ -420,6 +433,58 @@ stops the agents; this contract stops `tasks`, `pipeline`, `analysis`, `comment`
 `apps/api`. The leak would look like a convenient import in the pipeline for "just checking"
 whether a unit matches a known case.
 
+**Suggesting a repair.** `codesheriff_patch` takes one alert-worthy finding, asks a model for the
+repaired function, checks it, and hands back either an anchored suggestion or a recorded reason
+there is none. **Suggestions only: nothing commits, merges or pushes** (§2). `apps/worker/patching.py`
+supplies the model and the witnesses, and posts.
+
+**It is not a fifth witness and must never become one** (D-092). `patch.hosted` emits no `Evidence`
+and is absent from `WITNESS_OF_AGENT` deliberately — it reads the finding, so it is maximally
+dependent on the four witnesses that produced it, and a fifth factor drawn from their own output is
+the anchoring violation (D-008) wearing a different hat. Fusion refuses an unregistered `agent_id`,
+so the absence is enforced rather than intended.
+
+**"Verified" never means the repository's tests ran, because they never run** (D-094, §7 q3). Six
+rungs, fixed, and none of them conditional on a property of the repository: the patch parses, it
+keeps the signature its callers depend on, it references no name the file does not have, it changes
+something, and the deterministic witnesses re-examine the repaired function. A rung has **three**
+outcomes — passed, failed, not run — because a check that could not run must never read as one that
+passed, and `verified` additionally requires that at least one witness actually looked. Only
+`structural` and `runtime` recheck: `semantic` would be the drafter's own family grading the drafter
+and is non-deterministic besides, and `context` reasons from merged history a proposed patch is not
+part of. A `regression:` rung comes only from a witness that detected the CWE *before* the patch — a
+witness that never detected it cannot certify its removal.
+
+`ast`, not tree-sitter, and that inversion is the point: extraction uses tree-sitter because it
+tolerates the syntax errors a head commit contains, and a syntax gate that tolerated them would pass
+a broken patch. Parsing is not executing; nothing here runs the code.
+
+**Anchored inside `changed_lines`, or not published** (D-095). GitHub rejects a review comment
+outside a diff hunk, and D-048 keeps `patch` unread, so those lines are the only span known to be in
+the diff. A verified repair reaching outside records `not_anchorable` and posts nothing; a fenced
+block in the summary comment would have to carry the path and the source, and that comment carries
+neither (D-050). It works at all because `post_src` is joined from whole file lines, so a
+replacement already carries the file's own indentation — which is also why every parse here dedents
+first. A review comment is **never** edited in place, unlike the summary comment: it is bound to a
+commit, and the next push means a new anchor.
+
+**Retries carry reasons, never drafts** (D-093). Three drafts, each fresh from the same unit with an
+accumulating list of rejection reasons in our own words, rendered outside the sentinel. A rejected
+draft is model output shaped by attacker-controlled source. A transport failure ends the loop rather
+than retrying — the client owns its own retry budget (D-065).
+
+**No model prose is published** (D-096), so unlike `semantic.hosted` there is no screening pass: the
+response carries one field, the repaired function. A response repeating the request sentinel is
+discarded, and a response that is not the requested JSON is refused rather than re-parsed as loose
+code.
+
+**The patch is hashed, never stored** (D-097). `patch_proposals` holds the outcome, the ladder and a
+SHA-256; a repaired function is somebody else's source with our edit in it, and if it was published
+it already lives in the pull request. A row exists for **every** alert-worthy finding, including the
+ones that produced nothing — nine outcomes, none collapsed, because "we did not try" and "we tried
+three times and rejected every result" are different facts. Nothing on the dashboard reads the table
+yet; that gap is named in D-097 rather than left silent.
+
 **No file path reaches the pull request comment** (D-050). A path is chosen by whoever opened the
 pull request; coverage is reported as counts and plain words. Paths belong on the dashboard, behind
 escaping.
@@ -439,6 +504,10 @@ No agent knows another exists, or knows about GitHub, the database, or fusion. A
 
 *This is the one property the current code got right.* No agent imports a sibling, the engine,
 GitHub, or a DB client. It is why a rebuild is cheap rather than catastrophic. Do not break it.
+
+`codesheriff_patch` is held to the same shape by a contract of its own, and is deliberately **not**
+an agent: it emits no `Evidence`, reads the finding the four witnesses produced, and would be a
+fifth correlated factor if it were ever registered as a witness (D-092).
 
 **Agents never raise.** Every failure path returns an abstention with a distinct reason. Returning
 an empty list on a failure path is a bug — it is indistinguishable from "analysed, found nothing",
@@ -513,13 +582,18 @@ uv sync --all-packages           # install the workspace  (--all-packages, or me
 uv run pytest                    # all packages
 uv run pytest packages/agent_static
 uv run ruff check . && uv run ruff format --check . && uv run mypy .
-uv run lint-imports              # agent + storage + corpus boundary enforcement — must stay green
+uv run lint-imports              # agent + storage + corpus + patcher boundaries — must stay green
 
 uv run codesheriff-corpus validate   # loads every case; prints corpus_hash and split_hash
 uv run codesheriff-corpus stats      # coverage by CWE, split and agent
 uv run codesheriff-corpus show cwe-862-admin-export-vuln
 
 uv run codesheriff-engine fuse evidence.json       # posterior + one row per witness. No agents.
+
+# Suggested repairs (Ch 17). There is no CLI: patching runs inside an audit, because a repair needs
+# the finding and the witnesses that produced it. `PATCH_ENABLED=false` turns it off, and the pull
+# request comment then says a suggestion was not attempted rather than quietly omitting one.
+uv run pytest packages/patch      # the ladder, against a scripted model — no key, no network
 
 # Calibration (Ch 14). `observe` is the slow half and writes committed JSONL; `fit` reads it, so a
 # re-fit needs no interpreter, no API key and no Semgrep build. `record` is the only command here
@@ -571,11 +645,12 @@ Signing in needs a registered GitHub App — `docs/github-app-setup.md`. Without
 `501` naming the missing variable rather than failing at import, so `/health` works on a machine
 that has never seen a `.pem`.
 
-All five Python gates and both frontend gates are green as of Chapter 16 (1136 tests passing with
-no database, 166 skipped; the 167 database-marked tests pass against Postgres). `mypy
---strict` covers 122 source files and `lint-imports` keeps **six** contracts — the sixth is what
-holds the audit path away from the corpus now that the calibration harness shares the worker
-process (D-086).
+All five Python gates and both frontend gates are green as of Chapter 17 (1249 tests passing with
+no database, 177 skipped; the 178 database-marked tests pass against Postgres). `mypy
+--strict` covers 131 source files and `lint-imports` keeps **seven** contracts — the sixth holds the
+audit path away from the corpus now that the calibration harness shares the worker process (D-086),
+and the seventh keeps the patcher away from every model, repository and witness it might otherwise
+construct for itself (D-092).
 
 **Measuring an agent.** `packages/agent_static/tests/test_corpus_calibration.py` runs the taint
 engine over the corpus and asserts recall and false positives per case. It reads the **calibration

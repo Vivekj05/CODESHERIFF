@@ -112,6 +112,34 @@ class GitHubGateway(Protocol):
         """
         ...
 
+    def post_review_comment(
+        self,
+        installation_id: int,
+        repo_full_name: str,
+        pr_number: int,
+        commit_sha: str,
+        path: str,
+        start_line: int,
+        line: int,
+        body: str,
+    ) -> int:
+        """Post one review comment anchored to a run of lines, and return its id.
+
+        This is how a suggested change is delivered: the body carries a fenced `suggestion` block,
+        and GitHub renders a button that applies it to `path` between `start_line` and `line` on
+        `commit_sha`. Nothing is committed by posting it — §2 makes patches suggestions only, and a
+        suggestion is applied by the person reviewing or not at all.
+
+        **Never edited in place, unlike the summary comment.** A review comment is bound to a
+        commit; the next push produces a new head SHA, a new anchor and a new comment, and GitHub
+        marks the previous one outdated. Editing the old one would leave a suggestion pointing at
+        code that has moved (D-095).
+
+        `path` reaches GitHub as an API field and is never interpolated into the body, which is
+        what keeps D-050 intact — the rendered text still names no file.
+        """
+        ...
+
 
 class GitHubKitGateway:
     """The real implementation, on `githubkit`.
@@ -287,3 +315,54 @@ class GitHubKitGateway:
             raise GitHubError(
                 f"Could not comment on {repo_full_name}#{pr_number}: {type(exc).__name__}"
             ) from exc
+
+    def post_review_comment(
+        self,
+        installation_id: int,
+        repo_full_name: str,
+        pr_number: int,
+        commit_sha: str,
+        path: str,
+        start_line: int,
+        line: int,
+        body: str,
+    ) -> int:
+        owner, repo = self._split(repo_full_name)
+
+        payload: dict[str, Any] = {
+            "body": body,
+            "commit_id": commit_sha,
+            "path": path,
+            "line": line,
+            "side": "RIGHT",
+        }
+        if start_line != line:
+            # Only sent for a genuine multi-line anchor. GitHub rejects `start_line == line`
+            # rather than treating it as a one-line span, so sending it unconditionally would
+            # fail every single-line suggestion.
+            payload["start_line"] = start_line
+            payload["start_side"] = "RIGHT"
+
+        try:
+            with self._client(installation_id) as github:
+                response = github.request(
+                    "POST",
+                    f"/repos/{owner}/{repo}/pulls/{pr_number}/comments",
+                    json=payload,
+                )
+        except RequestFailed as exc:
+            # 422 is the ordinary failure and it means the anchor is not in the diff. The patcher
+            # already refuses to publish outside `changed_lines` (D-095), so reaching this is a
+            # defect worth the status code in the message.
+            raise GitHubError(
+                f"Could not post a review comment on {repo_full_name}#{pr_number} "
+                f"at lines {start_line}-{line}: HTTP {exc.response.status_code}"
+            ) from exc
+        except Exception as exc:
+            raise GitHubError(
+                f"Could not post a review comment on {repo_full_name}#{pr_number}: "
+                f"{type(exc).__name__}"
+            ) from exc
+
+        created = response.json()
+        return int(created["id"])

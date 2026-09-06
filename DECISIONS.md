@@ -2574,3 +2574,235 @@ that could not run has nothing to say about anything. Filtering on the key would
 detections, which is the subset that makes a posterior look inevitable. Detections of a *different*
 key are excluded, because a DETECTION carries no `covered_cwes` and so says nothing about this
 finding.
+
+---
+
+## D-092 — Patching is its own package, one layer above `contracts` and below everything else
+
+**Date:** 2026-09-06 · **Status:** ACTIVE · **Chapter:** 17
+
+**Context.** Chapter 17 had to put patch generation somewhere. Three places were plausible: a fifth
+agent package, a module inside `codesheriff_engine`, or `apps/worker` beside the code that runs the
+agents.
+
+**Decision.** A new workspace member, `packages/patch` (`codesheriff_patch`), sitting directly above
+`codesheriff_contracts` in the `import-linter` layers and below `corpus`, `engine`, `storage` and
+both apps. A seventh contract forbids it from importing the four agents, either app, `httpx`,
+`githubkit` or `celery`.
+
+**Not a fifth agent.** `patch.hosted` emits no `Evidence` and is deliberately absent from
+`WITNESS_OF_AGENT`. It reads the finding the four witnesses produced, so it is maximally dependent
+on all of them; registering it would multiply a fifth factor into the odds product drawn from what
+the other four already said — the anchoring violation D-008 exists to prevent, wearing a different
+hat. Fusion refuses an unregistered `agent_id` (D-052), so the absence is enforced rather than
+merely intended.
+
+**Not inside the engine.** The engine is the layer §6 requires to be reproducible from a corpus hash
+with no credentials. A subsystem whose normal path calls a hosted model does not belong under that
+guarantee, and D-025's argument applies unchanged: the next person who needs a lookup adds one, and
+the property quietly stops being checkable.
+
+**Not inside `apps/worker`.** The verification ladder is the research contribution of this chapter
+and has to be testable on its own — against a scripted model, with no key, no quota, no database and
+no interpreter. Code that lives beside a Celery app and a GitHub client acquires them.
+
+The layer position is the whole statement about what a patcher may know: a `ChangeUnit`, a CWE, and
+nothing about fusion, the corpus, the database or GitHub. `codesheriff_storage` sits above it
+because `mapping.to_patch_proposal_row` writes a proposal's outcome; the patcher never reaches back.
+
+**Consequence.** The model arrives through a `PatchModel` protocol the package declares and
+`apps/worker` implements, and the witnesses arrive through `Rechecker` the same way — the split
+D-072 established for retrieval, for the same reason. `PatchConfig` reads `GEMINI_API_KEY` under the
+same names `SemanticConfig` does, because it is one credential per process (D-042) and not one per
+subsystem, but it reads it *itself* rather than through the agent's settings object: a subsystem
+that borrows another's configuration inherits its defaults by accident.
+
+---
+
+## D-093 — Three drafts, and a retry carries the rejection reasons, never the rejected draft
+
+**Date:** 2026-09-06 · **Status:** ACTIVE · **Chapter:** 17
+
+**Context.** "Draft → verify → retry" (PLAN.md Chapter 17) leaves two things unspecified: how many
+retries, and what a retry is told.
+
+**Decision.** `MAX_DRAFTS = 3`, including the first. Each attempt is drafted **fresh** from the same
+unit, with an accumulating list of CodeSheriff's own rejection reasons rendered *outside* the prompt
+sentinel. The rejected draft is never sent back.
+
+**Because the draft is untrusted text.** It is model output shaped by source the pull request author
+wrote. The whole prompt is built around one boundary — a per-request `secrets` sentinel with the
+unit inside it and instructions outside (D-066) — and feeding a previous completion back as context
+puts attacker-influenced text on the instruction side of that line. The rejection reasons are ours:
+they come from a closed set of check names and this system's own phrasings.
+
+**Because three is where iteration stops and search begins.** The reasons are specific enough to act
+on — "you changed the signature", "you referenced a name the file does not import" — so a second and
+third attempt are genuinely better informed. Beyond that, a loop that keeps going until something
+passes is selecting for a draft that satisfies the checks rather than one that repairs the code, and
+the checks are cheap enough that the difference would not show from outside. A finding with no
+verified draft after three publishes nothing.
+
+**A transport failure ends the loop immediately** and is recorded as `patcher_unavailable`, not
+`unverified`. The model was told nothing, so a second request would be byte-identical to the first;
+and `HostedLLMClient` already owns a bounded retry policy of its own (D-065), so repeating here
+multiplies one budget by the other — nine requests against a free tier for one finding, each with
+its own backoff. The two failures are also different facts: one is a patcher that could not run and
+the other is a repair this system rejected, the same distinction `Evidence` draws between an
+abstention and a silence (D-005).
+
+**Consequence.** `ProposalOutcome` has nine members and none of them is collapsed, because the pull
+request comment has to tell a reader which one happened. `NO_REPAIR_OFFERED` — the model returned
+the function unchanged — is not retried either: asking the same question again is not new
+information.
+
+---
+
+## D-094 — "Verified" never means the repository's test suite ran, because it never runs
+
+**Date:** 2026-09-06 · **Status:** ACTIVE · **Chapter:** 17 · **Resolves §7 open question 3**
+
+**Context.** §7 asked what "verified" means when a repository has no test suite, and PLAN.md Chapter
+17 listed "test-suite run where available" among the checks.
+
+**Decision.** **CodeSheriff does not run the repository's test suite, and the ladder does not change
+when one exists.** Verification is a fixed sequence of checks this system can perform against any
+repository: the patch parses, it preserves the signature its callers depend on, it references no
+name the file does not have, it changes something, and the deterministic witnesses re-examine the
+repaired function and report whether the weakness is still there.
+
+**Because "where available" is the dangerous half of the sentence.** Running a repository's suite
+means executing arbitrary code with its dependencies, its network and its filesystem — everything
+the Wasmtime sandbox exists to deny (§5, D-075), on a host holding the database credentials. D-076
+records that this repository has already shipped that shape twice. A ladder that degraded to "we ran
+their tests when they had some" would also report two different meanings of the same word depending
+on a property of the repository, and the stronger meaning would be the unsafe one.
+
+**A check has three outcomes, not two.** `passed`, `failed`, `not_run` — the same distinction D-005
+draws between silence and abstention, applied to verification. The runtime witness is unavailable on
+a machine with no WASI interpreter, and a suggestion published as "verified in a sandbox" on such a
+machine would claim an observation nobody made. Every published suggestion carries the whole ladder
+with its outcomes, so a reader can see which rungs were empty; `verified` additionally requires that
+at least one witness actually re-examined the patch, so four passing text checks over code nothing
+looked at is not enough.
+
+**A witness that never detected the weakness cannot certify its removal.** Its silence on the
+patched function is the same silence it gave the original. `regression:` rungs are emitted only by
+witnesses that detected the CWE *before* the patch; every witness contributes a `no_new_weakness:`
+rung. The suggestion body says which is which.
+
+**The semantic witness does not recheck.** Re-asking a hosted model whether the repair it drafted is
+a repair is the drafter's own family grading the drafter, and it is non-deterministic — the same
+draft would be publishable on one run and not on the next. `context.rag` is excluded for a different
+reason: its basis is the repository's merged history, which a proposed patch is not part of, so it
+would answer about the original function every time.
+
+**Consequence.** The published suggestion states, in the reviewer's own pull request, that this
+system did not run their tests and will not. That sentence is the answer to §7 question 3 delivered
+where it matters, rather than only in this file.
+
+---
+
+## D-095 — A suggestion is anchored inside `changed_lines`, or it is not published
+
+**Date:** 2026-09-06 · **Status:** ACTIVE · **Chapter:** 17
+
+**Context.** A GitHub suggested change is a review comment anchored to a run of lines on the head
+commit. GitHub rejects a review comment on a line outside a diff hunk, and D-048 records that this
+system deliberately never reads GitHub's `patch` field — so the hunks are not knowable.
+
+**Decision.** The repair is narrowed to the smallest contiguous run of lines whose replacement turns
+the original into the draft, and it is published **only if every line of that run is in
+`ChangeUnit.changed_lines`**. A verified repair that reaches outside is recorded `not_anchorable`,
+nothing is posted, and the pull request comment says why.
+
+**Because `changed_lines` is the only span known to be in the diff.** It comes from `difflib` over
+the two fetched blobs, which is what makes a corpus unit and a production unit the same kind of
+object (D-048). Context lines inside a hunk are also valid anchors, but which lines those are is
+exactly what reading `patch` would tell us — and reintroducing that field to make suggestions land
+more often would undo the reason it is absent. Posting on a guess is not free either: the API call
+fails at the end of an audit and the suggestion is lost with no record of what it said.
+
+**A fenced code block in the summary comment was considered and rejected.** To be useful it would
+have to carry the file path and the source, and the summary comment carries neither (D-050).
+
+**No re-drafting for a narrower repair.** Where a repair lands is a property of the pull request's
+diff, not of the draft's quality; re-drafting against it would be searching for a patch that fits
+the hunk rather than one that fixes the bug.
+
+**Anchoring works at all because of an accident of extraction that is worth stating.**
+`ChangeUnit.post_src` is built by joining *whole lines* of the head file, so line `i` of `post_src`
+is byte-identical to line `start_line + i` in the file, leading indentation included. The
+replacement lines therefore need no re-indentation and the file need not be fetched again. It also
+means `post_src` does not parse on its own, which is why every parse in this package dedents first.
+
+**Unlike the summary comment, a review comment is never edited in place.** D-034's one-comment rule
+exists because a developer who pushes six times should get one summary that changes. A review
+comment is bound to a commit: the next push produces a new head SHA and a new anchor, GitHub marks
+the previous one outdated, and editing it would leave a suggestion pointing at code that has moved.
+
+---
+
+## D-096 — No model prose is published, so there is nothing to screen
+
+**Date:** 2026-09-06 · **Status:** ACTIVE · **Chapter:** 17
+
+**Context.** D-067 has `semantic_agent` screen model prose in `mapping.py` and drop
+instruction-shaped text rather than escaping it. A patcher that emitted a summary or a rationale
+would need the same pass.
+
+**Decision.** The response schema carries exactly one field — the repaired function. No summary, no
+rationale, no title, no confidence. What the reviewer sees is the suggestion block, the diff it
+makes, and CodeSheriff's own account of which checks it survived.
+
+**Because the correct amount of untrusted prose to publish is none.** D-078 reached the same place
+from the other direction: the runtime witness needs no screening pass because every published word
+comes from `sinks.py` and the agent's own verbs. A patch explains itself by being applied — the
+reviewer is looking at the code, which is the thing under discussion. Model prose here would add
+nothing the diff does not show while creating a channel that has to be defended.
+
+Two guards remain on the one field that is published. A response repeating the request sentinel is
+discarded outright: the sentinel is random per request and no source file can contain it, so its
+presence means something in the file was trying to look like the frame around it. And a response
+that is not the requested JSON object is refused rather than re-parsed as loose code — a fallback
+parser would be reached the first time the model wandered, and it would extract something from
+output that had stopped following instructions, which is precisely what an injection produces.
+
+---
+
+## D-097 — The patch is hashed, not stored
+
+**Date:** 2026-09-06 · **Status:** ACTIVE · **Chapter:** 17
+
+**Context.** `patch_proposals` records what the patcher did about each alert-worthy finding. Storing
+the repaired function alongside would make the dashboard able to show it.
+
+**Decision.** The row holds `patch_sha256` and nothing of the source. The repaired function lives in
+memory for as long as it takes to post a suggestion, and nowhere else.
+
+**Because §6 keeps source out of the database, and a patch is a harder case than the code under
+review, not an easier one.** `to_change_unit_row` hashes `post_src` because it is somebody else's
+file; a patch is somebody else's file *with our edit in it*. If it was published it already lives in
+the pull request, under the control of the person who owns it. A copy here would be a second,
+uncontrolled one — retained after they delete the branch, and readable by anyone with the database.
+The digest answers the only question a row has to: whether two audits proposed the same repair.
+
+**A row exists for every alert-worthy finding, including the ones that produced no suggestion.** A
+table holding only the successes would report "the function was over the size budget so nothing was
+requested" and "three repairs were drafted and every one failed a check" as the same silence, and
+only the second is a defect report waiting to be written into `DEFECTS.md`. `checks` stores the
+ladder as the run performed it, for the reason `findings.contributions` is stored (D-090): a rung's
+outcome is a property of the run, and re-deriving it later would judge an old proposal by today's
+witnesses. NULL means no draft reached verification, and the CHECK keeps an empty array and the JSON
+scalar `null` out — the same three-state discipline, found the same way.
+
+**`published` is a fact about GitHub, not about the patch.** A verified, anchorable repair that the
+API refused is `verified` and unpublished: this system failing rather than the repair failing, and
+the two must not be collapsed. A failure to post is written to the row and never raised — the
+audit's summary comment is worth more than any one suggestion.
+
+**Consequence, stated rather than left implicit.** Nothing on the dashboard reads this table yet.
+Chapter 17's scope is generation and verification, and the place a suggestion is consumed is the
+pull request, where it already appears. The row is the audit record; surfacing it is a small read
+route and a panel on the finding page, and it is named here so it is a known gap rather than a
+silent one.

@@ -28,12 +28,15 @@ from typing import Any
 
 from codesheriff_contracts import ChangeUnit, Evidence
 from codesheriff_engine.fusion.bayes import FusionResult
+from codesheriff_patch import PatchProposal
 from codesheriff_storage.models import (
     FINDING_KEY_PATTERN,
     ChangeUnitRow,
     EvidenceKindDB,
     EvidenceRow,
     Finding,
+    PatchOutcomeDB,
+    PatchProposalRow,
 )
 from codesheriff_storage.redaction import redact_artifact_content
 
@@ -176,3 +179,40 @@ def persistable_findings(results: list[FusionResult]) -> list[FusionResult]:
             continue
         keepers.append(result)
     return keepers
+
+
+def to_patch_proposal_row(
+    finding_id: uuid.UUID,
+    proposal: PatchProposal,
+    published: bool = False,
+    github_comment_id: int | None = None,
+) -> PatchProposalRow:
+    """One pass of the patcher over one finding, as a row.
+
+    **The repaired source is hashed, never stored** (D-097) — the same rule `to_change_unit_row`
+    applies to the code under review, for a stronger reason: a patch is somebody else's source
+    with our edit in it, and if it was published it already lives in the pull request under the
+    control of the person who owns it. The digest answers whether two audits proposed the same
+    repair, which is the only question a row has to answer.
+
+    `checks` is NULL when no draft ever reached verification. A patcher that never ran has no
+    ladder, and an empty array would say the ladder was run and nothing passed — the same
+    not-recorded-versus-nothing distinction `contributions` draws (D-090).
+    """
+    return PatchProposalRow(
+        finding_id=finding_id,
+        outcome=PatchOutcomeDB(proposal.outcome.value),
+        detail=proposal.detail,
+        drafts_requested=proposal.drafts_requested,
+        checks=(
+            [
+                {"name": result.name, "status": result.status.value, "detail": result.detail}
+                for result in proposal.verification.results
+            ]
+            if proposal.verification is not None and proposal.verification.results
+            else None
+        ),
+        patch_sha256=sha256_text(proposal.patched_src) if proposal.patched_src else None,
+        published=published,
+        github_comment_id=github_comment_id,
+    )

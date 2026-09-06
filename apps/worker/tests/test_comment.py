@@ -18,13 +18,16 @@ import uuid
 from codesheriff_contracts import CONTRACT_VERSION, ChangeUnit, Evidence
 from codesheriff_engine.extraction import ExtractionResult, SkippedFile, SkipReason
 from codesheriff_engine.fusion import WitnessRatios, fuse_all_evidence
+from codesheriff_patch import PatchProposal, ProposalOutcome
 from codesheriff_worker.comment import (
+    PATCH_WORDING,
     SKIP_WORDING,
     STANCE_WORDING,
     CalibrationFacts,
     marker_for,
     render,
 )
+from codesheriff_worker.patching import PatchRecord
 
 AUDIT_ID = uuid.UUID("11111111-2222-3333-4444-555555555555")
 DASHBOARD_URL = "http://localhost:3000/audits/11111111-2222-3333-4444-555555555555"
@@ -110,6 +113,7 @@ def body(
     evidence: list[Evidence] | None = None,
     extraction: ExtractionResult | None = None,
     calibration: CalibrationFacts | None = FITTED,
+    patches: list[PatchRecord] | None = None,
 ) -> str:
 
     statements = ALL_ABSTAINED if evidence is None else evidence
@@ -122,6 +126,26 @@ def body(
         prior_probability=0.05,
         alert_threshold=0.70,
         calibration=calibration,
+        patches=patches,
+    )
+
+
+def patch_record(
+    outcome: ProposalOutcome,
+    published: bool = False,
+    publish_error: str = "",
+) -> PatchRecord:
+    return PatchRecord(
+        finding_id=uuid.uuid4(),
+        proposal=PatchProposal(
+            finding_key=SQLI_KEY,
+            unit_id=UNIT.unit_id,
+            cwe="CWE-89",
+            outcome=outcome,
+            detail="…",
+        ),
+        published=published,
+        publish_error=publish_error,
     )
 
 
@@ -324,3 +348,70 @@ def test_every_skip_reason_has_words_for_it() -> None:
     """A reason added to the enum without a phrase here would raise a KeyError while rendering
     a comment, which is the worst place to find out."""
     assert set(SKIP_WORDING) == set(SkipReason)
+
+
+# -- suggested repairs (Chapter 17) --------------------------------------------------------------
+
+
+def test_a_posted_suggestion_is_reported_without_naming_a_file() -> None:
+    """D-050 again. The suggestion carries its own location; the summary carries a count."""
+    rendered = body(
+        [detection("structural.taint")],
+        patches=[patch_record(ProposalOutcome.VERIFIED, published=True)],
+    )
+
+    assert "Suggested repairs" in rendered
+    assert "1" in rendered and "posted as review comment" in rendered
+    assert "pkg/mod.py" not in rendered
+    assert "charge" not in rendered
+
+
+def test_a_finding_with_no_repair_says_why_rather_than_saying_nothing() -> None:
+    """Nine outcomes, none collapsed. A reader deciding whether to expect a fix has to be able to
+    tell "we did not try" from "we tried three times and rejected every result"."""
+    rendered = body(
+        [detection("structural.taint")],
+        patches=[patch_record(ProposalOutcome.UNVERIFIED)],
+    )
+
+    assert PATCH_WORDING[ProposalOutcome.UNVERIFIED] in rendered
+    assert "posted as review comment" not in rendered
+
+
+def test_the_comment_never_claims_the_repository_s_tests_were_run() -> None:
+    """§7 open question 3, answered where the developer reads it (D-094)."""
+    rendered = body(
+        [detection("structural.taint")],
+        patches=[patch_record(ProposalOutcome.VERIFIED, published=True)],
+    )
+
+    assert "does not run this repository's test suite" in rendered
+
+
+def test_a_suggestion_github_refused_is_reported_as_this_system_failing() -> None:
+    rendered = body(
+        [detection("structural.taint")],
+        patches=[patch_record(ProposalOutcome.VERIFIED, publish_error="HTTP 422")],
+    )
+
+    assert "could not be posted to GitHub" in rendered
+    assert "HTTP 422" not in rendered, "GitHub's own error text is for the log, not the reader"
+
+
+def test_findings_below_the_threshold_are_counted_rather_than_itemised() -> None:
+    rendered = body(
+        [detection("structural.taint")],
+        patches=[patch_record(ProposalOutcome.NOT_ALERT_WORTHY) for _ in range(9)],
+    )
+
+    assert "No repair was requested" in rendered
+    assert rendered.count("below the alert threshold") == 1
+
+
+def test_an_audit_with_no_patch_records_renders_no_repair_section() -> None:
+    assert "Suggested repairs" not in body([detection("structural.taint")])
+
+
+def test_every_patcher_outcome_has_words_for_it() -> None:
+    """A new outcome with no wording would render as a KeyError at the end of a real audit."""
+    assert set(PATCH_WORDING) == set(ProposalOutcome)

@@ -41,6 +41,7 @@ from codesheriff_storage.mapping import (
     to_change_unit_row,
     to_evidence_row,
     to_finding,
+    to_patch_proposal_row,
 )
 from codesheriff_storage.models import (
     EMBEDDING_DIM,
@@ -55,6 +56,8 @@ from codesheriff_storage.models import (
     EvidenceRow,
     Finding,
     Installation,
+    PatchOutcomeDB,
+    PatchProposalRow,
     PrecedentChunk,
     PRPrecedent,
     Repository,
@@ -98,6 +101,8 @@ __all__ = [
     "Installation",
     "OverviewStats",
     "PRPrecedent",
+    "PatchOutcomeDB",
+    "PatchProposalRow",
     "PrecedentChunk",
     "PrecedentMatch",
     "Repository",
@@ -141,6 +146,7 @@ __all__ = [
     "to_change_unit_row",
     "to_evidence_row",
     "to_finding",
+    "to_patch_proposal_row",
     "touch_session",
     "upsert_installation",
     "upsert_repository",

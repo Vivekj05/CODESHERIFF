@@ -66,6 +66,16 @@ statement its backends made — including the two kinds of statement that report
 Nothing on that page is recomputed, so an audit that ran under an earlier calibration is still
 explained by the ratios it used (D-090).
 
+**As of Chapter 17 a finding can carry a repair.** An alert-worthy finding gets a drafted patch,
+checked against a fixed ladder — it parses, it keeps the signature its callers depend on, it
+references no name the file does not have, it changes something, and the deterministic witnesses
+re-examine the repaired function — and, if it survives, posted as a GitHub suggested change anchored
+inside the diff. Suggestions only: nothing commits, merges or pushes. §7 open question 3 is answered
+and the answer is a refusal — CodeSheriff does not run the repository's test suite, and the ladder
+does not change when one exists, because a test suite needs the network and the filesystem the
+sandbox exists to deny (D-094). A rung has three outcomes rather than two, so a check that could not
+run is never published as one that passed.
+
 **As of Chapter 14 the numbers are fitted.** Every likelihood ratio comes from the calibration
 split, the alert threshold from a weighted precision–recall sweep on the validation split, and both
 travel in `calibration.json` with the corpus hash they were measured against. There is no hand-set
@@ -115,7 +125,7 @@ result with a price, since a silence carries a likelihood ratio below 1.0.
 | v0.7 | context agent | ✅ **complete** (Ch 12) — control vocabulary mined from retrieved merged code; 5/5 recall and 0 false positives across 11 twins and negative controls |
 | v0.8 | runtime agent (Wasmtime + WASI) | ✅ **complete** (Ch 13) — network denied at link time, guest environment empty, four caps enforced; 9/9 recall and 0/23 false positives on the calibration split |
 | v0.9 | learned scorer + fine-tuned semantic model | ⬜ |
-| v1.0 | dashboard, patch loop, full evaluation | 🔨 dashboard done (Ch 15, Ch 16); patch loop and evaluation not started |
+| v1.0 | dashboard, patch loop, full evaluation | 🔨 dashboard done (Ch 15, Ch 16); patch loop done (Ch 17) — draft, verify, anchored suggestion, 9 recorded outcomes. Evaluation is Ch 18 |
 
 ---
 
@@ -1228,13 +1238,91 @@ source files, `lint-imports` 6 contracts kept. Both frontend gates green across 
 **167 `db`-marked tests were run against Postgres and pass**, and migration `0004` was applied,
 rolled back to `0003` and re-applied against a real database.
 
-## Chapter 17 — Patch generation and verification ⬜
+## Chapter 17 — Patch generation and verification ✅
 
 Draft → verify → retry. Syntax check, regression check, test-suite run where available. Posted as a
 GitHub suggestion. **Suggestions only — never commit or merge** (§2).
 
 Resolves §7 open question 3 — record in `DECISIONS.md` what "verified" means when a repository has no
 test suite.
+
+**Delivered.** `packages/patch` (`codesheriff_patch`), `apps/worker/patching.py`, migration `0005`.
+D-092 through D-097. The "Done when" of §2 holds: an alert-worthy finding gets a drafted repair, and
+the report fires on both paths.
+
+- **"Test-suite run where available" was not built, and the reason is the deliverable.** §7's
+  question was what "verified" means with no test suite; the answer is that it means the same thing
+  either way, because **CodeSheriff never runs the repository's suite** (D-094). Doing so means
+  executing arbitrary code with its dependencies, its network and its filesystem — everything the
+  Chapter 13 sandbox exists to deny — on a host holding the database credentials, which is the shape
+  D-076 records this repository shipping twice. A ladder that degraded to "we ran their tests when
+  they had some" would report two meanings of one word depending on a property of the repository,
+  and the stronger meaning would be the unsafe one. The pull request says so, in the reviewer's own
+  repository, rather than only in `DECISIONS.md`.
+- **Six rungs, three outcomes each.** `parses` (`ast`, not tree-sitter — a parser that tolerates
+  broken syntax would pass a broken patch), `signature_unchanged`, `names_resolve`,
+  `changes_something`, and per witness `regression:` and `no_new_weakness:`. `passed`, `failed`,
+  `not_run` — the D-005 distinction applied to verification, so a machine with no WASI interpreter
+  cannot publish a suggestion described as sandbox-verified. `verified` additionally requires that
+  at least one witness actually re-examined the patch: four passing text checks over code nothing
+  looked at is not evidence.
+- **A witness that never detected the weakness cannot certify its removal.** `regression:` is
+  emitted only by witnesses that detected the CWE before the patch; the rest contribute
+  `no_new_weakness:` only. `semantic.hosted` never rechecks — the drafter's own family grading the
+  drafter, and non-deterministic besides — and `context.rag` never does either, because a proposed
+  patch is not part of the repository's merged history.
+- **`names_resolve` is the rung that earns its place.** A suggestion replaces lines *inside* one
+  function and cannot add an import, so a repair reaching for `shlex.quote` in a file that never
+  imported `shlex` is a `NameError` on the first request — invisible to a syntax check and to a
+  reviewer skimming a green suggestion block.
+- **Anchored inside `changed_lines`, or not published (D-095).** GitHub rejects a review comment
+  outside a diff hunk, and D-048 keeps this system from ever reading `patch`, so `changed_lines` is
+  the only span known to be in the diff. A verified repair that reaches outside records
+  `not_anchorable` and posts nothing; a fenced block in the summary comment was rejected because to
+  be useful it would carry the path and the source, and that comment carries neither (D-050).
+  Anchoring works at all because `post_src` is built from whole file lines, so the replacement
+  already carries the file's own indentation.
+- **Retries carry reasons, never drafts (D-093).** Three drafts, each fresh from the same unit with
+  an accumulating list of rejection reasons in this system's words. The rejected draft is model
+  output shaped by attacker-controlled source; returning it as instruction would put untrusted text
+  outside the sentinel. A transport failure ends the loop rather than retrying — the client owns its
+  own retry budget (D-065), and multiplying the two spends nine free-tier requests on one finding.
+- **No model prose is published (D-096).** The response carries one field, the repaired function.
+  There is no summary and no rationale, so unlike `semantic.hosted` there is nothing to screen on the
+  way out — the same place D-078 reached from the other direction. A response repeating the request
+  sentinel is discarded outright.
+- **Nine outcomes, none collapsed.** The pull request comment reports which one happened.
+  "The function was over the size budget so nothing was requested" and "three repairs were drafted
+  and every one failed a check" are different facts, and only the second is a defect report waiting
+  to be written.
+- **The patch is hashed, not stored (D-097).** `patch_proposals` holds the outcome, the ladder and a
+  SHA-256; §6 keeps source out of the database, and a repaired function is somebody else's file with
+  our edit in it. A row exists for every alert-worthy finding, including the ones that produced
+  nothing.
+- **Not a fifth witness (D-092).** `patch.hosted` emits no `Evidence` and is absent from
+  `WITNESS_OF_AGENT` deliberately: it reads the finding, so it is maximally dependent on the four
+  witnesses that produced it. A seventh `import-linter` contract keeps the package away from the
+  agents, both apps, `httpx`, `githubkit` and `celery` — which is what lets the whole
+  draft-verify-retry loop be tested against a scripted model with no key and no interpreter.
+
+⚠️ **Three things this chapter did not do.**
+
+1. **No live model has drafted a patch.** Every test replays a scripted model, per `CLAUDE.md`'s
+   "zero live API calls". The ladder is measured against hand-written drafts that exercise each
+   rung; what is *not* measured is the rate at which a real model produces a repair that survives
+   it, or how often a verified repair lands inside the diff. That is a number Chapter 18 can take
+   from the corpus, and it belongs beside the detection figures rather than asserted here.
+2. **Nothing on the dashboard reads `patch_proposals`.** The place a suggestion is consumed is the
+   pull request, where it already appears; the row is the audit record. Surfacing it is a read route
+   and a panel on the finding page. Named in D-097 so it is a known gap rather than a silent one.
+3. **`not_anchorable` has no measured frequency.** It depends on how much of a function a model
+   rewrites versus how much of it a pull request changed, and both come from real diffs.
+
+**Verified.** All five Python gates green — 1249 tests passing with 177 skipped on a machine with no
+database, `ruff` and `ruff format` clean across 224 files, `mypy --strict` clean across **131**
+source files, `lint-imports` **7** contracts kept. The **178 `db`-marked tests were run against
+Postgres and pass**, and migration `0005` was applied, rolled back to `0004` and re-applied against
+a real database. Both frontend gates green, unchanged.
 
 ## Chapter 18 — Evaluation and ablations ⬜
 
@@ -1290,7 +1378,7 @@ chapter that should resolve it.
 |---|---|---|
 | 1 | GitHub App permissions and events; force-push behaviour; summary vs inline comments; update vs duplicate | Ch 5 |
 | 2 | Dashboard scope beyond the agreed minimum | Ch 15 |
-| 3 | Patch mechanics; what "verified" means with no test suite; retry count; suggestion block format | Ch 17 |
+| 3 | Patch mechanics; what "verified" means with no test suite; retry count; suggestion block format | ✅ Ch 17 — D-093, D-094, D-095, D-096 |
 | 4 | Local development — smee.io vs ngrok; Docker Compose layout | Ch 6 |
 | 5 | Demo repository — needs real merged PRs for the context agent plus craftable PRs for detection | Ch 7 / Ch 12 |
 | 6 | Abstract wording — "confidential execution" implies a hardware TEE; soften to "isolated execution layer" or define as SFI | Ch 13 / Ch 18 |

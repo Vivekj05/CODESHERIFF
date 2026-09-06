@@ -40,6 +40,8 @@ from dataclasses import dataclass
 from codesheriff_contracts import CONTRACT_VERSION, Evidence, EvidenceKind
 from codesheriff_engine.extraction import ExtractionResult, SkipReason
 from codesheriff_engine.fusion import FusionResult, Stance
+from codesheriff_patch import ProposalOutcome
+from codesheriff_worker.patching import PatchRecord
 
 SKIP_WORDING: dict[SkipReason, str] = {
     SkipReason.FILE_REMOVED: "deleted",
@@ -164,6 +166,93 @@ def witness_table(result: FusionResult) -> list[str]:
     return lines
 
 
+PATCH_WORDING: dict[ProposalOutcome, str] = {
+    ProposalOutcome.VERIFIED: "a suggested repair was posted on the diff",
+    ProposalOutcome.NOT_ANCHORABLE: (
+        "a repair was drafted and verified, but it changes lines this pull request does not "
+        "touch, so there is nowhere on the diff to attach it"
+    ),
+    ProposalOutcome.UNVERIFIED: "every drafted repair failed CodeSheriff's own checks",
+    ProposalOutcome.NO_REPAIR_OFFERED: "no repair was offered",
+    ProposalOutcome.PATCHER_UNAVAILABLE: "no repair could be drafted",
+    ProposalOutcome.UNIT_TOO_LARGE: (
+        "the function is over the size budget for drafting, and was not truncated"
+    ),
+    ProposalOutcome.UNPARSEABLE_UNIT: (
+        "the function does not parse, so a repair would have nothing to be checked against"
+    ),
+    ProposalOutcome.DISABLED: "suggested repairs are switched off for this repository",
+    ProposalOutcome.NOT_ALERT_WORTHY: "below the alert threshold, so no repair was requested",
+}
+"""Plain English for each patcher outcome.
+
+Nine of them, and none collapsed. "We did not try" and "we tried three times and rejected every
+result" are different facts about this system, and a reader deciding whether to expect a fix has to
+be able to tell them apart. The enum value is the machine name and belongs in the row and the log.
+"""
+
+
+def patch_lines(patches: list[PatchRecord], threshold: float | None) -> list[str]:
+    """What the patcher did, in counts and plain words.
+
+    **No path, no symbol, no source** — the same rule the rest of this comment keeps (D-050). A
+    posted suggestion is a review comment on the diff and carries its own location; the summary
+    says how many there are, not where.
+
+    Findings below the threshold are counted but not itemised: §2 makes the report fire on both
+    paths, and a reader wants to know that nine findings were not offered repairs, not to read nine
+    identical sentences saying so.
+    """
+    attempted = [p for p in patches if p.outcome is not ProposalOutcome.NOT_ALERT_WORTHY]
+    below = len(patches) - len(attempted)
+
+    if not attempted:
+        if not below:
+            return []
+        return [
+            f"No repair was requested: every finding is below the alert threshold"
+            f"{f' of {threshold:.0%}' if threshold is not None else ''}.",
+            "",
+        ]
+
+    published = [p for p in attempted if p.published]
+    lines = ["### 🔧 Suggested repairs", ""]
+
+    if published:
+        lines += [
+            f"**{len(published)}** verified repair"
+            f"{'s were' if len(published) != 1 else ' was'} posted as review "
+            "comment(s) on the diff. They are suggestions: nothing is applied unless you apply "
+            "it, and each one lists the checks it passed and the checks nobody ran.",
+            "",
+        ]
+
+    counts = Counter(p.outcome for p in attempted)
+    lines += ["| Outcome | Findings |", "| :--- | ---: |"]
+    for kind, count in sorted(counts.items(), key=lambda item: item[0].value):
+        lines.append(f"| {PATCH_WORDING[kind]} | {count} |")
+    if below:
+        lines.append(f"| {PATCH_WORDING[ProposalOutcome.NOT_ALERT_WORTHY]} | {below} |")
+
+    failed_to_post = [p for p in attempted if p.publish_error]
+    if failed_to_post:
+        lines += [
+            "",
+            f"**{len(failed_to_post)}** verified repair"
+            f"{'s' if len(failed_to_post) != 1 else ''} could not be posted to GitHub. That is "
+            "this system failing rather than the repair, and it is recorded on the dashboard.",
+        ]
+
+    lines += [
+        "",
+        "CodeSheriff does not run this repository's test suite, and will not: pull request code "
+        "executes only inside an isolated WebAssembly sandbox with no network and no filesystem. "
+        "A repair is checked by re-analysis, never by execution of your tests.",
+        "",
+    ]
+    return lines
+
+
 def _evidence_summary(evidence: list[Evidence]) -> str:
     """One line saying what the agents did across the whole audit."""
     counts = Counter(ev.kind for ev in evidence)
@@ -184,6 +273,7 @@ def render(
     prior_probability: float | None = None,
     alert_threshold: float | None = None,
     calibration: CalibrationFacts | None = None,
+    patches: list[PatchRecord] | None = None,
 ) -> str:
     """The comment body: what was looked at, what each witness said, and what came out."""
     lines = ["## 🛡️ CodeSheriff", "", calibration_banner(calibration), ""]
@@ -228,6 +318,8 @@ def render(
                 ]
             lines += witness_table(finding)
             lines.append("")
+
+    lines += patch_lines(patches or [], alert_threshold)
 
     lines += [
         "### What this number is, and is not",

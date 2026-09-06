@@ -26,6 +26,7 @@ EXPECTED_TABLES = {
     "evidence",
     "findings",
     "installations",
+    "patch_proposals",
     "pr_precedents",
     "precedent_chunks",
     "repositories",

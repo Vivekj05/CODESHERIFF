@@ -51,8 +51,12 @@ def comment_payload(comment_id: int) -> dict[str, object]:
 
 
 def test_a_new_comment_is_posted_to_the_issues_endpoint(config: WorkerConfig) -> None:
-    """Pull request comments are issue comments. The review-comments endpoint is a different
-    thing — it anchors to a line — and D-034 rejects that deliberately."""
+    """Pull request comments are issue comments.
+
+    The review-comments endpoint is a different thing — it anchors to a run of lines on a commit —
+    and D-034 rejects it *for the summary comment*, which has to survive being edited in place
+    across pushes. Chapter 17 uses it for suggested repairs, where anchoring is the point; those
+    are never edited, and the tests for them are at the bottom of this file."""
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -334,3 +338,107 @@ l/2L1UTy5DfAQI7LcYFYuWE8pnib5Laa0gDVoW91OuJnq6vqHjjE8F/s5veae3M0
 04lR8xfbpkpmm2uMD8IDXZVAhgVZJ61UA6KjFOVrhKL6uWTiznsD
 -----END RSA PRIVATE KEY-----
 """
+
+
+# ---------------------------------------------------------------------------
+# Suggested repairs (Chapter 17). A different endpoint from the summary comment, and a different
+# lifecycle: anchored to a commit, and never edited in place (D-095).
+# ---------------------------------------------------------------------------
+
+REVIEW_COMMENTS_PATH = "/repos/acme/payments-api/pulls/7/comments"
+
+
+def review_transport(seen: list[httpx.Request], status: int = 201) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == INSTALLATION_TOKEN_PATH:
+            return httpx.Response(
+                201, json={"token": "ghs_installation", "expires_at": "2099-01-01T00:00:00Z"}
+            )
+        if request.url.path == REVIEW_COMMENTS_PATH:
+            return httpx.Response(status, json={"id": 77001} if status < 300 else {"message": "x"})
+        raise AssertionError(f"unexpected request to {request.url}")
+
+    return httpx.MockTransport(handler)
+
+
+def sent_body(seen: list[httpx.Request]) -> dict[str, object]:
+    import json
+
+    request = next(r for r in seen if r.url.path == REVIEW_COMMENTS_PATH)
+    body = json.loads(request.content)
+    assert isinstance(body, dict)
+    return body
+
+
+def test_a_multi_line_suggestion_carries_both_ends_of_the_span(config: WorkerConfig) -> None:
+    seen: list[httpx.Request] = []
+    gateway = GitHubKitGateway(config, transport=review_transport(seen))
+
+    comment_id = gateway.post_review_comment(
+        installation_id=9001,
+        repo_full_name="acme/payments-api",
+        pr_number=7,
+        commit_sha="b" * 40,
+        path="app/db.py",
+        start_line=11,
+        line=12,
+        body="a suggestion block",
+    )
+
+    assert comment_id == 77001
+    body = sent_body(seen)
+    assert body["commit_id"] == "b" * 40
+    assert body["path"] == "app/db.py"
+    assert (body["start_line"], body["line"]) == (11, 12)
+    assert body["side"] == body["start_side"] == "RIGHT"
+
+
+def test_a_single_line_suggestion_sends_no_start_line(config: WorkerConfig) -> None:
+    """GitHub rejects `start_line == line` rather than reading it as a one-line span.
+
+    Sending it unconditionally would fail every single-line repair — which is the most common
+    shape a repair takes.
+    """
+    seen: list[httpx.Request] = []
+    gateway = GitHubKitGateway(config, transport=review_transport(seen))
+
+    gateway.post_review_comment(
+        installation_id=9001,
+        repo_full_name="acme/payments-api",
+        pr_number=7,
+        commit_sha="b" * 40,
+        path="app/db.py",
+        start_line=11,
+        line=11,
+        body="…",
+    )
+
+    body = sent_body(seen)
+    assert "start_line" not in body
+    assert "start_side" not in body
+    assert body["line"] == 11
+
+
+def test_a_rejected_anchor_becomes_a_github_error_naming_the_lines(
+    config: WorkerConfig,
+) -> None:
+    """422 is the ordinary failure, and it means the anchor was not in the diff.
+
+    The patcher already refuses to publish outside `changed_lines` (D-095), so this is a defect
+    report rather than an expected path — and the message has to say enough to file one.
+    """
+    seen: list[httpx.Request] = []
+    gateway = GitHubKitGateway(config, transport=review_transport(seen, status=422))
+
+    with pytest.raises(GitHubError, match="lines 11-12"):
+        gateway.post_review_comment(
+            installation_id=9001,
+            repo_full_name="acme/payments-api",
+            pr_number=7,
+            commit_sha="b" * 40,
+            path="app/db.py",
+            start_line=11,
+            line=12,
+            body="…",
+        )

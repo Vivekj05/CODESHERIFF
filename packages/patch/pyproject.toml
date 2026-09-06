@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codesheriff-patch"
+version = "0.1.0"
+description = "Draft, verify and anchor a remediation suggestion for one finding"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "codesheriff-contracts",
+    "pydantic>=2.7.0",
+    "jinja2>=3.1.0",
+    # No tree-sitter, deliberately. Extraction uses it because it tolerates the syntax errors a
+    # pull request head commit frequently contains (§4) — which is precisely the wrong property
+    # for a syntax gate. A parser that accepts a broken patch would pass it. `ast` refuses, and
+    # refusing is the whole job of the first check.
+    #
+    # No httpx and no LLM client either. The model arrives through the `PatchModel` protocol this
+    # package declares and `apps/worker` implements (D-072), so nothing here can open a socket.
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codesheriff_patch"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

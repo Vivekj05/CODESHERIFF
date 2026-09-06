@@ -35,6 +35,7 @@ from codesheriff_storage.models import (
     EvidenceKindDB,
     EvidenceRow,
     Finding,
+    PatchProposalRow,
 )
 from codesheriff_worker.github_gateway import PullRequestFile
 from codesheriff_worker.tasks import _run_claimed_audit, execute_audit
@@ -608,3 +609,70 @@ def test_the_comment_shows_one_row_per_witness_for_a_real_finding(
     assert "**Calibrated.**" in body
     for witness in ("structural", "semantic", "context", "runtime"):
         assert f"| **{witness}** |" in body
+
+
+# -- suggested repairs reach the database (Chapter 17) ------------------------------------------
+
+
+def proposals_of(db: DbSession, audit_id: uuid.UUID) -> list[PatchProposalRow]:
+    return list(
+        db.execute(
+            select(PatchProposalRow)
+            .join(Finding, Finding.id == PatchProposalRow.finding_id)
+            .where(Finding.audit_id == audit_id)
+        ).scalars()
+    )
+
+
+def test_every_finding_gets_a_proposal_row_even_when_no_model_is_configured(
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    analysing_gateway: FakeGitHubGateway,
+    audit: Audit,
+) -> None:
+    """A patcher that could not run is a fact worth a row.
+
+    No API key is configured in the test environment, so this exercises the ordinary state on a
+    machine with no model: the audit still completes, the findings are still persisted, and each
+    one records `patcher_unavailable` rather than nothing at all.
+    """
+    assert execute_audit(audit.id, factory, analysing_gateway, url_for) == "succeeded"
+
+    findings = list(db.execute(select(Finding).where(Finding.audit_id == audit.id)).scalars())
+    proposals = proposals_of(db, audit.id)
+    assert findings, "the fixture pull request must produce at least one finding to patch"
+    assert len(proposals) == len(findings)
+    assert {p.outcome.value for p in proposals} <= {
+        "patcher_unavailable",
+        "not_alert_worthy",
+    }
+    assert all(p.published is False and p.patch_sha256 is None for p in proposals)
+    assert analysing_gateway.review_comments == []
+
+
+def test_a_superseded_audit_posts_no_suggestion_either(
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    analysing_gateway: FakeGitHubGateway,
+    audit: Audit,
+) -> None:
+    """The supersede check guards the suggestions as well as the summary comment.
+
+    A suggestion is anchored to a commit that is no longer at the head, so posting one after being
+    overtaken is worse than posting nothing — it invites a reviewer to apply a repair to code that
+    has moved (D-095).
+    """
+    claimed = claim_audit(db, audit.id)
+    assert claimed is not None
+    supersede_open_audits(
+        db,
+        repository_id=REPO_ID,
+        pr_number=7,
+        superseding_head_sha="f" * 40,
+        keep_audit_id=uuid.uuid4(),
+    )
+    db.commit()
+
+    assert _run_claimed_audit(db, factory, claimed, analysing_gateway, url_for) == "superseded"
+    assert analysing_gateway.review_comments == []
+    assert proposals_of(db, audit.id) == []

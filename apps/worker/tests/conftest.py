@@ -36,7 +36,7 @@ from sqlalchemy.orm import sessionmaker
 from codesheriff_storage import build_session_factory
 from codesheriff_storage.models import Audit, CalibrationRun, Installation, Repository
 from codesheriff_storage.testing import migrated_engine, test_database_url
-from codesheriff_worker.github_gateway import PullRequestFile
+from codesheriff_worker.github_gateway import GitHubError, PullRequestFile
 
 LOOPBACK = {"127.0.0.1", "::1", "localhost", "0.0.0.0"}
 
@@ -70,6 +70,24 @@ class PostedComment:
     comment_id: int | None
 
 
+@dataclass
+class PostedReviewComment:
+    """One anchored suggestion, as the gateway was asked to post it.
+
+    The anchor is recorded separately from the body because the two are checked by different
+    tests: that the lines are inside the diff (D-095), and that the body names no file (D-050).
+    """
+
+    installation_id: int
+    repo_full_name: str
+    pr_number: int
+    commit_sha: str
+    path: str
+    start_line: int
+    line: int
+    body: str
+
+
 class FakeGitHubGateway:
     """A GitHub that serves the blobs it was given and records every comment it was asked for.
 
@@ -88,6 +106,10 @@ class FakeGitHubGateway:
         blobs: dict[tuple[str, str], str] | None = None,
     ) -> None:
         self.posted: list[PostedComment] = []
+        self.review_comments: list[PostedReviewComment] = []
+        self.review_comments_fail = False
+        """Set to make every review comment fail. A suggestion GitHub refuses must not cost the
+        audit its summary comment, and that is only assertable if the failure can be provoked."""
         self.failing = failing
         self._next_id = next_id
         self.files = files or []
@@ -133,6 +155,27 @@ class FakeGitHubGateway:
         )
         if comment_id is not None:
             return comment_id
+        self._next_id += 1
+        return self._next_id
+
+    def post_review_comment(
+        self,
+        installation_id: int,
+        repo_full_name: str,
+        pr_number: int,
+        commit_sha: str,
+        path: str,
+        start_line: int,
+        line: int,
+        body: str,
+    ) -> int:
+        if self.failing or self.review_comments_fail:
+            raise GitHubError("GitHub refused the review comment")
+        self.review_comments.append(
+            PostedReviewComment(
+                installation_id, repo_full_name, pr_number, commit_sha, path, start_line, line, body
+            )
+        )
         self._next_id += 1
         return self._next_id
 

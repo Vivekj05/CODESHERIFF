@@ -32,6 +32,7 @@ codesheriff-agent-semantic = { workspace = true }
 codesheriff-agent-context = { workspace = true }
 codesheriff-agent-runtime = { workspace = true }
 codesheriff-engine = { workspace = true }
+codesheriff-patch = { workspace = true }
 codesheriff-storage = { workspace = true }
 
 [tool.ruff]
@@ -86,6 +87,7 @@ mypy_path = [
     "packages/agent_context/src",
     "packages/agent_runtime/src",
     "packages/engine/src",
+    "packages/patch/src",
     "packages/storage/src",
     "apps/api/src",
     "apps/worker/src",
@@ -156,6 +158,7 @@ root_packages = [
     "context_agent",
     "agent_runtime",
     "codesheriff_engine",
+    "codesheriff_patch",
     "codesheriff_api",
     "codesheriff_worker",
 ]
@@ -198,6 +201,11 @@ layers = [
     "codesheriff_storage",
     "codesheriff_engine",
     "codesheriff_corpus",
+    # Chapter 17. Directly above `contracts` and below everything else, which is the whole
+    # statement about what a patcher is allowed to know: a ChangeUnit, a CWE, and nothing about
+    # fusion, the corpus, the database or GitHub. `codesheriff_storage` sits above it because
+    # `mapping.py` writes a proposal's outcome to a row; the patcher never reaches back.
+    "codesheriff_patch",
     "codesheriff_contracts",
 ]
 
@@ -217,6 +225,7 @@ source_modules = [
     "codesheriff_contracts",
     "codesheriff_corpus",
     "codesheriff_engine",
+    "codesheriff_patch",
 ]
 forbidden_modules = [
     "codesheriff_storage",
@@ -275,3 +284,35 @@ source_modules = [
     "codesheriff_api",
 ]
 forbidden_modules = ["codesheriff_corpus"]
+
+# ---------------------------------------------------------------------------
+# The patcher holds no client of any kind (D-092, D-093).
+#
+# `codesheriff_patch` drafts a repair and checks it. The model it drafts with arrives through
+# the `PatchModel` protocol it declares, and the witnesses that re-examine the repair arrive
+# through `Rechecker` — both implemented by `apps/worker`, which is the same split `context.rag`
+# uses for retrieval (D-072).
+#
+# The layers contract above already keeps it away from the engine, the corpus and storage. This
+# one names the three things layering cannot: an HTTP client, a GitHub client, and the four
+# agents. A patcher that could construct a witness would be a second place deciding what a
+# witness is, and a patcher that could open a socket could not be tested without a network.
+#
+# The practical consequence is the one that matters: the whole draft-verify-retry loop runs
+# against a scripted model with no key, no quota and no interpreter.
+# ---------------------------------------------------------------------------
+[[tool.importlinter.contracts]]
+name = "The patcher reaches no model, no repository and no witness for itself"
+type = "forbidden"
+source_modules = ["codesheriff_patch"]
+forbidden_modules = [
+    "static_agent",
+    "semantic_agent",
+    "context_agent",
+    "agent_runtime",
+    "codesheriff_api",
+    "codesheriff_worker",
+    "httpx",
+    "githubkit",
+    "celery",
+]
