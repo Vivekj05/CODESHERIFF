@@ -1,0 +1,14 @@
+case_id: cwe-094-rule-apply-vuln
+pair_id: cwe-094-rule-apply
+label: vulnerable
+cwe: CWE-94
+file: app/rules/engine.py
+symbol: apply_rule
+start_line: 66
+imports: []
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted, runtime.sfi]
+rationale: >-
+  Emptying __builtins__ is a well-known non-defence: the builtins are reachable again
+  through the attribute chain of any object the code can name, and record is passed in.
+  The rule body is user-authored automation, so this is arbitrary execution with a
+  guard that looks deliberate and stops nothing.

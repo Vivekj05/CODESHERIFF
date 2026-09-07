@@ -1,0 +1,13 @@
+case_id: cwe-639-document-delete-safe
+pair_id: cwe-639-document-delete
+label: safe
+cwe: CWE-639
+file: app/documents/views.py
+symbol: delete
+enclosing_class: DocumentView
+start_line: 84
+imports: [django.http.HttpResponse]
+rationale: >-
+  owner=request.user is part of the lookup, so a document belonging to someone else is
+  not found and the request 404s rather than deleting. The added soft-delete bookkeeping
+  changes what deletion means, not who may perform it.

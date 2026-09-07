@@ -1,0 +1,12 @@
+case_id: cwe-798-token-signing-safe
+pair_id: cwe-798-token-signing
+label: safe
+cwe: CWE-798
+file: app/auth/tokens.py
+symbol: sign_token
+start_line: 21
+imports: [os, jwt]
+rationale: >-
+  os.environ subscript raises when the variable is absent, so there is no fallback to
+  take effect. The added expiry claim is unrelated to the secret and is there so the twin
+  is a real change rather than a copy.

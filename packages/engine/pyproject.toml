@@ -10,15 +10,22 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "codesheriff-contracts",
-    "fastapi>=0.110.0",
-    "uvicorn[standard]>=0.28.0",
-    "requests>=2.31.0",
-    "httpx>=0.27.0",
+    # No fastapi, no uvicorn, no requests, and since Chapter 9 no httpx either. The engine
+    # stopped serving HTTP and stopped calling GitHub in Chapter 6 — webhook to apps/api,
+    # comment posting to apps/worker — and httpx outlived that only as the debate module's
+    # OpenAI client, which is deleted (D-009). A fusion package that can open a socket is one
+    # import away from being called inline again.
     "python-dotenv>=1.0.0",
     "pydantic>=2.7.0",
     "pydantic-settings>=2.2.0",
     "typer>=0.12.0",
     "jinja2>=3.1.0",
+    # Chapter 8. Extraction parses whole fetched blobs; the diff is never the source of truth
+    # about the code (AUDIT.md 4.2). tree-sitter over Python's built-in `ast` because it tolerates
+    # the syntax errors a pull request head commit frequently contains, and reaches JS/TS through
+    # the same API when that is scheduled.
+    "tree-sitter>=0.22.0",
+    "tree-sitter-language-pack>=0.2.0",
 ]
 
 [project.optional-dependencies]

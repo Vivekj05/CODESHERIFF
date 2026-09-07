@@ -10,12 +10,14 @@ from __future__ import annotations
 import pytest
 
 from codesheriff_contracts import IN_SCOPE_CWES, EvidenceKind
+from codesheriff_patch import ProposalOutcome
 from codesheriff_storage.models import (
     EMBEDDING_DIM,
     Base,
     EvidenceKindDB,
     EvidenceRow,
     Finding,
+    PatchOutcomeDB,
     PrecedentChunk,
 )
 
@@ -38,6 +40,16 @@ def test_evidence_kind_db_mirrors_the_contract() -> None:
     able to require a migration nobody wrote. This test is the price of that separation.
     """
     assert {member.value for member in EvidenceKindDB} == {member.value for member in EvidenceKind}
+
+
+def test_patch_outcome_db_mirrors_the_patcher() -> None:
+    """Same argument as the evidence enum, one package along.
+
+    `patch_proposals.outcome` is a Postgres enum and therefore schema. If `ProposalOutcome` grows a
+    tenth outcome, a row carrying it fails to insert at the end of an audit — this fails first, in
+    the suite, where the missing migration is the obvious next step.
+    """
+    assert {m.value for m in PatchOutcomeDB} == {m.value for m in ProposalOutcome}
 
 
 def test_no_table_can_store_source_code() -> None:

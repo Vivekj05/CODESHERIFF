@@ -1,0 +1,12 @@
+case_id: cwe-798-payment-client-safe
+pair_id: cwe-798-payment-client
+label: safe
+cwe: CWE-798
+file: app/payments/client.py
+symbol: build_payment_client
+start_line: 11
+imports: [os]
+rationale: >-
+  The key is read from the environment, and subscript rather than get() so a missing
+  variable fails loudly at startup instead of silently authenticating as nobody. The
+  string "sk_live_" appears nowhere. Nothing secret is in the source.

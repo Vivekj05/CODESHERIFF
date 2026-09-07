@@ -11,7 +11,8 @@ import uuid
 import pytest
 
 from codesheriff_contracts import Artifact, ChangeUnit, Evidence
-from codesheriff_engine.fusion.bayes import FusionResult
+from codesheriff_engine.fusion.bayes import FusionResult, Stance, WitnessContribution
+from codesheriff_engine.fusion.cells import RatioCell
 from codesheriff_storage.mapping import (
     is_wellformed_finding_key,
     persistable_findings,
@@ -221,3 +222,61 @@ def test_alert_flag_is_recomputed_from_the_threshold_not_trusted() -> None:
     )
     row = to_finding(uuid.uuid4(), lying, prior_probability=0.05, alert_threshold=0.70)
     assert row.is_alert_worthy is False
+
+
+def test_finding_records_the_factors_the_run_multiplied() -> None:
+    """The breakdown is stored, not recomputed later (Chapter 16).
+
+    Same argument as the threshold above. A posterior explained with today's ratios rather than
+    the ones the run used would contradict the number stored beside it.
+    """
+    result = FusionResult(
+        finding_key="0123456789abcdef",
+        posterior_probability=0.72,
+        is_alert_worthy=True,
+        evidence_list=[],
+        cwe="CWE-89",
+        contributions=[
+            WitnessContribution(
+                witness="structural",
+                stance=Stance.DETECTED,
+                cell=RatioCell.DETECTION_MEDIUM,
+                likelihood_ratio=6.5,
+                agent_ids=["structural.taint"],
+            ),
+            WitnessContribution(
+                witness="runtime",
+                stance=Stance.NEUTRAL,
+                cell=None,
+                likelihood_ratio=1.0,
+                note="abstained: interpreter_unavailable",
+            ),
+        ],
+    )
+    row = to_finding(uuid.uuid4(), result, prior_probability=0.03, alert_threshold=0.70)
+
+    assert row.contributions is not None
+    assert [item["witness"] for item in row.contributions] == ["structural", "runtime"]
+    assert row.contributions[0]["cell"] == "detection_medium"
+    assert row.contributions[0]["likelihood_ratio"] == 6.5
+    # JSON, not a Pydantic object: the column is JSONB and psycopg has to be able to adapt it.
+    assert row.contributions[1]["cell"] is None
+    assert row.contributions[1]["stance"] == "neutral"
+
+
+def test_a_result_with_no_breakdown_is_null_rather_than_empty() -> None:
+    """NULL means "not recorded"; an empty list would mean "no witness contributed".
+
+    Only the first is true of a run that predates the column, and the two must not be the same
+    value in the database — it is the silence-versus-abstention distinction one layer up (D-005).
+    """
+    result = FusionResult(
+        finding_key="0123456789abcdef",
+        posterior_probability=0.30,
+        is_alert_worthy=False,
+        evidence_list=[],
+        cwe="CWE-89",
+    )
+    row = to_finding(uuid.uuid4(), result, prior_probability=0.03, alert_threshold=0.70)
+
+    assert row.contributions is None

@@ -1,0 +1,13 @@
+case_id: cwe-094-notification-template-vuln
+pair_id: cwe-094-notification-template
+label: vulnerable
+cwe: CWE-94
+file: app/notifications/render.py
+symbol: render_notification
+start_line: 31
+imports: [jinja2.Template]
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted, runtime.sfi]
+rationale: >-
+  Server-side template injection. Constructing a Jinja Template from a caller-supplied
+  string compiles that string to Python; the standard environment is not sandboxed, so a
+  payload reaching the interpreter through the template globals is arbitrary execution.

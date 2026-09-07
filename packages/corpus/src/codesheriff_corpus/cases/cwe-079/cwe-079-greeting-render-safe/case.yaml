@@ -1,0 +1,27 @@
+case_id: cwe-079-greeting-render-safe
+pair_id: cwe-079-greeting-render
+label: safe
+cwe: CWE-79
+file: app/web/pages.py
+symbol: render_greeting
+start_line: 12
+imports: [flask.Response, markupsafe.escape]
+precedent:
+  - pr_number: 61
+    file: app/web/pages.py
+    qualified_symbol: render_profile
+    source: 61-render_profile.py
+  - pr_number: 74
+    file: app/web/pages.py
+    qualified_symbol: render_search_header
+    source: 74-render_search_header.py
+# Chapter 12 negative control.
+# Precedent establishes a real convention this unit breaks: both merged page renderers
+# escape interpolated text and the vulnerable twin does not. context.rag must stay silent
+# anyway, because escaping is not an authorization control and CWE-79 is not a CWE this
+# witness reports. It is the sharpest negative in the corpus: the mining is correct, the
+# regression is real, and reporting it would still be wrong for this agent.
+rationale: >-
+  The same hand-built HTML response, but the untrusted value passes through escape()
+  first, which replaces the five HTML-significant characters. The f-string is still
+  present, so a rule keyed on "f-string producing HTML" fires on this twin too.

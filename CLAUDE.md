@@ -66,27 +66,58 @@ odd choice and is load-bearing:
 | Three evidence kinds, not two | `abstained: bool` seems sufficient | SILENCE (ran, found nothing) gets LR < 1.0; ABSTENTION (could not run) gets exactly 1.0. Conflating them means an agent that *could not look* penalises the finding |
 | SILENCE carries `covered_cwes` | Extra field for little gain | Without it, the taint engine's silence on CWE-862 (which it has no rules for) systematically suppresses every semantic-only finding |
 | Fusion iterates **all** agents, not just those that emitted | Wasteful loop | Otherwise odds can only ever increase |
+| Fusion multiplies one LR per **witness**, not per agent | Four backends, four factors seems natural | `structural.taint` and `structural.semgrep` analyse the same source text with the same technique. Two "high" hits multiplied to 8.5 x 7.0 = **59.5x** out of one witness (D-052) |
+| ABSTENTION has no entry in the ratio table | An unfitted constant looks like an oversight | It is exactly 1.0 *by definition*. A fitted number there would mean the act of failing carried information about the code |
+| An unregistered `agent_id` raises in fusion | Harsh; a warning would do | It would otherwise become a fifth witness and multiply in a factor nobody calibrated. `apps/worker` catches it at agent load, so the cost is one log line at start-up |
 | Agents run **blind** — no anchors | Anchoring is obviously more efficient | It correlates the agents and breaks the conditional independence the fusion math assumes |
 | Debate emits its own evidence, never overwrites the posterior | Overwriting is simpler | Overwriting destroys calibration exactly on the contested cases and makes the debate step unmeasurable |
 | Oversized units **abstain**, never truncate | Truncating gets partial signal | Truncated analysis produces confident findings from half-read code, biased toward over-reporting, and silently invalidates calibration |
+| The exemplars sit **inside** the same sentinel as the unit | An example is not untrusted data; wrapping it looks like a category error | They are the longest, most attended-to part of the prompt. Framed differently they would teach that the sentinel is decorative formatting, which is exactly the belief an injection needs |
+| Instruction-shaped model prose is **dropped**, not escaped | Escaping preserves the information and fixes the rendering bug | An escaped injection is still published to the reader it targets. The finding survives on its validated fields — whether the code is vulnerable does not depend on how the model described it |
+| Editing a prompt turns the semantic suite **red** | A test that fails on an intended edit looks broken | The cassettes measure the old prompt. A green suite reporting a rate for a prompt nobody sends any more is worse than a red one; re-record, do not touch the fingerprint |
+| The runtime witness reports **five** CWEs, not ten | Half the scope, from the witness with the most direct evidence | Its SQL and XSS sinks are methods on objects the probe itself fabricated, so an "observation" there is the harness observing itself — a weaker restatement of the structural witness, correlated with it (D-073) |
+| A guard the probe could not evaluate produces an **abstention**, not a detection | The value demonstrably reached the sink | The run reached it only because the harness answered the guard. Reporting is a false positive on exactly the code that defends itself; silence argues that guarded code is clean on the strength of a guard nobody read (D-079) |
+| There is **no** second execution backend, not even for tests | A subprocess runner would make the suite portable | It would be reached the first time a `wasm` test was inconvenient, and the measurement would then be of untrusted code running beside the database credentials. This repo has shipped that shape twice (D-076) |
+| The fitted artifact is the **only** source of a ratio, prior or threshold | A hand-set fallback would keep the system running when `calibration.json` is missing | A fallback is reached the first time the artifact fails to load, and the system then produces numbers nobody measured while still calling them posteriors. Missing artifact raises (D-080, D-082) |
+| A cell with **no observations** contributes exactly 1.0 | Laplace smoothing already gives it a value | The smoothed value reduces to the class balance of *other* cells: `runtime`'s never-observed tiers came out at 0.69, mild evidence of safety on a tier nothing has ever selected (D-087) |
+| The prior is **declared**, never measured from the corpus | The corpus is right there and its prevalence is computable | It is 0.5 by construction, because every case has a twin. Reading it as a prior states that one changed function in two is vulnerable. The ratios are prevalence-invariant, which is what makes a balanced corpus the right shape for fitting them (D-083) |
+| The alert threshold is **read-only** in the dashboard | Every tool has a sensitivity slider; a noisy repository is a real problem | A per-repository threshold makes `findings.alert_threshold` a description of a setting rather than of a run, and the column exists so a threshold chosen later cannot rewrite which past findings were alerts. Per-repo agent toggles are the same argument: a switched-off witness is not a recorded abstention (D-089) |
+| The repository's test suite is **never** run, whether or not it exists | "Verified" ought to mean more where a suite is available | It needs the dependencies, the network and the filesystem the sandbox exists to deny, on a host holding the database credentials. A ladder that changed meaning with a property of the repository would have its stronger meaning be the unsafe one (D-094) |
+| A verification rung has **three** outcomes, not two | `passed: bool` seems sufficient | NOT_RUN is D-005 applied to checks. On a machine with no WASI interpreter, a patch published as "verified in a sandbox" claims an observation nobody made |
+| A patch retry is sent the **rejection reasons**, never the rejected draft | The draft is the obvious context for a fix | It is model output shaped by attacker-controlled source; returning it as instruction puts untrusted text outside the sentinel the whole prompt is built around (D-093) |
+| A verified repair outside `changed_lines` is **not published** | It is a working fix and a code block would still help | GitHub rejects a comment outside a hunk and D-048 keeps `patch` unread, so those are the only lines known to be in the diff. A fenced block in the summary comment would have to carry the path and the source, and that comment carries neither (D-050) |
+| The patcher is absent from `WITNESS_OF_AGENT` | It runs per finding like an agent does | It reads what the four witnesses said, so it is maximally dependent on all of them. A fifth factor drawn from their own output is D-008 wearing a different hat |
 | PR title/description passed as separate `pr_context` | Convenient inside `ChangeUnit` | Attacker-controlled, and absent from corpus cases — embedding it makes corpus runs behave differently from production, corrupting calibration |
 
 ---
 
 ## Current state — read `AUDIT.md` before writing code
 
-**The committed code does not implement the design above.** A full conformance audit found that
-three of four analysis components are shells:
+**The committed code did not implement the design above.** A full conformance audit found that
+three of four analysis components were shells. **None still are** — Chapter 13 built the last of
+them, and every witness is now measured against the corpus on the calibration split.
 
-- The static agent has **no taint engine** — the def-use graph is built and discarded; "taint
-  paths" are a line-number cross-product.
-- The context agent has **no RAG reasoning** — four hard-coded substring tests.
-- The semantic agent's anti-sycophancy exemplars exist on disk and are **never loaded**.
-- The runtime agent **does not exist**.
-- The webhook has **no HMAC verification**.
+The static agent's taint engine *was* the worst of them — the def-use graph was built and discarded,
+and "taint paths" were a line-number cross-product. Chapter 10 replaced it (`AUDIT.md` 3.1–3.6). The
+semantic agent's anti-sycophancy exemplars *were* on disk and never loaded, its prompt delimiter was
+forgeable by the code it analysed, and its hallucination gate had three of four checks with two of
+them weakened; Chapter 11 closed all of it (`AUDIT.md` 0.3, 0.4, 3.9–3.12).
 
-The test suite passes and reports 100%. It cannot detect any of this. `static-agent/cli.py` `bench`
-returns hard-coded `precision: 1.0, recall: 1.0`.
+The context agent *was* four hard-coded substring tests over a vector store its reasoning never
+consulted, sharing one global collection across every repository; Chapter 12 replaced all of it
+(`AUDIT.md` 0.2, 3.7, 3.8).
+
+The runtime agent *did not exist at all*; Chapter 13 built it, sandbox first.
+
+The extraction *was* per-file diff fragments; Chapter 8 closed that (`AUDIT.md` 4.1 and 4.2). The
+webhook *was* unauthenticated; Chapter 6 closed that (`AUDIT.md` 0.1 and 4.3). The fusion engine
+*was* seven defects; Chapter 9 closed all of them (`AUDIT.md` 1.4, 2.2, 2.3, 2.4, 2.6, 2.7). See
+"Closure status" at the top of `AUDIT.md` for what each chapter has actually fixed — the findings
+themselves are left as audited, because they are the record of how far the implementation had
+drifted.
+
+The test suite passes and reports 100%. It could not detect any of this. `static-agent/cli.py`
+`bench` returns hard-coded `precision: 1.0, recall: 1.0`.
 
 **Do not assume a component works because it has a plausible filename or a passing test.** Read
 the implementation.
@@ -102,30 +133,73 @@ CODESHERIFF/
 ├── pyproject.toml        # uv workspace + ruff/mypy/import-linter config
 ├── packages/
 │   ├── contracts/        # THE single shared contract. Never vendored.
-│   ├── corpus/           # Labelled cases + committed immutable splits  (empty — Ch 7)
-│   ├── agent_static/     # structural.taint + structural.semgrep
+│   ├── corpus/           # 76 labelled units, 38 twin pairs, committed splits (Ch 7, Ch 12)
+│   ├── agent_static/     # structural.taint (Ch 10) + structural.semgrep
 │   ├── agent_semantic/   # semantic.hosted
-│   ├── agent_context/    # context.rag
-│   ├── agent_runtime/    # runtime.sfi                                  (empty — Ch 13)
-│   ├── engine/           # Fusion, calibration. May NOT import a DB client.
-│   └── storage/          # SQLAlchemy models, Alembic, pgvector precedent store
+│   ├── agent_context/    # context.rag (Ch 12)
+│   ├── agent_runtime/    # runtime.sfi — Wasmtime + WASI sandbox (Ch 13)
+│   ├── engine/           # ChangeUnit extraction, fusion, calibration. No DB client, no agents.
+│   ├── patch/            # patch.hosted — draft, verify, anchor a suggestion (Ch 17). Not a witness.
+│   └── storage/          # SQLAlchemy models, Alembic, pgvector store, dashboard reads (Ch 15)
 ├── apps/
-│   ├── api/              # FastAPI: verify HMAC, enqueue, 202. No analysis.  (stub — Ch 6)
-│   ├── worker/           # Celery: owns the pipeline and all agents          (stub — Ch 6)
-│   └── dashboard/        # Next.js 16 — rendering layer only. Shell + mock data (Ch 4)
+│   ├── api/              # FastAPI: sign-in (Ch 5), HMAC + enqueue (Ch 6), dashboard reads (Ch 15)
+│   ├── worker/           # Celery: owns the pipeline and all agents. Runs them + fuses (Ch 9)
+│   └── dashboard/        # Next.js 16 — rendering layer only. Real audits + calibration (Ch 15)
 └── docs/history/         # Superseded specs, kept for provenance
 ```
 
-⚠️ **The layout is correct and the workspace now runs; most of the code inside it is still not.**
-Chapter 2 froze the contract at v2.0.0, rewired every package onto it, and got `uv sync`, `pytest`,
-`ruff`, `mypy --strict` and `lint-imports` green. It did **not** fix the analysis defects in
-`AUDIT.md` — it made the agents speak the right contract, not do the right work. The taint engine
-still builds a def-use graph and discards it; the context agent is still four substring tests; the
-runtime agent still does not exist.
+✅ **The pipeline runs end to end, and all four agents exist and are measured.**
+Chapter 2 froze the contract at v2.0.0 and got every gate green. Chapter 6 made the plumbing real —
+verified webhook, queued audit, worker-posted comment. Chapter 7 built the ground truth every number
+will be fitted against. Chapter 8 made the pipeline hand over the right objects. Chapter 9 closed
+the seam: agents run per unit, their statements are persisted against the function they are about,
+and fusion turns them into a posterior that can go down as well as up.
 
-The live webhook still sits at `packages/engine/src/codesheriff_engine/github/webhook.py` and is
-**not** mounted by `apps/api` — it has no HMAC verification (`AUDIT.md` 0.1). It moves to
-`apps/api` in Chapter 6, verified and enqueueing.
+Chapter 10 made the first agent do real work: `structural.taint` propagates over a def-use graph
+it consumes, and is measured — 13/13 on the calibration cases the corpus predicts for it, 0 false
+positives across 23 safe twins. Chapter 11 made the second: `semantic.hosted` loads its exemplars,
+bounds the untrusted region with an unforgeable sentinel, and is measured the same way — 0%
+injection subversion, a 94% safe-twin pass rate, zero hallucinated sinks. Chapter 12 made the
+third: `context.rag` mines the control vocabulary of retrieved merged code instead of running four
+substring tests, and is measured on cross-PR scenarios the same chapter added to the corpus — 5/5
+recall, 0 false positives across 11 twins and negative controls. Chapter 13 made the fourth:
+`runtime.sfi` executes the changed function inside a Wasmtime sandbox that denies the network at
+link time and hands the guest an empty environment, and reports what an untrusted value actually
+reached — 9/9 recall, 0 false positives across 23 safe twins. On a machine with no WASI interpreter
+it abstains under its own name, at a likelihood ratio of exactly 1.0, on the record, per unit — so a
+witness that cannot run costs the posterior nothing and hides from nobody.
+
+Chapter 17 gave a finding somewhere to go. An alert-worthy finding is drafted a repair, the repair is
+checked against a fixed six-rung ladder, and one that survives is posted as a GitHub suggested change
+anchored inside the diff — suggestions only, never a commit or a merge. What is *not* there is the
+"test-suite run where available" the plan asked for: CodeSheriff does not run a repository's tests
+and the ladder does not change when one exists (D-094), which is §7's open question 3 answered as a
+refusal rather than a feature.
+
+Chapter 14 fitted the numbers. Every likelihood ratio comes from the calibration split with its
+per-cell counts recorded, the alert threshold from a base-rate-weighted precision–recall sweep on
+the validation split, and both travel in `calibration.json` with the corpus hash they were measured
+against. **The hand-set constants are deleted, not relabelled** — there is no `PROVISIONAL_RATIOS`,
+`PROVISIONAL_PRIOR`, `PROVISIONAL_ALERT_THRESHOLD` or `FALLBACK_RATIOS` anywhere, and
+`packages/engine/tests/test_no_unfitted_numbers.py` parses the source tree to keep it that way.
+
+Two caveats travel with those numbers. `structural.semgrep` has no Windows build and abstained on
+every unit, so the structural ratios describe a **one-backend witness** — Chapter 18 must re-observe
+on Linux or CI. And the **prior is declared, not measured**: a twin-paired corpus has a prevalence
+of 0.5 by construction, so the base rate is a stated 3% that rescales every posterior by a recorded
+factor and refits nothing (D-083).
+
+**The webhook is `apps/api/src/codesheriff_api/webhooks.py`.** It verifies `X-Hub-Signature-256`
+against the raw body *before* parsing it, writes an `audits` row, publishes the id to Celery and
+answers 202. The old `packages/engine/.../github/webhook.py` is deleted, along with
+`codesheriff_engine/main.py` — a second FastAPI app that mounted it — and the `serve` CLI command
+that booted them. If you find yourself adding an HTTP server or a GitHub client back into
+`packages/engine`, that is the mistake `AUDIT.md` 4.3 describes.
+
+**Two processes, two credential sets** (D-042). `apps/api` holds the OAuth client secret and the
+webhook secret; `apps/worker` holds neither, and holds the LLM key that the API must never have.
+The API cannot import the worker — `import-linter` puts them on the same layer — so it publishes
+the task **by name** (D-040), and the message carries an audit id and nothing else (D-041).
 
 **Persisting anything.** All database access lives in `packages/storage`, and `codesheriff_engine`
 is forbidden from importing `sqlalchemy`, `alembic`, `psycopg` or `codesheriff_storage` — enforced
@@ -133,6 +207,287 @@ by `import-linter` (D-025). Fitted numbers must be reproducible from the calibra
 recorded corpus hash; a fusion module that can open a session makes that unverifiable. Never write a
 row by hand: `mapping.py` is the only writer, it hashes source rather than storing it, and it drops
 fusion results whose key no agent could have produced (D-026, D-027).
+
+**Ground truth.** `packages/corpus` holds 60 hand-written units in 30 twin pairs — the same
+function, once vulnerable and once safe, sharing a `finding_key` so a false positive is a lookup.
+No agent may import it, enforced by a dedicated `import-linter` contract (D-047): an agent that can
+read `label` is being told the answer, and one that can read `detectable_by` can be excused by the
+field that exists to excuse it fairly. `detectable_by` is authored from a pre-registered rule before
+any agent runs and is never widened afterwards.
+
+Splits are assigned by **`pair_id`**, never `case_id`, so a twin cannot straddle a split (D-045).
+Immutability is **detectable, not prevented**: `assign` refuses to move a settled pair, and
+`split_hash` on each `calibration_runs` row makes a later edit show up as a stale fit. A committed
+checksum verified by a test is deliberately *not* used — that is the mechanism `AUDIT.md` 4.8 records
+being defeated by rewriting the expected hash.
+
+Case sources are real `.py` files and are **data, not code**: `cases/` is excluded from `ruff` and
+`mypy`, because linting deliberately vulnerable samples pressures you into fixing the very thing the
+case exists to contain (D-046). A test compiles every one instead — tree-sitter tolerates broken
+syntax, so a stray indent would silently analyse a fragment rather than fail.
+
+**Extracting units.** `codesheriff_engine.extraction` turns two fetched file blobs into one
+`ChangeUnit` per changed function. It holds no HTTP client, no GitHub client and no database session:
+`apps/worker` fetches and this decides what a unit is, which is what lets Chapter 14 run extraction
+over corpus cases with no credentials (D-051).
+
+**GitHub's `patch` is read nowhere, and there is no field for it on `PullRequestFile`** (D-048).
+`changed_lines` comes from `difflib` over the base and head blobs — the same derivation
+`CorpusCase.changed_lines` uses, so a corpus unit and a production unit are the same kind of object,
+which is the whole basis for applying a ratio fitted on one to the other. It also means a file
+GitHub sends no patch for takes no special path; the `AUDIT.md` 4.2 skip is gone structurally rather
+than by a fix that can be forgotten.
+
+The unit is the **outermost** function — never a nested closure, whose free variables are bound
+outside it. A change with no enclosing function gets one `<module>` unit carrying the whole file,
+because CWE-798 lives at module scope more often than not (D-049). One unit per qualified name, last
+definition winning: `@overload` stubs would otherwise apply one agent's ratio twice to one
+`finding_key`. A file that yields no unit is recorded with a `SkipReason`, never dropped silently,
+and `MAX_BLOB_BYTES` skips an oversized file *whole* — capping the fetch is not truncating a unit.
+
+**Taint analysis.** `static_agent.taint` is an AST analysis, not a text one. Rules `fullmatch` the
+**callee** of a call node — never a line of source, which is how a comment came to register a
+critical sink (`AUDIT.md` 3.3). Every sink declares a `class` and its dangerous argument **positions**;
+`args: [0]` on `sql.execute` is how parameterised SQL is modelled, and §5 forbids it being a
+sanitizer (D-059). Sanitizer edges clear classes, so escaping HTML cannot silence an `os.system`.
+
+Three choices there look aggressive and are load-bearing. **Every function parameter is an untrusted
+source** (D-058) — the unit is one function, so its signature is the trust boundary, and nine of the
+thirteen calibration cases depend on it. **A validating guard is a definition** (D-060): `if x not in
+ALLOWED: raise` clears taint, `if x is None: return` does not, because the second establishes nothing
+about the value. **Path sinks require a composition** (D-061), or every function that opens a path it
+was handed becomes a critical finding.
+
+Rule models are `extra="forbid"`. A mistyped field must fail loudly, not analyse quietly.
+
+**Semantic analysis.** `semantic_agent` asks a hosted model for intent, trust boundaries and the
+violated invariant, and everything defensive around it exists to bound the one failure mode a model
+has that a rule engine does not: being confidently wrong, or agreeable.
+
+The untrusted region is delimited by a **per-request random sentinel** (D-066) — `secrets`, never
+`random`, because this is the whole injection boundary. Nothing else in the prompt is a delimiter,
+and the exemplars use the same one. Model prose is **screened in `mapping.py`**, the only place an
+`LLMFinding` becomes an `Evidence`, and prose that reads as an instruction is dropped rather than
+sanitised (D-067). The **hallucination gate** rejects a finding whose CWE is out of scope, whose
+file is not exactly the unit's, whose sink is not verbatim in `post_src`, or whose evidence lines
+fall outside the unit — a rejection drops that finding and not the whole sample, because one
+response can carry a real finding and an invention.
+
+Never construct a prompt without `build_prompt`, and never add a field to the template that carries
+attacker-controlled text outside the sentinel. `n_samples` is 3 with varying seeds, and the spread
+between them is what `raw_score` is derived from — replaying one answer three times would look like
+unanimous confidence.
+
+**Repository precedent.** `context_agent` reports a security control that this repository's own
+merged history establishes and the unit under analysis does not apply. Which controls a repository
+applies is **learned** from retrieved merged code; which of them are authorization controls is a
+**fixed** table (D-071). Making both halves learned would mean inferring a CWE from a name whose
+meaning the agent was never told; making both halves fixed would be a second rule engine with a
+hard-coded guard list, correlated with the one that already exists.
+
+There is **no LLM in this agent**, deliberately. Its basis is precedent and its failure mode is a
+repository with no relevant history; a model-driven version would fail the way `semantic.hosted`
+fails, and heterogeneity is the whole argument for four witnesses.
+
+A control is established either by **the same qualified symbol** carrying it in one merge — matched
+on the symbol, never the path, because a move is what changes the path — or by **two or more
+distinct sibling symbols** sharing it. One neighbour's habit is a coincidence, and treating it as a
+rule would make every added function a regression against whichever neighbour retrieval returned.
+
+It reports **CWE-862 and CWE-639 only**, and that narrowness is the mechanism, not a limitation. A
+mined control that maps to no in-scope CWE cannot be reported at all, so a repository where every
+merged view calls `escape()` has a real convention, a unit that drops it has really regressed, and
+this witness still says nothing — escaping is not authorization. `rate_limit` and `throttle` are
+absent from the table rather than excluded from it, and there is no bare `access`, `check`,
+`verify`, `validate` or `require` token; corpus pairs fire both traps on both twins.
+
+**Retrieval is a Protocol the agent declares and `apps/worker` implements** (D-072). The agent holds
+no store, no session and no embedding model — `lint-imports` fails the build for an agent that
+reaches a database client, and the split is also what lets the corpus measurement run the production
+`analyze()` path with no database and no model download. Cross-repository retrieval is impossible
+structurally: `repository_id` is bound when the retriever is constructed, `retrieve(unit, limit)`
+takes no repository, and the filter is in SQL. `unit.repo` is deliberately not consulted.
+
+**Embedding failure is loud, and there is no fallback branch.** A missing library, an unloadable
+model or a wrong output dimension raises `RetrievalUnavailableError`, which the agent records as a
+`retrieval_unavailable` abstention — distinct from `no_precedent`, because a store that is down is
+not a repository that is new. `AUDIT.md` 3.8 is what conflating them looked like: a 384-dimensional
+MD5 term-hasher, the default path for a normal install, reporting noise with no log line.
+
+**Precedent is written by a backfill command, never by the audit path** —
+`codesheriff-worker precedent backfill`. One chunk per **symbol**, never per pull request, and only
+the merged side: the base version is already precedent from an earlier merge, and indexing both
+would let a control a pull request deliberately removed go on establishing itself forever.
+
+**Runtime observation.** `runtime_agent` executes the changed function **once**, inside a Wasmtime +
+WASI sandbox, with every parameter bound to a uniquely tokenised untrusted value, and reports which
+dangerous operations that value actually reached. It observes; it never proves (D-073).
+
+**The sandbox is the deliverable and the agent is second.** Running a pull request's code is how CI
+systems get compromised, so `sandbox.py` would be worth having if `agent.py` did not exist. The
+guest gets an argv, three file descriptors, and nothing else. **Capabilities are absent, not
+filtered** (D-075): `os.environ` is `{}` because `WasiConfig` inherits nothing, not because a
+deny-list removed the interesting keys, and WASI preview1 defines no `sock_connect`, so a module
+that asks to connect **fails to instantiate** — denial before the first instruction. Never add
+`inherit_env`, `preopen_dir` or a field to `SandboxPolicy` that grants rather than bounds.
+
+**Four caps, each covering another's blind spot.** Fuel is deterministic and is what a calibration
+run needs; epoch interruption is the wall-clock backstop, because a guest blocked in a host call
+burns no fuel; memory keeps an allocation loop a guest `MemoryError` rather than a host OOM.
+
+**Taint is a substring, not a wrapper.** The untrusted value is a `str` subclass whose text is a
+random token, so f-strings, `+`, `%`, `.format()` and `os.path.join` carry it for free and D-061's
+composition rule is a string comparison. The proxy answers as a **module** when clean and as a
+**string** when tainted — `os.path.join` resolving to `str.join` is the bug that split fixed, and it
+cost a real detection while it lasted.
+
+**The interpreter is pinned, verified and never committed** (D-074). 26 MB, gitignored in
+`.wasm-runtimes/`, checked against `INTERPRETER_SHA256` on load, and fetched by a person — an agent
+that downloaded executable code at analysis time would be the supply-chain problem this project
+exists to notice. A digest mismatch is fatal, not a warning. Without it the agent abstains
+`interpreter_unavailable` per unit and `wasm`-marked tests skip; `runtime-agent doctor` reports
+every path it consulted (D-077).
+
+**The guest driver is data, not an import** (D-078). `guest/driver.py` is read as text and handed to
+another interpreter; it has no importer on the host and is excluded from `mypy` only. Nothing it
+says is taken on trust: the trace is found behind a per-request `secrets` sentinel, an unknown sink
+name is dropped, and the **CWE is re-derived from our table** — analysed code cannot invent a
+finding or relabel one. Every published word comes from `sinks.py` and the agent's own verbs, which
+is why the explanation needs no screening pass of the kind model prose needs (D-067).
+
+**Reading it back.** `codesheriff_storage.reporting` holds every dashboard query and nothing
+else. It is separate from `audits.py` because the two have opposite hazards: a lifecycle write must
+be a single conditional UPDATE or two workers race, and a dashboard read must be scoped or it
+discloses another account's pull requests. **Every function takes `installation_ids` and returns
+nothing when it is empty** (D-035) — the scoping lives in the query so a route has nothing to
+forget. Counts are correlated subqueries, never joins: an audit has many units, many statements and
+many findings, and joining all three would report `units x findings` change units, which is a
+plausible wrong number.
+
+`apps/api` serves five read routes — `GET /audits`, `GET /audits/{id}`,
+`GET /audits/{id}/findings/{key}`, `GET /stats/overview`, `GET /calibration` — and **none of them
+computes a probability**. Every posterior, prior, threshold and likelihood ratio is read from the
+row or the artifact that recorded it, so an audit that ran under an earlier calibration keeps
+reporting what it ran under (§6). The audit page renders one statement per witness per unit with
+its kind intact, because collapsing silence and abstention into "found nothing" is what makes a
+posterior unexplainable.
+
+**The odds product is stored, not recomputed** (D-090). `findings.contributions` holds one entry
+per witness as the run computed it — stance, ratio-table cell, likelihood ratio, backends — and the
+finding page reads it. Recomputing at read time would explain an old audit with today's artifact,
+contradicting the posterior stored beside it. The column is NULL or a non-empty array and nothing
+else: "not recorded" and "no witness contributed" are different claims, and JSON `null` is a third
+state that `none_as_null=True` plus a CHECK keeps out of the table. There is no backfill, and a
+finding predating the column shows its statements with no ratios rather than four neutral factors.
+
+A finding is addressed **through its audit** — `finding_key` is a digest of file, symbol and CWE
+and recurs by design on every new head SHA, so a bare key names a set (D-091). The evidence served
+is the whole unit's: a silence and an abstention both carry `finding_key IS NULL`, and filtering on
+the key would return only detections, which is the subset that makes a posterior look inevitable.
+The witness roster on the page comes from `fusion.witnesses`, never from the evidence — a list
+built from the agents that spoke would shorten to the ones that alerted.
+
+**The dashboard reports the fitted numbers and cannot choose them** (D-089). The threshold, the
+four-witness roster and the closed CWE set are read-only facts with their provenance; the one
+writable per-repository setting is whether CodeSheriff analyses that repository at all. The
+calibration page shows the reliability bins, the per-cell observation counts and the whole
+validation sweep — a ratio held up by smoothing has to look like one on screen.
+
+**Fusing evidence.** `codesheriff_engine.fusion` multiplies one likelihood ratio per **witness**
+— four factors, always four, whatever the agents said. `fusion/witnesses.py` is the only place that
+decides how many witnesses there are, and an `agent_id` it does not know raises rather than becoming
+a fifth (D-052). Backends inside a witness combine by plain max, which is D-011's open question
+answered provisionally. The ratios are clamped; the posterior is not. A unit nobody detected anything
+in yields evidence rows and **no** `FusionResult` — there is no `abstention:all_agents` marker any
+more (D-055).
+
+There is no debate module. It overwrote the posterior it was meant to explain, and its default path
+was substring matching in which `"int("` — a substring of `print(` — counted as a sanitizer. It
+returns as a witness that emits its own evidence in Chapter 11 (D-053).
+
+**Running agents is `apps/worker`'s job, never the engine's** (D-054). `apps/worker/analysis.py`
+holds four slots, fills every one of them, and guarantees at least one statement per agent per unit:
+an agent that will not import, raises, hangs or returns `[]` becomes an abstention with a distinct
+reason. If you find yourself adding `import static_agent` to `packages/engine`, that is the
+undeclared dependency Chapter 9 removed — and it is what let a fusion package pull in an LLM client.
+
+**Fitting the numbers.** `codesheriff_engine.calibration` fits one likelihood ratio per witness per
+cell from labelled claims — no agent, no corpus, no session, so §6's "reproducible from the
+calibration split and a recorded corpus hash" is a property of the code. The harness that produces
+those claims is `apps/worker`'s, because running agents is `apps/worker`'s job (D-054, D-085): it
+calls the **production** `load_agents` and `analyse_unit`, rebinding each case's retriever and
+recorded model responses rather than rebuilding the agents, and it refuses the test split by name.
+
+`fusion/cells.py` is the seam. `bayes.py` reads a cell to look a ratio **up**; `fit.py` reads the
+same cell to count observations and fit that ratio **in**. Two implementations of "what did this
+witness say" would fit one quantity and apply another, and both halves would pass their own tests.
+`posterior_from_cells` is the same arithmetic for the same reason — the threshold sweep scores
+exactly what an audit computes.
+
+The order is §6 and it is not negotiable: **ratios on calibration, threshold on validation, test
+split untouched until Chapter 18.** `fit_from_observations` refuses an observation set from the
+wrong split, and `codesheriff_worker.calibration.runner` cannot produce a test-split one at all.
+
+**The audit path cannot import the corpus** (D-086), even though the worker process now can. D-047
+stops the agents; this contract stops `tasks`, `pipeline`, `analysis`, `comment` and all of
+`apps/api`. The leak would look like a convenient import in the pipeline for "just checking"
+whether a unit matches a known case.
+
+**Suggesting a repair.** `codesheriff_patch` takes one alert-worthy finding, asks a model for the
+repaired function, checks it, and hands back either an anchored suggestion or a recorded reason
+there is none. **Suggestions only: nothing commits, merges or pushes** (§2). `apps/worker/patching.py`
+supplies the model and the witnesses, and posts.
+
+**It is not a fifth witness and must never become one** (D-092). `patch.hosted` emits no `Evidence`
+and is absent from `WITNESS_OF_AGENT` deliberately — it reads the finding, so it is maximally
+dependent on the four witnesses that produced it, and a fifth factor drawn from their own output is
+the anchoring violation (D-008) wearing a different hat. Fusion refuses an unregistered `agent_id`,
+so the absence is enforced rather than intended.
+
+**"Verified" never means the repository's tests ran, because they never run** (D-094, §7 q3). Six
+rungs, fixed, and none of them conditional on a property of the repository: the patch parses, it
+keeps the signature its callers depend on, it references no name the file does not have, it changes
+something, and the deterministic witnesses re-examine the repaired function. A rung has **three**
+outcomes — passed, failed, not run — because a check that could not run must never read as one that
+passed, and `verified` additionally requires that at least one witness actually looked. Only
+`structural` and `runtime` recheck: `semantic` would be the drafter's own family grading the drafter
+and is non-deterministic besides, and `context` reasons from merged history a proposed patch is not
+part of. A `regression:` rung comes only from a witness that detected the CWE *before* the patch — a
+witness that never detected it cannot certify its removal.
+
+`ast`, not tree-sitter, and that inversion is the point: extraction uses tree-sitter because it
+tolerates the syntax errors a head commit contains, and a syntax gate that tolerated them would pass
+a broken patch. Parsing is not executing; nothing here runs the code.
+
+**Anchored inside `changed_lines`, or not published** (D-095). GitHub rejects a review comment
+outside a diff hunk, and D-048 keeps `patch` unread, so those lines are the only span known to be in
+the diff. A verified repair reaching outside records `not_anchorable` and posts nothing; a fenced
+block in the summary comment would have to carry the path and the source, and that comment carries
+neither (D-050). It works at all because `post_src` is joined from whole file lines, so a
+replacement already carries the file's own indentation — which is also why every parse here dedents
+first. A review comment is **never** edited in place, unlike the summary comment: it is bound to a
+commit, and the next push means a new anchor.
+
+**Retries carry reasons, never drafts** (D-093). Three drafts, each fresh from the same unit with an
+accumulating list of rejection reasons in our own words, rendered outside the sentinel. A rejected
+draft is model output shaped by attacker-controlled source. A transport failure ends the loop rather
+than retrying — the client owns its own retry budget (D-065).
+
+**No model prose is published** (D-096), so unlike `semantic.hosted` there is no screening pass: the
+response carries one field, the repaired function. A response repeating the request sentinel is
+discarded, and a response that is not the requested JSON is refused rather than re-parsed as loose
+code.
+
+**The patch is hashed, never stored** (D-097). `patch_proposals` holds the outcome, the ladder and a
+SHA-256; a repaired function is somebody else's source with our edit in it, and if it was published
+it already lives in the pull request. A row exists for **every** alert-worthy finding, including the
+ones that produced nothing — nine outcomes, none collapsed, because "we did not try" and "we tried
+three times and rejected every result" are different facts. Nothing on the dashboard reads the table
+yet; that gap is named in D-097 rather than left silent.
+
+**No file path reaches the pull request comment** (D-050). A path is chosen by whoever opened the
+pull request; coverage is reported as counts and plain words. Paths belong on the dashboard, behind
+escaping.
 
 **Building evidence.** Never construct `Evidence(...)` directly — use `Evidence.detection()`,
 `.silence()` or `.abstention()`. Never build a `finding_key` by hand — use `unit.key_for(cwe)`. Both
@@ -149,6 +504,10 @@ No agent knows another exists, or knows about GitHub, the database, or fusion. A
 
 *This is the one property the current code got right.* No agent imports a sibling, the engine,
 GitHub, or a DB client. It is why a rebuild is cheap rather than catastrophic. Do not break it.
+
+`codesheriff_patch` is held to the same shape by a contract of its own, and is deliberately **not**
+an agent: it emits no `Evidence`, reads the finding the four witnesses produced, and would be a
+fifth correlated factor if it were ever registered as a witness (D-092).
 
 **Agents never raise.** Every failure path returns an abstention with a distinct reason. Returning
 an empty list on a failure path is a bug — it is indistinguishable from "analysed, found nothing",
@@ -168,6 +527,13 @@ project; agents that failed the same way would add nothing to a probability esti
 - Scoring weights and likelihood ratios fitted **only** on the calibration split
 - Threshold selected **only** on the validation split
 - Test split evaluated **exactly once**, at the end
+
+**Sign-in and access.** The dashboard never talks to GitHub and holds no secret; `apps/api` owns the
+OAuth flow. What a user may see is read from `GET /user/installations` at sign-in and stored on their
+session — there is no permissions table, and an empty installation list returns nothing rather than
+everything (D-035). The database holds no GitHub token and no session token, only a SHA-256 of the
+cookie (D-036). A URL parameter never widens a session: the installation callback re-derives
+everything through OAuth (D-037).
 
 **Security.** Untrusted PR code executes only in the sandbox (deny-by-default network, ephemeral
 filesystem, resource caps) and never on a host holding database credentials. Source code lives in
@@ -216,8 +582,43 @@ uv sync --all-packages           # install the workspace  (--all-packages, or me
 uv run pytest                    # all packages
 uv run pytest packages/agent_static
 uv run ruff check . && uv run ruff format --check . && uv run mypy .
-uv run lint-imports              # agent + storage boundary enforcement — must stay green
-uv run uvicorn codesheriff_api.main:app --reload   # health endpoint only for now
+uv run lint-imports              # agent + storage + corpus + patcher boundaries — must stay green
+
+uv run codesheriff-corpus validate   # loads every case; prints corpus_hash and split_hash
+uv run codesheriff-corpus stats      # coverage by CWE, split and agent
+uv run codesheriff-corpus show cwe-862-admin-export-vuln
+
+uv run codesheriff-engine fuse evidence.json       # posterior + one row per witness. No agents.
+
+# Suggested repairs (Ch 17). There is no CLI: patching runs inside an audit, because a repair needs
+# the finding and the witnesses that produced it. `PATCH_ENABLED=false` turns it off, and the pull
+# request comment then says a suggestion was not attempted rather than quietly omitting one.
+uv run pytest packages/patch      # the ladder, against a scripted model — no key, no network
+
+# Calibration (Ch 14). `observe` is the slow half and writes committed JSONL; `fit` reads it, so a
+# re-fit needs no interpreter, no API key and no Semgrep build. `record` is the only command here
+# that calls a provider, and only for cases with no recorded response.
+uv run codesheriff-worker calibrate observe --split calibration
+uv run codesheriff-worker calibrate observe --split validation
+uv run codesheriff-worker calibrate fit            # -> packages/engine/.../calibration/calibration.json
+uv run codesheriff-worker calibrate show           # what the active artifact says, and where it is
+
+# The runtime witness's sandbox. `doctor` says whether this machine can run it at all, and where
+# it looked; without the pinned interpreter the agent abstains per unit and `wasm` tests skip.
+uv run runtime-agent doctor
+curl -L -o .wasm-runtimes/python-3.12.0.wasm \n  https://github.com/vmware-labs/webassembly-language-runtimes/releases/download/python%2F3.12.0%2B20231211-040d5a6/python-3.12.0.wasm
+
+# The precedent store context.rag reasons from. The ONLY writer; the audit path never ingests.
+uv run codesheriff-worker precedent backfill --repository-id 1 --repo-full-name owner/name \n    --installation-id 42 --pr 118 --head-sha <sha>
+
+uv run uvicorn codesheriff_api.main:app --reload   # /health, /auth/*, /repositories, /webhooks/github
+
+# The worker. Needs Redis; without it the API answers 503 on the webhook rather than losing work.
+docker compose up -d redis
+uv run celery -A codesheriff_worker.celery_app worker --loglevel=info --queues=audits
+
+# Local webhook delivery (D-043). The channel URL goes in the App's webhook settings, once.
+npx smee-client --url https://smee.io/<channel> --path /webhooks/github --port 8000
 
 # Database (Chapter 3). Alembic owns the schema; never Base.metadata.create_all.
 docker compose up -d postgres
@@ -233,16 +634,69 @@ The dashboard is a separate npm project, not a uv workspace member (Chapter 4):
 
 ```bash
 cd apps/dashboard
-npm run dev                      # http://localhost:3000, mock data, no backend needed
+npm run dev                      # http://localhost:3000 — sign-in needs the API on :8000
 npm run lint && npm run build    # the two frontend gates — must stay green
 ```
 
-All five Python gates and both frontend gates are green as of Chapter 4. `ruff` and `mypy` are
+`NEXT_PUBLIC_API_BASE_URL` is inlined at **build** time, not read at runtime. Changing which API the
+dashboard talks to means rebuilding it.
+
+Signing in needs a registered GitHub App — `docs/github-app-setup.md`. Without one the API answers
+`501` naming the missing variable rather than failing at import, so `/health` works on a machine
+that has never seen a `.pem`.
+
+All five Python gates and both frontend gates are green as of Chapter 17 (1249 tests passing with
+no database, 177 skipped; the 178 database-marked tests pass against Postgres). `mypy
+--strict` covers 131 source files and `lint-imports` keeps **seven** contracts — the sixth holds the
+audit path away from the corpus now that the calibration harness shares the worker process (D-086),
+and the seventh keeps the patcher away from every model, repository and witness it might otherwise
+construct for itself (D-092).
+
+**Measuring an agent.** `packages/agent_static/tests/test_corpus_calibration.py` runs the taint
+engine over the corpus and asserts recall and false positives per case. It reads the **calibration
+split only**, and asserts that it does: §6 reserves validation for threshold selection and permits
+the test split to be evaluated exactly once, at the end, and a suite that runs on every commit is the
+most thorough possible way to violate that. A test may import `codesheriff_corpus`; the `static_agent`
+package may not (D-047, D-063). There is no `bench` command — it returned `precision: 1.0` (D-010).
+
+`packages/agent_semantic/tests/test_corpus_semantic.py` does the same for `semantic.hosted`, under
+the same calibration-split restriction, but replays **committed cassettes** rather than calling the
+model: the criteria demand a rate measured on real model output *and* zero live API calls, and
+recording once is how both hold (D-068). Editing the prompt, the system prompt or an exemplar
+changes each cassette's recorded fingerprint and turns the suite red — deliberately. A prompt edit
+invalidates every number measured against the old prompt, so re-record with
+`tools/record_cassettes.py` rather than reaching for the fingerprint.
+
+`packages/agent_runtime/tests/test_corpus_runtime.py` does the same for `runtime.sfi`, under the
+same calibration-split restriction, executing the production `analyze()` path inside the real
+sandbox — 9/9 recall on the nine calibration cases the corpus predicts for it, 0 false positives
+across 23 safe twins. It is marked `wasm` and skips without the interpreter, on the `db` precedent
+(D-029). `test_a_runnable_case_is_never_an_abstention` is the guard that keeps it from passing
+vacuously against an agent whose sandbox is broken — without it, every false-positive assertion
+would pass on an agent that abstained on everything. What it does not measure is p95 latency or the
+fuel budget's behaviour on a 600-line function; both wait for Chapter 14 and CI hardware.
+
+`packages/agent_context/tests/test_corpus_context.py` does the same for `context.rag`, under the
+same restriction, injecting a deterministic token-overlap retriever over each case's authored
+history — no database, no model download, no network, and the production `analyze()` path. What it
+does not measure is pgvector's own nearest-neighbour ordering; that waits for Chapter 14, which
+needs a populated store anyway. `test_a_case_with_a_history_is_never_an_abstention` is the guard
+that keeps the measurement from passing vacuously against an agent that never ran.
+
+**Semgrep has no Windows build**, so `structural.semgrep` abstains with `tool_unavailable` on a
+Windows dev machine and the structural witness is the taint engine alone. That is a correctly
+handled abstention, not a defect — but it means the SARIF mapping is exercised only against fixture
+SARIF. Chapter 14 must run the corpus on Linux or CI, or its fitted structural ratios will describe
+a one-backend witness. `ruff` and `mypy` are
 configured **once**, in the root `pyproject.toml` — a per-package `[tool.ruff]` silently shadows it
 with a different rule set, which is how the agent packages went unlinted (D-023).
 
-**Tests must never make live API calls.** Enforced via recorded responses; `conftest.py` should
-hard-fail if a live call occurs without an explicit flag.
+**Tests must never make live API calls.** `apps/api/tests/conftest.py` and
+`apps/worker/tests/conftest.py` fail any non-loopback socket connection unless
+`CODESHERIFF_ALLOW_LIVE_CALLS` is set — a guard at the socket layer, so a forgotten
+mock cannot leak a real request. GitHub is substituted at the `GitHubGateway` interface rather than
+at the HTTP layer; the real `githubkit` client is exercised separately against an httpx
+`MockTransport`, with response bodies generated from githubkit's own schemas.
 
 ---
 

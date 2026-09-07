@@ -1,36 +1,147 @@
+# Dangerous sinks. Ten precise sinks beat sixty sloppy ones (PLAN.md Chapter 10).
+#
+# `match` is a regex tested with `fullmatch` against the **callee** of a call expression in the
+# AST — never against a line of raw source. That is what stops
+# `# TODO: replace os.system with subprocess` registering a critical CWE-78 sink, and `\beval`
+# matching the identifier `evaluate` (AUDIT.md 3.3). It is matched against the dotted callee and
+# each of its suffixes, so `session.execute` matches `self.session.execute`.
+#
+# `class` is what a sanitizer has to clear to make this sink safe. Escaping HTML does not make a
+# shell command safe, and until Chapter 10 any sanitizer anywhere between source and sink
+# suppressed any finding (AUDIT.md 3.4).
+#
+# `args` lists the positional argument indices that are dangerous. Everything not listed is safe
+# by construction, which is how parameterised SQL is modelled — see `safe_when` below.
+
 python:
+  # ---- injection -----------------------------------------------------------------------------
   - id: sql.execute
-    match: "(cursor|conn|db|session)\\.execute"
+    match: "(cursor|conn|connection|db|session|engine)\\.execute(many)?|execute(many)?"
+    class: injection
     cwe: CWE-89
     danger: high
+    args: [0]
+    safe_when: params_passed_separately
+    # Parameterised SQL is a property of THIS CALL, not a sanitizer (AUDIT.md 3.5, §5).
+    #
+    # Only argument 0 — the statement — is a sink. The parameter bag at argument 1 is not, because
+    # the driver never interpolates it into SQL. Modelling it as a sanitizer meant a safe
+    # `execute(q, (uid,))` on line 5 cleared taint for a genuinely vulnerable
+    # `execute(f"...{x}")` on line 9 in the same function.
+    #
+    # It also gets `cwe-089-order-sort` right, which no whole-call rule can: both twins call
+    # `execute(query, (request.user.id,))` with parameters passed separately, and the vulnerable
+    # one is vulnerable because a tainted sort column was concatenated into argument 0.
+
+  # ---- command -------------------------------------------------------------------------------
   - id: os.system
-    match: "os\\.(system|popen)"
+    match: "os\\.(system|popen)|system|popen"
+    class: command
     cwe: CWE-78
     danger: critical
+    args: [0]
+
   - id: subprocess.shell
-    match: "subprocess\\.(run|call|check_output|Popen)"
-    requires_arg: "shell=True"
+    match: "subprocess\\.(run|call|check_call|check_output|Popen)"
+    class: command
     cwe: CWE-78
     danger: critical
-  - id: yaml.unsafe_load
-    match: "yaml\\.load"
-    forbids_arg: "Loader=SafeLoader"
-    cwe: CWE-502
-    danger: high
-  - id: path.open
-    match: "(open|os\\.remove|shutil\\.rmtree)"
-    cwe: CWE-22
-    danger: medium
-javascript:
-  - id: eval
-    match: "\\beval"
-    cwe: CWE-94
-    danger: critical
-  - id: child_process.exec
-    match: "child_process\\.exec"
-    cwe: CWE-78
-    danger: critical
-  - id: dom.innerHTML
-    match: "(innerHTML|dangerouslySetInnerHTML)"
+    args: [0]
+    requires_kwarg:
+      shell: "True"
+    # Without `shell=True` the argument vector is passed to execve directly and no shell parses
+    # it, so `subprocess.run(["ping", "-c", "1", host])` is not a command-injection sink however
+    # tainted `host` is. The old rule matched the whole line, so it could not see the keyword when
+    # the call spanned two lines (AUDIT.md 3.3).
+
+  # ---- cross-site scripting ------------------------------------------------------------------
+  - id: xss.mark_safe
+    match: "mark_safe|safe_join|Markup"
+    class: xss
     cwe: CWE-79
     danger: high
+    args: [0]
+
+  - id: xss.html_response
+    match: "(Response|HttpResponse|make_response)"
+    class: xss
+    cwe: CWE-79
+    danger: high
+    args: [0]
+    requires_kwarg:
+      mimetype: "text/html"
+      content_type: "text/html"
+    # A response is only an XSS sink when it is served as HTML. `HttpResponse(status=204)` in an
+    # authorisation case is not a sink, and neither is a JSON response carrying the same string.
+
+  # ---- path traversal ------------------------------------------------------------------------
+  - id: path.filesystem
+    match: "(os\\.(remove|unlink|rmdir)|shutil\\.rmtree|send_file|send_from_directory|FileResponse)"
+    class: path
+    cwe: CWE-22
+    danger: high
+    args: [0]
+    requires_path_composition: true
+    # Traversal is about escaping a **base directory**, so the tainted value has to have been
+    # joined onto one — `os.path.join(base, name)` or `base + "/" + name`. A function handed a
+    # whole path and opening it has not been tricked into anything; the caller chose the path,
+    # which is the entire interface. Without this, every `open(path)` in a function that takes a
+    # path is a critical finding, which is a false positive factory and would fire on both twins
+    # of `cwe-502-config-load`.
+
+  # ---- deserialisation -----------------------------------------------------------------------
+  - id: pickle.loads
+    match: "(pickle|cPickle|dill|shelve|marshal)\\.(loads?)"
+    class: deserialization
+    cwe: CWE-502
+    danger: critical
+    args: [0]
+    # The module prefix is required rather than matching a bare `loads`, which would fire on
+    # `json.loads` — the exact call that is the *fix* in the safe member of `cwe-502-cache-get`.
+
+  - id: yaml.unsafe_load
+    match: "yaml\\.(load|unsafe_load|full_load)"
+    class: deserialization
+    cwe: CWE-502
+    danger: high
+    args: [0]
+    forbids_kwarg:
+      Loader: ".*Safe.*"
+    # `yaml.load(f, Loader=SafeLoader)` is safe and `yaml.load(f, Loader=yaml.Loader)` is not.
+    # The old rule tested the same line only, so a `Loader=` on the following line was missed.
+
+  # ---- code execution ------------------------------------------------------------------------
+  - id: code.exec
+    match: "exec|eval|compile|execfile"
+    class: code
+    cwe: CWE-94
+    danger: critical
+    args: [0]
+    # `fullmatch` against the callee, so this matches `eval(x)` and never the identifier
+    # `evaluate`, `evalContext` or a comment mentioning eval (AUDIT.md 3.3).
+
+  - id: code.template_from_string
+    match: "(Template|from_string|jinja2\\.Template)"
+    class: code
+    cwe: CWE-94
+    danger: high
+    args: [0]
+    # Server-side template injection. Constructing a template *from a string* is the dangerous
+    # form; looking one up by name from a loader — `ENVIRONMENT.get_template(name)` — is not, and
+    # is deliberately absent from this pattern.
+
+  # ---- server-side request forgery -----------------------------------------------------------
+  - id: ssrf.fetch
+    match: "(urlopen|urlretrieve|urllib\\.request\\.urlopen)|((requests|httpx|session|client)\\.(get|post|put|patch|delete|head|request))"
+    class: ssrf
+    cwe: CWE-918
+    danger: high
+    args: [0]
+
+# JavaScript and TypeScript are deliberately absent.
+#
+# The engine abstains with `language_not_modelled` rather than analysing them, because everything
+# above is Python-shaped: the argument positions, the keyword arguments, the def-use construction
+# and the guard recognition. The previous JS rules were regexes over raw lines, and `\beval`
+# matched `evaluate` and `evalContext` (AUDIT.md 3.3) — an abstention is worth more than a
+# confident wrong answer, and scope is Python-first (CLAUDE.md, §6).

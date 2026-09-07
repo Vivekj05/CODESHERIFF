@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-862-xpr-team-invite-vuln",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "ad3e977cbb311817",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

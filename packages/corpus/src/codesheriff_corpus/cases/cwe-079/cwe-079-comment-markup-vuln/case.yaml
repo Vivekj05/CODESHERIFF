@@ -1,0 +1,13 @@
+case_id: cwe-079-comment-markup-vuln
+pair_id: cwe-079-comment-markup
+label: vulnerable
+cwe: CWE-79
+file: app/comments/render.py
+symbol: comment_html
+start_line: 40
+imports: [markupsafe.Markup]
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted]
+rationale: >-
+  Markup() is an assertion that its argument is already safe, and here it wraps a string
+  built from stored user input. Wrapping the whole document also disables escaping for
+  the comment body inside it. Stored XSS, so it fires for every later viewer.

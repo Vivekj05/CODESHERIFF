@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-862-xpr-webhook-replay-vuln",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "764aee9914c7bfec",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

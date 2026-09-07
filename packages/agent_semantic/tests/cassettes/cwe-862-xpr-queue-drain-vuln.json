@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-862-xpr-queue-drain-vuln",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "3fbaba068bb0babd",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

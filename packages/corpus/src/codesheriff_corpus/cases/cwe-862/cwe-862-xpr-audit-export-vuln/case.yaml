@@ -1,0 +1,30 @@
+case_id: cwe-862-xpr-audit-export-vuln
+pair_id: cwe-862-xpr-audit-export
+label: vulnerable
+cwe: CWE-862
+file: app/admin/audit.py
+symbol: export_audit_log
+start_line: 61
+decorators: ['@app.route("/admin/audit/export")']
+imports: [flask.Response, flask.request]
+detectable_by: [semantic.hosted, context.rag]
+precedent:
+  - pr_number: 118
+    file: app/admin/users.py
+    qualified_symbol: export_users
+    source: 118-export_users.py
+  - pr_number: 131
+    file: app/admin/billing.py
+    qualified_symbol: export_invoices
+    source: 131-export_invoices.py
+  - pr_number: 146
+    file: app/admin/audit.py
+    qualified_symbol: view_audit_log
+    source: 146-view_audit_log.py
+rationale: >-
+  An added endpoint, so there is no pre_src and nothing was removed by this change.
+  Every other admin export this repository has merged carries @admin_required, and the
+  three precedent records are those merges. The unit read on its own is an unremarkable
+  CSV export; the missing authorization is visible only against the repository's own
+  history, which is the claim context.rag exists to make and the reason this case sits
+  here rather than among the same-PR removals.

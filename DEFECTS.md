@@ -45,25 +45,16 @@ docstring, killed taint before the sink" is a cause. Only the second is useful l
 
 | ID | Date | Case | CWE | Agent | Posterior | Cause | Fixed |
 |---|---|---|---|---|---|---|---|
-| _none recorded yet_ | | | | | | | |
+| FP-001 | 2026-08-29 | `cwe-079-search-summary-safe` | CWE-79 | `semantic.hosted` | n/a — agent-level, fusion ratios unfitted until Ch 14 | `format_html` escapes its arguments, but the guarantee lives in the library and not in the unit; the model hedged on the off-screen contract ("while format_html in frameworks like Django is intended to be safe...") and reported anyway. Doubt about an unseen callee resolves toward reporting | open |
+| FP-002 | 2026-09-03 | `cwe-862-xpr-audit-export-safe` and `-vuln` | CWE-89 (the pair is CWE-862) | `semantic.hosted` | 0.0015 at the fitted ratios; threshold 0.23, so no alert | Fires on **both** twins, the signature of a rule keyed on the shape of the code rather than on the flaw: the export builds a query string, and the model called it injection on the safe twin too. Both land in `detection_low`, whose fitted ratio for this witness is 0.74 - the fit discounts this witness's weak alerts, which is what a low tier below 1.0 is for | open |
+| FP-003 | 2026-09-03 | `cwe-639-document-delete-vuln` | CWE-862 (the pair is CWE-639) | `semantic.hosted` | 0.017 at the fitted ratios; no alert | The case *is* an authorization bug and the model reported it under the neighbouring authz CWE. Scored as a false claim because the corpus states what each pair is about and a finding key is a CWE. Whether CWE-862/639 confusion should score as a miss or as a hit under a coarser label is a scoring question to settle **before** Chapter 18 - answering it after seeing the test split would be fitting on it | open |
 
 ## False negatives
 
 | ID | Date | Case | CWE | Agent | Posterior | Cause | Fixed |
 |---|---|---|---|---|---|---|---|
-| _none recorded yet_ | | | | | | | |
-
----
-
-## Example entries
-
-Illustrative only — delete once real entries exist. Both are drawn from defects `AUDIT.md`
-predicts the current code would produce, so they show the intended level of detail.
-
-| ID | Date | Case | CWE | Agent | Posterior | Cause | Fixed |
-|---|---|---|---|---|---|---|---|
-| FP-000 | 2026-08-27 | `demo-001` | CWE-78 | `structural.taint` | 0.81 | Sink regex matched `os.system` inside a `# TODO:` comment; rules run on raw lines, not call-expression nodes | open |
-| FN-000 | 2026-08-27 | `authz-004` | CWE-862 | `fusion` | 0.18 | Context agent emitted under its own `finding_key`, so its evidence never joined the group and could not corroborate | open |
+| FN-001 | 2026-08-29 | `cwe-798-warehouse-connect-vuln` | CWE-798 | `semantic.hosted` | n/a — agent-level, fusion ratios unfitted until Ch 14 | The prompt reports only when "untrusted input enters, it reaches a dangerous sink, and no invariant protects it". A hardcoded DSN has no untrusted input, so the three-stage gate structurally excludes CWE-798 — all three samples returned no findings on a literal password. The framework, not the model, is what missed it | open |
+| FN-002 | 2026-09-01 | `cwe-022-template-delete-vuln` | CWE-22 | `runtime.sfi` | n/a — agent-level, fusion ratios unfitted until Ch 14 | The taint proxy subclasses `str` so tokens ride through string operations, and `str` therefore answered for every attribute the proxy did not define. `os.path.join(dir, name)` resolved to `str.join` with two arguments, raised `TypeError`, and the unit reported `unit_raised` instead of the composed path it had built — losing the composition rule (D-061) on the one function everybody uses to build a path. Fixed by splitting `__getattribute__`: a *tainted* proxy stands in for a string and keeps `str`'s methods, a *clean* one stands in for a module and does not (D-073) | fixed 2026-09-01, same session |
 
 ---
 

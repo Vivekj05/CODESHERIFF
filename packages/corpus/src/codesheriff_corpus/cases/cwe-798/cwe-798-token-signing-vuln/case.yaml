@@ -1,0 +1,14 @@
+case_id: cwe-798-token-signing-vuln
+pair_id: cwe-798-token-signing
+label: vulnerable
+cwe: CWE-798
+file: app/auth/tokens.py
+symbol: sign_token
+start_line: 21
+imports: [os, jwt]
+detectable_by: [structural.semgrep, semantic.hosted]
+rationale: >-
+  The literal is a fallback default, which is worse than a plain hardcoded secret: it
+  reads as safe because the environment is consulted first, and it takes effect exactly
+  when the variable is missing in production. Anyone with the source can then mint tokens
+  for any account.

@@ -1,0 +1,13 @@
+case_id: cwe-022-template-delete-safe
+pair_id: cwe-022-template-delete
+label: safe
+cwe: CWE-22
+file: app/admin/templates.py
+symbol: delete
+enclosing_class: TemplateStore
+start_line: 92
+imports: [os, logging]
+rationale: >-
+  Same signature change, but the name is checked for membership in the enumerated set of
+  known templates before it is joined. Allowlist membership is a total sanitizer here:
+  a traversal string is not in the set, so it never reaches os.path.join.

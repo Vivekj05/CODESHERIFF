@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-639-xpr-report-share-safe",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "bf9c0db3706f1af3",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

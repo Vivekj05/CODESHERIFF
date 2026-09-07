@@ -26,9 +26,12 @@ EXPECTED_TABLES = {
     "evidence",
     "findings",
     "installations",
+    "patch_proposals",
     "pr_precedents",
     "precedent_chunks",
     "repositories",
+    "sessions",
+    "users",
 }
 
 
@@ -92,3 +95,44 @@ def test_no_pending_schema_changes(migrated_engine: Engine) -> None:
         diff = compare_metadata(context, Base.metadata)
 
     assert diff == [], f"models and migrations have drifted: {diff}"
+
+
+def test_downgrading_past_0003_folds_superseded_audits_into_failed(
+    clean_engine: Engine, alembic_cfg: Callable[[object], Config]
+) -> None:
+    """`superseded` stops being expressible on the way down, and those rows still have to land.
+
+    The CHECK constraint from 0001 requires a failed audit to say why, so a downgrade that only
+    retyped the column would leave rows the constraint rejects. Exercised with a real row because
+    the rollback in every other test runs against an empty `audits`, which cannot catch this.
+    """
+    with clean_engine.begin() as connection:
+        command.upgrade(alembic_cfg(connection), "head")
+        connection.execute(
+            text(
+                """
+                INSERT INTO installations (id, account_login, account_type)
+                VALUES (1, 'acme', 'Organization');
+                INSERT INTO repositories (id, installation_id, full_name, default_branch,
+                                          is_private, analysis_enabled)
+                VALUES (2, 1, 'acme/api', 'main', true, true);
+                INSERT INTO audits (id, repository_id, pr_number, base_sha, head_sha, status,
+                                    contract_version, prior_probability, alert_threshold)
+                VALUES (gen_random_uuid(), 2, 7, 'b', 'a', 'superseded', '2.0.0', 0.05, 0.7);
+                """
+            )
+        )
+
+    with clean_engine.begin() as connection:
+        command.downgrade(alembic_cfg(connection), "0002_users_and_sessions")
+
+    with clean_engine.connect() as connection:
+        row = connection.execute(text("SELECT status, error_reason FROM audits")).one()
+    assert row.status == "failed"
+    assert row.error_reason == "superseded by a later head"
+
+    # Back to head, and empty. The session-scoped `migrated_engine` points at this same database,
+    # so a test that leaves it downgraded takes every later test with it.
+    with clean_engine.begin() as connection:
+        command.downgrade(alembic_cfg(connection), "base")
+        command.upgrade(alembic_cfg(connection), "head")

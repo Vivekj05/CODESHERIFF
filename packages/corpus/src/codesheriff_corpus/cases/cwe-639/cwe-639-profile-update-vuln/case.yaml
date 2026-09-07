@@ -1,0 +1,13 @@
+case_id: cwe-639-profile-update-vuln
+pair_id: cwe-639-profile-update
+label: vulnerable
+cwe: CWE-639
+file: app/accounts/profile.py
+symbol: update_profile
+start_line: 58
+imports: [flask.jsonify]
+detectable_by: [semantic.hosted, context.rag]
+rationale: >-
+  The record to modify is selected by a user_id read out of the request body. The session
+  already identifies the caller, so accepting an id from the body means any authenticated
+  user can rename any other. The user-controlled key is the whole vulnerability.

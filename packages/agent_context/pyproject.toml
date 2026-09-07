@@ -4,15 +4,19 @@ build-backend = "hatchling.build"
 
 [project]
 name = "codesheriff-agent-context"
-version = "0.1.0"
-description = "RAG-powered cross-PR security regression reviewer for CodeSheriff"
+version = "0.2.0"
+description = "Repository-precedent security regression reviewer for CodeSheriff"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "codesheriff-contracts",
     "pydantic>=2.7.0",
     "pydantic-settings>=2.2.0",
-    "jinja2>=3.1.0",
+    # Declared here, not only in the root requirements. AUDIT.md 3.8 is what happens when an
+    # agent's analysis silently depends on something its own package does not ask for: a normal
+    # install took the ImportError branch and produced MD5 hashes instead of embeddings.
+    "tree-sitter>=0.22.0",
+    "tree-sitter-language-pack>=0.2.0",
     "typer>=0.12.0",
 ]
 

@@ -1,0 +1,12 @@
+case_id: cwe-079-comment-markup-safe
+pair_id: cwe-079-comment-markup
+label: safe
+cwe: CWE-79
+file: app/comments/render.py
+symbol: comment_html
+start_line: 40
+imports: [markupsafe.Markup]
+rationale: >-
+  Markup() is still called three times, but only ever on literal fragments the author
+  wrote. The comment body is escaped first, and Markup concatenation escapes anything
+  unsafe joined to it. A rule keyed on the presence of Markup fires on both twins.

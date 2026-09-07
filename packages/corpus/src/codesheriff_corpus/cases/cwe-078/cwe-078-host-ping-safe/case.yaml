@@ -1,0 +1,12 @@
+case_id: cwe-078-host-ping-safe
+pair_id: cwe-078-host-ping
+label: safe
+cwe: CWE-78
+file: app/diagnostics/network.py
+symbol: check_host
+start_line: 23
+imports: [subprocess]
+rationale: >-
+  The same untrusted host reaches the same external command, but as one element of an
+  argument list with shell=False, which is subprocess.run's default. The value is passed
+  to execve as a single argv entry, so shell metacharacters in it are never interpreted.

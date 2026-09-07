@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-862-xpr-audit-export-safe",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "98841d2cc7415e62",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": [\n    {\n      \"functional_intent\": \"Export audit log entries filtered by a user-provided timestamp.\",\n      \"untrusted_data_sources\": [\n        \"request.args.get(\\\"since\\\")\"\n      ],\n      \"violated_safety_invariant\": \"The input is passed directly to a database query filter without validation or type conversion, allowing for potential SQL injection if the underlying ORM does not parameterize the input correctly or if the input is used to manipulate the query structure.\",\n      \"cwe\": \"CWE-89\",\n      \"title\": \"Unvalidated input in database query\",\n      \"file\": \"app/admin/audit.py\",\n      \"start_line\": 5,\n      \"end_line\": 5,\n      \"sink_expression\": \"AuditEntry.query.filter(AuditEntry.created_at >= since).all()\",\n      \"severity\": \"high\",\n      \"rationale\": \"The 'since' parameter is taken directly from the request and used in a database query filter. Without validation or ensuring it conforms to an expected date/time format, it could be used to inject malicious SQL fragments depending on the ORM's implementation.\",\n      \"evidence_lines\": [\n        4,\n        5\n      ],\n      \"exploitability\": \"direct\"\n    }\n  ]\n}"
+  ]
+}

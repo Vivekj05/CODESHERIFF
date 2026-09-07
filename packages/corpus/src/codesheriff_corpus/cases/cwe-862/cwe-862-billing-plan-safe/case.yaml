@@ -1,0 +1,13 @@
+case_id: cwe-862-billing-plan-safe
+pair_id: cwe-862-billing-plan
+label: safe
+cwe: CWE-862
+file: app/billing/api.py
+symbol: post
+enclosing_class: BillingView
+start_line: 27
+imports: [rest_framework.response.Response]
+rationale: >-
+  The role check is retained and raises before anything is written. The change is
+  validating the requested plan against the known set, which is a correctness fix layered
+  on top of an authorisation check that was never removed.

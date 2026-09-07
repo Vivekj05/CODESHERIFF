@@ -1,0 +1,15 @@
+case_id: cwe-022-template-delete-vuln
+pair_id: cwe-022-template-delete
+label: vulnerable
+cwe: CWE-22
+file: app/admin/templates.py
+symbol: delete
+enclosing_class: TemplateStore
+start_line: 92
+imports: [os, logging]
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted, runtime.sfi]
+rationale: >-
+  A caller-supplied template name is joined onto the store directory and passed to
+  os.remove. Traversal here deletes rather than reads, so the impact is destructive and
+  the sink is unambiguous. The method is on a class, so the finding keys on
+  TemplateStore.delete rather than on delete.

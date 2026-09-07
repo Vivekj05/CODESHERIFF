@@ -32,6 +32,7 @@ codesheriff-agent-semantic = { workspace = true }
 codesheriff-agent-context = { workspace = true }
 codesheriff-agent-runtime = { workspace = true }
 codesheriff-engine = { workspace = true }
+codesheriff-patch = { workspace = true }
 codesheriff-storage = { workspace = true }
 
 [tool.ruff]
@@ -42,7 +43,10 @@ src = ["packages/*/src", "apps/*/src"]
 # which silently rewrote the archived specs in docs/history/ — the provenance
 # record of how the design diverged from its implementation. Those files are
 # evidence; they are not code to be tidied.
-extend-exclude = ["*.md", "docs/history/"]
+# Corpus case sources are data, not code (D-046). They are deliberately vulnerable
+# by construction, so linting them either fails the gate or pressures someone into
+# fixing the vulnerability the case exists to contain.
+extend-exclude = ["*.md", "docs/history/", "packages/corpus/src/codesheriff_corpus/cases/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
@@ -61,8 +65,21 @@ warn_unused_ignores = true
 # Type-check the shipped source. Every package has a tests/conftest.py, and mypy
 # resolves those to one module name and refuses to continue; there is no way to
 # disambiguate them while each package keeps a directory called `tests`.
-exclude = ["/tests/", "^build/"]
+exclude = [
+    "/tests/",
+    "^build/",
+    "/codesheriff_corpus/cases/",
+    # The WASI guest driver targets a different interpreter and is read as text, never
+    # imported (D-078). Its whole mechanism is a str subclass that misreports what it is,
+    # so `--strict` cannot describe it without annotating the lie as the truth. It stays
+    # inside `ruff`, which catches the undefined names that would actually break it.
+    "/agent_runtime/guest/",
+]
 mypy_path = [
+    # The cassette harness lives in the semantic agent's tests because it is test infrastructure,
+    # but `tools/record_cassettes.py` — which is checked — imports it. On the path so the import
+    # resolves; still excluded from being checked itself by the `/tests/` rule above.
+    "packages/agent_semantic/tests",
     "packages/contracts/src",
     "packages/corpus/src",
     "packages/agent_static/src",
@@ -70,6 +87,7 @@ mypy_path = [
     "packages/agent_context/src",
     "packages/agent_runtime/src",
     "packages/engine/src",
+    "packages/patch/src",
     "packages/storage/src",
     "apps/api/src",
     "apps/worker/src",
@@ -78,6 +96,9 @@ mypy_path = [
 [[tool.mypy.overrides]]
 # Third-party packages without type information.
 module = [
+    # Celery ships no py.typed marker. The API touches exactly two of its symbols and both are
+    # wrapped in `queue.py`, so the untyped surface stops at that module's boundary.
+    "celery.*",
     "networkx.*",
     "tree_sitter.*",
     "tree_sitter_language_pack.*",
@@ -103,6 +124,14 @@ markers = [
     # pgvector cannot be faked on SQLite, and a schema built from metadata is not the schema
     # production runs — so these tests use a real Postgres or they do not run (D-029).
     "db: needs a live Postgres; skipped unless CODESHERIFF_TEST_DB names a throwaway database",
+    # Spends free-tier LLM quota and is non-deterministic, so it is never part of a normal run.
+    # The default suite replays recorded cassettes instead (D-068).
+    "live_api: calls a real LLM provider; skipped unless --live-api is passed",
+    # The WASI CPython build is 26 MB and deliberately not committed, so these tests execute
+    # a real interpreter inside a real Wasmtime sandbox or they do not run. Same principle as
+    # `db` (D-029): a faked sandbox measures the fake, and the isolation claim is the whole
+    # deliverable. `runtime-agent doctor` says whether this machine can run them.
+    "wasm: needs the pinned WASI CPython build; skipped unless it is present",
 ]
 
 # ---------------------------------------------------------------------------
@@ -122,12 +151,14 @@ markers = [
 include_external_packages = true
 root_packages = [
     "codesheriff_contracts",
+    "codesheriff_corpus",
     "codesheriff_storage",
     "static_agent",
     "semantic_agent",
     "context_agent",
     "agent_runtime",
     "codesheriff_engine",
+    "codesheriff_patch",
     "codesheriff_api",
     "codesheriff_worker",
 ]
@@ -169,6 +200,12 @@ layers = [
     "codesheriff_api | codesheriff_worker",
     "codesheriff_storage",
     "codesheriff_engine",
+    "codesheriff_corpus",
+    # Chapter 17. Directly above `contracts` and below everything else, which is the whole
+    # statement about what a patcher is allowed to know: a ChangeUnit, a CWE, and nothing about
+    # fusion, the corpus, the database or GitHub. `codesheriff_storage` sits above it because
+    # `mapping.py` writes a proposal's outcome to a row; the patcher never reaches back.
+    "codesheriff_patch",
     "codesheriff_contracts",
 ]
 
@@ -186,11 +223,96 @@ name = "Fusion and calibration cannot reach the database"
 type = "forbidden"
 source_modules = [
     "codesheriff_contracts",
+    "codesheriff_corpus",
     "codesheriff_engine",
+    "codesheriff_patch",
 ]
 forbidden_modules = [
     "codesheriff_storage",
     "sqlalchemy",
     "alembic",
     "psycopg",
+]
+
+# ---------------------------------------------------------------------------
+# Ground truth is not an input to analysis (D-045).
+#
+# Separate from the contract above because the reason is different in kind. That
+# one is about layering; this one is about measurement. `CorpusCase` carries
+# `label` and `detectable_by`. An agent that can read `label` is not being
+# measured, it is being told the answer. An agent that can read `detectable_by`
+# can be excused by the very field that exists to excuse it fairly.
+#
+# The leak would not look like cheating. It would look like a convenient import
+# in a test helper that someone later reached for from the agent itself.
+# ---------------------------------------------------------------------------
+[[tool.importlinter.contracts]]
+name = "Nothing that analyses code can see the corpus labels"
+type = "forbidden"
+source_modules = [
+    "static_agent",
+    "semantic_agent",
+    "context_agent",
+    "agent_runtime",
+]
+forbidden_modules = ["codesheriff_corpus"]
+
+# ---------------------------------------------------------------------------
+# The audit path is blind to ground truth too (D-086).
+#
+# Chapter 14 put the calibration harness in `apps/worker`, because running agents is the
+# worker's job and a research harness that loaded them its own way would have measured an
+# object production never builds. The cost is that the process which analyses real pull
+# requests now has an import path to `label` and `detectable_by`.
+#
+# This is where that path stops. `codesheriff_worker.calibration` may read the corpus, because
+# measuring is what it does. The modules that run an audit may not: `tasks` claims the row,
+# `pipeline` drives the analysis and `analysis` runs the agents, and any of the three reaching
+# ground truth would mean the shipped path can see the answers it is scored against.
+#
+# It would not look like cheating. It would look like a convenient import in the pipeline for
+# "just checking" whether a unit is a known case.
+# ---------------------------------------------------------------------------
+[[tool.importlinter.contracts]]
+name = "The audit path cannot see the corpus labels either"
+type = "forbidden"
+source_modules = [
+    "codesheriff_worker.tasks",
+    "codesheriff_worker.pipeline",
+    "codesheriff_worker.analysis",
+    "codesheriff_worker.comment",
+    "codesheriff_api",
+]
+forbidden_modules = ["codesheriff_corpus"]
+
+# ---------------------------------------------------------------------------
+# The patcher holds no client of any kind (D-092, D-093).
+#
+# `codesheriff_patch` drafts a repair and checks it. The model it drafts with arrives through
+# the `PatchModel` protocol it declares, and the witnesses that re-examine the repair arrive
+# through `Rechecker` — both implemented by `apps/worker`, which is the same split `context.rag`
+# uses for retrieval (D-072).
+#
+# The layers contract above already keeps it away from the engine, the corpus and storage. This
+# one names the three things layering cannot: an HTTP client, a GitHub client, and the four
+# agents. A patcher that could construct a witness would be a second place deciding what a
+# witness is, and a patcher that could open a socket could not be tested without a network.
+#
+# The practical consequence is the one that matters: the whole draft-verify-retry loop runs
+# against a scripted model with no key, no quota and no interpreter.
+# ---------------------------------------------------------------------------
+[[tool.importlinter.contracts]]
+name = "The patcher reaches no model, no repository and no witness for itself"
+type = "forbidden"
+source_modules = ["codesheriff_patch"]
+forbidden_modules = [
+    "static_agent",
+    "semantic_agent",
+    "context_agent",
+    "agent_runtime",
+    "codesheriff_api",
+    "codesheriff_worker",
+    "httpx",
+    "githubkit",
+    "celery",
 ]

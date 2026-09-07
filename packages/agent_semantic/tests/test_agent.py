@@ -57,14 +57,42 @@ def test_semantic_agent_safe_unit(sample_unit_safe: ChangeUnit, tmp_path: Path) 
 
 
 def test_semantic_agent_budget_exceeded(sample_unit: ChangeUnit, tmp_path: Path) -> None:
-    cfg = SemanticConfig(budget_usd_per_unit=0.0001, cache_path=str(tmp_path / "cache.db"))
+    """A budget too small for even the first sample abstains, and never falls silent.
+
+    The budget is **per unit** and resets at the top of every `analyze`, so exhaustion can
+    only happen inside a unit — charging the tracker beforehand, as this test used to, was
+    exercising a per-process budget that no longer exists. A ceiling below the cost of one
+    sample reaches the same state the honest way.
+
+    What it must not do is return SILENCE. An agent that stopped before its first call has
+    not "reviewed the unit and found nothing"; that report would push a posterior down across
+    all ten in-scope CWEs on the strength of having read none of them (D-088).
+    """
+    cfg = SemanticConfig(budget_usd_per_unit=1e-12, cache_path=str(tmp_path / "cache.db"))
     agent = SemanticAgent(config=cfg, llm_client=StubLLMClient())
-    agent.budget_tracker.record_expenditure(1.0)
 
     ev_list = agent.analyze(sample_unit)
+
     assert len(ev_list) == 1
     assert ev_list[0].kind is EvidenceKind.ABSTENTION
     assert ev_list[0].reason == "budget_exceeded"
+
+
+def test_the_budget_does_not_leak_between_units(sample_unit: ChangeUnit, tmp_path: Path) -> None:
+    """One agent analyses every unit of an audit, so the ceiling has to reset per unit.
+
+    Without the reset the first few units of a pull request are analysed and every unit after
+    them abstains `budget_exceeded` — a per-process budget wearing a per-unit name. The
+    Chapter 14 harness found it by running 46 corpus cases through one agent.
+    """
+    cfg = SemanticConfig(budget_usd_per_unit=0.01, cache_path=str(tmp_path / "cache.db"))
+    agent = SemanticAgent(config=cfg, llm_client=StubLLMClient())
+
+    kinds = [agent.analyze(sample_unit)[0].kind for _ in range(5)]
+
+    assert all(kind is not EvidenceKind.ABSTENTION for kind in kinds), (
+        f"the agent stopped analysing after the first unit(s): {kinds}"
+    )
 
 
 def test_semantic_agent_schema_violation(sample_unit: ChangeUnit, tmp_path: Path) -> None:
@@ -89,4 +117,8 @@ def test_semantic_agent_never_raises(sample_unit: ChangeUnit, tmp_path: Path) ->
     ev_list = agent.analyze(sample_unit)
     assert len(ev_list) == 1
     assert ev_list[0].kind is EvidenceKind.ABSTENTION
-    assert ev_list[0].reason in {"schema_violation", "runtime_error"}
+    # `provider_unavailable`, not `schema_violation`: the client never returned output, so there
+    # was nothing for the model to get wrong. Reporting a transport failure as a schema failure
+    # blames the model for something it was never asked, and that misattribution would be read as
+    # evidence about the model when the likelihood ratios are fitted (D-065).
+    assert ev_list[0].reason == "provider_unavailable"

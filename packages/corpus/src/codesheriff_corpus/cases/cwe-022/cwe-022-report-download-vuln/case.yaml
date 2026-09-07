@@ -1,0 +1,13 @@
+case_id: cwe-022-report-download-vuln
+pair_id: cwe-022-report-download
+label: vulnerable
+cwe: CWE-22
+file: app/reports/views.py
+symbol: download_report
+start_line: 48
+imports: [os, flask.Response, flask.abort]
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted, runtime.sfi]
+rationale: >-
+  The PR switches lookup from a database id to a caller-supplied filename. os.path.join
+  discards REPORT_ROOT entirely when name is absolute, and honours ../ when it is not,
+  so any file the process can read is reachable. No normalisation, no containment check.

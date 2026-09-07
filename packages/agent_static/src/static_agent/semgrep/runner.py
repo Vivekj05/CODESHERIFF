@@ -8,6 +8,7 @@ import tempfile
 
 from codesheriff_contracts import ChangeUnit, Evidence
 from static_agent.config import StaticConfig
+from static_agent.emission import with_residual_silence
 from static_agent.semgrep.mapping import (
     AGENT_ID,
     COVERED_CWES,
@@ -98,7 +99,14 @@ def run_semgrep(unit: ChangeUnit, config: StaticConfig) -> list[Evidence]:
                 )
             ]
 
-        return sorted(by_key.values(), key=lambda e: e.raw_score, reverse=True)
+        return with_residual_silence(
+            sorted(by_key.values(), key=lambda e: e.raw_score, reverse=True),
+            agent_id=AGENT_ID,
+            agent_version="0.1.0",
+            unit_id=unit.unit_id,
+            covered_cwes=COVERED_CWES,
+            silent_explanation="Semgrep ran to completion with no matching rule for these CWEs.",
+        )
 
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError, Exception) as e:
         reason = "timeout" if isinstance(e, subprocess.TimeoutExpired) else "tool_unavailable"

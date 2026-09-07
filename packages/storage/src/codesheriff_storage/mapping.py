@@ -5,11 +5,17 @@ Two rules are enforced here rather than left to callers.
 **Source never reaches a row.** `to_change_unit_row` hashes `post_src` and `pre_src` and keeps the
 metadata; there is no code path from a `ChangeUnit` to a stored function body (§6, D-027).
 
-**A `finding_key` that no agent could have produced is never persisted.** `fuse_all_evidence`
-synthesises `finding_key="abstention:all_agents"` when nothing detected — a raw string key, the
-AUDIT.md 1.1 bypass one layer up in `FusionResult`, where the Evidence validator cannot reach. It
-is a marker for "the unit sits at the prior", not a finding, and `persistable_findings` drops it.
-Chapter 9 removes the marker at its source; until then this is the wall.
+**A `finding_key` that no agent could have produced is never persisted.** Until Chapter 9
+`fuse_all_evidence` synthesised `finding_key="abstention:all_agents"` when nothing was detected —
+a raw string in the key space `contracts.finding_key()` owns, and the AUDIT.md 1.1 bypass one layer
+up in `FusionResult`, where the Evidence validator cannot reach. Chapter 9 removed it at source: a
+unit nobody detected anything in now yields no `FusionResult` at all, and what records that the
+unit was looked at is its evidence rows.
+
+`persistable_findings` stays anyway. It is cheap, it is the only thing standing between a
+hand-built key and the `findings` table, and the mechanism it guards against is one this repository
+has already reintroduced once by another route (AUDIT.md 1.1). A wall is not made redundant by
+nothing currently running into it.
 """
 
 from __future__ import annotations
@@ -22,12 +28,15 @@ from typing import Any
 
 from codesheriff_contracts import ChangeUnit, Evidence
 from codesheriff_engine.fusion.bayes import FusionResult
+from codesheriff_patch import PatchProposal
 from codesheriff_storage.models import (
     FINDING_KEY_PATTERN,
     ChangeUnitRow,
     EvidenceKindDB,
     EvidenceRow,
     Finding,
+    PatchOutcomeDB,
+    PatchProposalRow,
 )
 from codesheriff_storage.redaction import redact_artifact_content
 
@@ -106,6 +115,12 @@ def to_finding(
     `prior_probability` and `alert_threshold` are stored per finding rather than looked up from
     configuration at read time. A threshold selected later on the validation split must not
     retroactively change which past findings counted as alerts (§6).
+
+    `contributions` is stored for the same reason and is the Chapter 16 addition: the factors of
+    the odds product as *this* run computed them, so the posterior can be read back apart. A
+    result carrying none is written as NULL rather than as an empty list, because "the breakdown
+    was not recorded" and "no witness contributed" are different claims and only the first is
+    true of a run that predates the column.
     """
     if not is_wellformed_finding_key(result.finding_key):
         raise ValueError(
@@ -132,16 +147,20 @@ def to_finding(
         line_numbers=list(result.line_numbers),
         title=result.title or "",
         consensus_rationale=result.consensus_rationale,
+        contributions=(
+            [c.model_dump(mode="json") for c in result.contributions]
+            if result.contributions
+            else None
+        ),
     )
 
 
 def persistable_findings(results: list[FusionResult]) -> list[FusionResult]:
     """Drop fusion results that are not findings.
 
-    Two kinds are dropped: the `abstention:all_agents` marker, and anything else whose key did not
-    come from `contracts.finding_key()`. Both are logged at WARNING — silently discarding a result
-    is how evidence goes missing without trace, which is the one thing a calibration claim cannot
-    survive (AUDIT.md 2.7).
+    Anything whose key did not come from `contracts.finding_key()`, and anything carrying no CWE.
+    Both are logged at WARNING — silently discarding a result is how evidence goes missing without
+    trace, which is the one thing a calibration claim cannot survive (AUDIT.md 2.6).
     """
     keepers: list[FusionResult] = []
     for result in results:
@@ -160,3 +179,40 @@ def persistable_findings(results: list[FusionResult]) -> list[FusionResult]:
             continue
         keepers.append(result)
     return keepers
+
+
+def to_patch_proposal_row(
+    finding_id: uuid.UUID,
+    proposal: PatchProposal,
+    published: bool = False,
+    github_comment_id: int | None = None,
+) -> PatchProposalRow:
+    """One pass of the patcher over one finding, as a row.
+
+    **The repaired source is hashed, never stored** (D-097) — the same rule `to_change_unit_row`
+    applies to the code under review, for a stronger reason: a patch is somebody else's source
+    with our edit in it, and if it was published it already lives in the pull request under the
+    control of the person who owns it. The digest answers whether two audits proposed the same
+    repair, which is the only question a row has to answer.
+
+    `checks` is NULL when no draft ever reached verification. A patcher that never ran has no
+    ladder, and an empty array would say the ladder was run and nothing passed — the same
+    not-recorded-versus-nothing distinction `contributions` draws (D-090).
+    """
+    return PatchProposalRow(
+        finding_id=finding_id,
+        outcome=PatchOutcomeDB(proposal.outcome.value),
+        detail=proposal.detail,
+        drafts_requested=proposal.drafts_requested,
+        checks=(
+            [
+                {"name": result.name, "status": result.status.value, "detail": result.detail}
+                for result in proposal.verification.results
+            ]
+            if proposal.verification is not None and proposal.verification.results
+            else None
+        ),
+        patch_sha256=sha256_text(proposal.patched_src) if proposal.patched_src else None,
+        published=published,
+        github_comment_id=github_comment_id,
+    )

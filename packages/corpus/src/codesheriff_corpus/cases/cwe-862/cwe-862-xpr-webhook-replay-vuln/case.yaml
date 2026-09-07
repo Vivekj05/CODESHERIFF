@@ -1,0 +1,26 @@
+case_id: cwe-862-xpr-webhook-replay-vuln
+pair_id: cwe-862-xpr-webhook-replay
+label: vulnerable
+cwe: CWE-862
+file: app/internal/webhooks.py
+symbol: replay_delivery
+start_line: 88
+decorators: ['@bp.post("/internal/webhooks/<int:delivery_id>/replay")']
+imports: [flask.jsonify, flask.request]
+detectable_by: [semantic.hosted, context.rag]
+precedent:
+  - pr_number: 204
+    file: app/internal/webhooks.py
+    qualified_symbol: list_deliveries
+    source: 204-list_deliveries.py
+  - pr_number: 219
+    file: app/internal/jobs.py
+    qualified_symbol: cancel_job
+    source: 219-cancel_job.py
+rationale: >-
+  The /internal prefix is a naming convention, not an access control, and this route
+  enforces nothing. The two merged endpoints under the same prefix both carry
+  @requires_scope with the same argument, which is what establishes that the prefix is
+  expected to be paired with the decorator in this repository. A reader who has not seen
+  those merges cannot tell that this route is unprotected rather than protected by the
+  blueprint.

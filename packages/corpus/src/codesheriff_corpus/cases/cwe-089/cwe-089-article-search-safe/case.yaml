@@ -1,0 +1,13 @@
+case_id: cwe-089-article-search-safe
+pair_id: cwe-089-article-search
+label: safe
+cwe: CWE-89
+file: app/repositories/articles.py
+symbol: search
+enclosing_class: ArticleRepository
+start_line: 54
+imports: [sqlalchemy.text]
+rationale: >-
+  text() is still used, and an f-string still builds the LIKE pattern, but the pattern is
+  passed as a bound parameter rather than spliced into the statement. The wildcards are
+  part of the value, which is where they belong.

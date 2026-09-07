@@ -1,0 +1,13 @@
+case_id: cwe-079-search-summary-vuln
+pair_id: cwe-079-search-summary
+label: vulnerable
+cwe: CWE-79
+file: app/search/summary.py
+symbol: search_summary
+start_line: 28
+imports: [django.utils.safestring.mark_safe]
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted]
+rationale: >-
+  mark_safe tells the Django template layer not to escape, and it is applied to a string
+  the search term was already formatted into. The escaping the template would have done
+  is switched off precisely where it was needed.

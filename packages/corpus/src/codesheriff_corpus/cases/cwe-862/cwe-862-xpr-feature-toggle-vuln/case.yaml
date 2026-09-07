@@ -1,0 +1,26 @@
+case_id: cwe-862-xpr-feature-toggle-vuln
+pair_id: cwe-862-xpr-feature-toggle
+label: vulnerable
+cwe: CWE-862
+file: app/flags/views.py
+symbol: set_feature_flag
+start_line: 54
+decorators: ['@bp.post("/flags/<name>")']
+imports: [flask.jsonify, flask.request]
+detectable_by: [semantic.hosted, context.rag]
+precedent:
+  - pr_number: 170
+    file: app/flags/views.py
+    qualified_symbol: list_feature_flags
+    source: 170-list_feature_flags.py
+  - pr_number: 178
+    file: app/flags/views.py
+    qualified_symbol: delete_feature_flag
+    source: 178-delete_feature_flag.py
+rationale: >-
+  The control this repository uses for flag administration is a call at the top of the
+  body, not a decorator: both merged flag views open with ensure_staff(request.user).
+  This case exists so that the agent's notion of a control is not fixed to decorators. A
+  repository that guards with an entry call establishes its convention just as firmly,
+  and an agent that only read decorators would report nothing here while claiming to
+  reason from precedent.

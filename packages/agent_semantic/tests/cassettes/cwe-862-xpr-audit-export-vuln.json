@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-862-xpr-audit-export-vuln",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "6196c8680502de97",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": [\n    {\n      \"functional_intent\": \"Export audit logs filtered by a creation timestamp provided by the user.\",\n      \"untrusted_data_sources\": [\n        \"request.args.get(\\\"since\\\")\"\n      ],\n      \"violated_safety_invariant\": \"The input is used directly in a database query without validation or type conversion, allowing for SQL injection if the ORM does not parameterize the filter value.\",\n      \"cwe\": \"CWE-89\",\n      \"title\": \"Unsanitized input in database query\",\n      \"file\": \"app/admin/audit.py\",\n      \"start_line\": 4,\n      \"end_line\": 4,\n      \"sink_expression\": \"AuditEntry.query.filter(AuditEntry.created_at >= since).all()\",\n      \"severity\": \"high\",\n      \"rationale\": \"The 'since' parameter is taken directly from the request and passed to the ORM filter. If the ORM does not correctly parameterize this input, an attacker could inject SQL fragments to manipulate the query logic or extract unauthorized data.\",\n      \"evidence_lines\": [\n        3,\n        4\n      ],\n      \"exploitability\": \"direct\"\n    }\n  ]\n}"
+  ]
+}

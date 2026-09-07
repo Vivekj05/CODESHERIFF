@@ -1,0 +1,33 @@
+{
+  "note": "A real finding of the same shape as 04, with the guard removed. Present so the safe examples do not teach that a fetch is never reportable \u2014 the difference between this and 04 is one check, and that check is the whole finding.",
+  "unit": {
+    "file": "app/proxy/webhooks.py",
+    "symbol": "deliver",
+    "language": "python",
+    "post_src": "def deliver(request):\n    endpoint = request.get_json()[\"endpoint\"]\n    return requests.post(endpoint, json={\"event\": \"ping\"}, timeout=5).status_code\n"
+  },
+  "response": {
+    "findings": [
+      {
+        "functional_intent": "Deliver a ping event to a caller-supplied webhook endpoint.",
+        "untrusted_data_sources": [
+          "request.get_json()[\"endpoint\"]"
+        ],
+        "violated_safety_invariant": "Nothing constrains the endpoint to a public address, so the request can be aimed at internal services the server can reach and the caller cannot.",
+        "cwe": "CWE-918",
+        "title": "Unconstrained webhook destination",
+        "file": "app/proxy/webhooks.py",
+        "start_line": 3,
+        "end_line": 3,
+        "sink_expression": "requests.post(endpoint, json={\"event\": \"ping\"}, timeout=5)",
+        "severity": "high",
+        "rationale": "The endpoint is taken from the request body and fetched with no address check, so a value such as http://169.254.169.254/ reaches link-local infrastructure.",
+        "evidence_lines": [
+          2,
+          3
+        ],
+        "exploitability": "direct"
+      }
+    ]
+  }
+}

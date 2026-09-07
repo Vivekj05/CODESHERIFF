@@ -1,0 +1,13 @@
+case_id: cwe-918-avatar-import-vuln
+pair_id: cwe-918-avatar-import
+label: vulnerable
+cwe: CWE-918
+file: app/accounts/avatars.py
+symbol: import_avatar
+start_line: 19
+imports: [requests]
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted, runtime.sfi]
+rationale: >-
+  A user-supplied source URL is fetched server-side and the response body is stored on
+  the user record, so the response is also readable afterwards. That makes this a
+  read-capable SSRF rather than a blind one, which is materially worse.

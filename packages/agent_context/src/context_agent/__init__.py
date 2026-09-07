@@ -1,8 +1,24 @@
-"""CodeSheriff RAG Context Agent package."""
+"""CodeSheriff context witness: cross-PR security control regressions."""
 
 from context_agent.agent import ContextAgent
-from context_agent.config import ContextConfig
+from context_agent.config import AGENT_ID, AGENT_VERSION, ContextConfig
+from context_agent.precedent import (
+    NoPrecedentRetriever,
+    Precedent,
+    PrecedentRetriever,
+    RetrievalUnavailableError,
+)
 
-__version__ = "0.1.0"
+__version__ = AGENT_VERSION
 
-__all__ = ["ContextAgent", "ContextConfig", "__version__"]
+__all__ = [
+    "AGENT_ID",
+    "AGENT_VERSION",
+    "ContextAgent",
+    "ContextConfig",
+    "NoPrecedentRetriever",
+    "Precedent",
+    "PrecedentRetriever",
+    "RetrievalUnavailableError",
+    "__version__",
+]

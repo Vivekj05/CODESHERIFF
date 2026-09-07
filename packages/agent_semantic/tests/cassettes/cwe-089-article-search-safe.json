@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-089-article-search-safe",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "942ee668dec82c7b",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

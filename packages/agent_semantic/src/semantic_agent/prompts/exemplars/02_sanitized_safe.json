@@ -1,3 +1,12 @@
 {
-  "findings": []
+  "note": "No finding, and the code still contains the dangerous sink. Teaches that the presence of a sink is not a finding when the invariant is established on the path to it \u2014 the difference between this and 01 is one call, not one API.",
+  "unit": {
+    "file": "app/views/profile.py",
+    "symbol": "render_bio",
+    "language": "python",
+    "post_src": "def render_bio(request):\n    bio = request.args.get(\"bio\", \"\")\n    return Response(f\"<div class='bio'>{escape(bio)}</div>\", mimetype=\"text/html\")\n"
+  },
+  "response": {
+    "findings": []
+  }
 }

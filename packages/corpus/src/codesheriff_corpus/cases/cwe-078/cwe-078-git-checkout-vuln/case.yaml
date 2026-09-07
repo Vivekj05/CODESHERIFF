@@ -1,0 +1,13 @@
+case_id: cwe-078-git-checkout-vuln
+pair_id: cwe-078-git-checkout
+label: vulnerable
+cwe: CWE-78
+file: ci/runner/workspace.py
+symbol: checkout_branch
+start_line: 35
+imports: [os]
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted, runtime.sfi]
+rationale: >-
+  os.popen runs its argument through a shell, exactly as os.system does. The branch name
+  arrives from a webhook payload, so it is attacker-chosen: a pull request from a fork
+  can be opened from a branch named to inject.

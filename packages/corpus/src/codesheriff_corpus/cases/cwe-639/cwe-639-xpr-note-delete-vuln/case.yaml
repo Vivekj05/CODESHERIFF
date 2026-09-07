@@ -1,0 +1,25 @@
+case_id: cwe-639-xpr-note-delete-vuln
+pair_id: cwe-639-xpr-note-delete
+label: vulnerable
+cwe: CWE-639
+file: app/notes/views.py
+symbol: delete_note
+start_line: 72
+decorators: ['@bp.delete("/notes/<int:note_id>")']
+imports: [flask.jsonify]
+detectable_by: [semantic.hosted, context.rag]
+precedent:
+  - pr_number: 141
+    file: app/notes/views.py
+    qualified_symbol: get_note
+    source: 141-get_note.py
+  - pr_number: 152
+    file: app/notes/views.py
+    qualified_symbol: update_note
+    source: 152-update_note.py
+rationale: >-
+  note_id comes straight from the path and is used to fetch and delete a row with no
+  check that the row belongs to the caller. The two merged note endpoints both carry
+  require_owner, so the repository has already decided that a note is owned. The lookup
+  is get_or_404, the same call the safe twin makes, so there is no dangerous sink here
+  for a taint path to reach, which is why the authorization CWEs list no static backend.

@@ -7,6 +7,9 @@ requires-python = ">=3.12"
 dependencies = [
     "codesheriff-contracts",
     "codesheriff-engine",
+    # Chapter 17: `mapping.to_patch_row` writes a proposal outcome, and the enum that names
+    # the outcomes belongs to the package that produces them.
+    "codesheriff-patch",
     "sqlalchemy>=2.0.30",
     "alembic>=1.13.0",
     "psycopg[binary]>=3.1.18",

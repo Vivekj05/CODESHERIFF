@@ -1,0 +1,22 @@
+case_id: cwe-862-xpr-queue-drain-vuln
+pair_id: cwe-862-xpr-queue-drain
+label: vulnerable
+cwe: CWE-862
+file: app/jobs/queue.py
+symbol: drain_dead_letters
+start_line: 37
+decorators: ['@bp.post("/jobs/dead-letters/drain")']
+imports: [flask.jsonify]
+detectable_by: [semantic.hosted, context.rag]
+precedent:
+  - pr_number: 95
+    file: app/jobs/legacy_queue.py
+    qualified_symbol: drain_dead_letters
+    source: 95-drain_dead_letters.py
+rationale: >-
+  A handler moved out of app/jobs/legacy_queue.py into app/jobs/queue.py, losing the
+  admin_required decorator on the way. The single precedent record is the same qualified
+  symbol under its old path, and that is the point of the case: one merge of this exact
+  function carrying the control is enough to establish it, whereas a rule that only
+  recognised a convention shared across several symbols would need company it does not
+  have here. The file changed too, so matching on path would also miss it.

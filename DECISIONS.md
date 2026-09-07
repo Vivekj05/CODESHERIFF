@@ -715,3 +715,2094 @@ helper and adds the redirect the route group's name implies.
 **Why.** The alternative — a plausible-looking `getSession()` that always succeeds — is how a
 placeholder survives into a release. Making the absence of auth loud in the name, the type and the
 UI means the day it becomes real is a day someone deletes an obvious lie, not a day nobody notices.
+
+---
+
+## D-034 — GitHub App configuration: permissions, events, and one comment that gets edited
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 5
+
+Resolves `PROJECT_CONTEXT.md` §7 open question 1.
+
+**Permissions requested.** Repository level only, and the smallest set that lets the pipeline work:
+
+| Permission | Level | Why |
+|---|---|---|
+| Metadata | Read | Mandatory for every App |
+| Contents | Read | The changed file contents the agents analyse |
+| Pull requests | Read & write | Read the diff; post and edit the review comment |
+
+Nothing else. In particular **no Checks**, no Actions, no Administration, no Members, and no write
+access to Contents. §6 puts auto-merge and auto-commit of patches out of scope, so an App that could
+write to a branch would hold a capability the product deliberately does not use — and Chapter 17's
+patches are suggestions inside a comment, which Pull requests: write already covers.
+
+**Events subscribed.** `pull_request`, `installation`, `installation_repositories`. Not `push`: a
+force-push to a PR branch already arrives as `pull_request` with action `synchronize`, and
+subscribing to `push` would deliver every commit on every branch, most of which is not under review.
+
+**Force-push behaviour.** Each head SHA is a new audit. `audits` is deliberately not unique on
+`(repository_id, head_sha)` — re-analysing a commit under a new calibration artifact is how a
+recalibration gets evaluated. An audit still running for a superseded head is abandoned rather than
+finished: its findings would describe code that is no longer at the head of the branch, and a
+posterior about a commit nobody can see is worse than no posterior.
+
+**One summary comment, edited in place — not inline review comments.** `audits.github_comment_id`
+holds the comment id, and each subsequent push edits that comment rather than adding another. Three
+reasons, in order of weight:
+
+1. **Calibration has to be legible in one place.** The claim this project makes is about the
+   posterior and the reliability behind it. Scattered across inline threads, there is nowhere to
+   state "this number is provisional" once, and a reader assembles their own impression from
+   fragments.
+2. **Inline comments cannot be updated as a set.** They anchor to `(path, line)` in a specific
+   commit. After a force-push the anchors are stale, GitHub marks them outdated, and the only way
+   to refresh them is to post a new review — which is precisely the duplication this decision
+   exists to prevent.
+3. **A single edited comment is the quietest thing a bot can be.** The failure mode this project
+   attacks is developers learning to ignore an alerting tool.
+
+Inline comments are reconsidered in Chapter 16 or 17, when there is a fitted threshold and a reason
+to point at an exact line. Until then, the summary comment links to the finding page.
+
+---
+
+## D-035 — Authorisation is derived from GitHub at sign-in, never stored as an ACL
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 5
+
+**Decision.** At sign-in, the user's OAuth token is used to read `GET /user/installations`, and that
+list of installation ids is stored on their session row. Every query is scoped by it — repository
+listing and the analysis toggle both take `installation_ids` and return nothing for an empty list.
+There is no permissions table, no roles, no per-repository grants.
+
+**Why.** GitHub is the authority on who may see what, and it already answers the question. A stored
+ACL is a copy of that answer which begins going stale the moment somebody's access changes on
+GitHub, and reconciling it is the kind of background job that fails silently. §6 also puts
+multi-tenancy out of scope; a permissions table is where that scope creep would start.
+
+**The trade-off, stated plainly.** Access is a snapshot, so a revocation on GitHub is reflected at
+the user's next sign-in rather than immediately. Sessions therefore last 8 hours and are never
+extended. The alternative — storing a GitHub credential so the question can be re-asked on every
+request — trades a bounded staleness window for a permanent secret at rest (D-036).
+
+**Consequences.** The empty-list case is the whole access check, so it is tested at both layers:
+`list_repositories(installation_ids=[])` returns `[]` rather than falling through to every row, and
+the API returns 404 — not 403 — for a repository outside the session, which avoids confirming that
+it exists.
+
+---
+
+## D-036 — The database holds no GitHub credential and no session token
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 5
+
+**Decision.** Two absences, both enforced by the shape of the code rather than by care:
+
+- **No GitHub token is stored.** `GitHubGateway.sign_in()` takes an authorisation code and returns
+  identity plus installation ids. There is no method on the interface that hands a caller a token,
+  so there is nothing to persist by accident. `githubkit` performs the exchange inside its auth
+  strategy, and the client goes out of scope when the call returns.
+- **The session token is stored only as a SHA-256.** The cookie holds 256 random bits; `sessions`
+  holds a one-way image of it. Reading the table does not hand over live sessions. Plain SHA-256
+  rather than a password hash on purpose: the token is random, not human-chosen, so there is
+  nothing for a slow KDF to defend against.
+
+Sessions are rows rather than signed tokens specifically so that logout can revoke server-side.
+Clearing a cookie only asks a browser to forget; a copy taken beforehand must stop working, and
+there is a test that steals one and checks that it does.
+
+**Why.** §6 keeps credentials out of persisted records. A leaked database that yields replayable
+GitHub access is a far worse outcome than one that yields findings, and the only reliable way to
+prevent it is to never have the credential in the first place.
+
+---
+
+## D-037 — The installation callback grants nothing
+
+**Date:** 2026-08-27 · **Status:** ACTIVE · **Chapter:** 5
+
+**Context.** After installing the App, GitHub redirects the user to the configured setup URL with
+`?installation_id=...`. The obvious implementation adds that id to the current session.
+
+**Decision.** `/auth/install/callback` logs the parameter and ignores it, then redirects into
+`/auth/login`, which re-derives the whole installation list from GitHub.
+
+**Why.** That parameter arrives in a URL the user controls. Anyone could request the endpoint with
+somebody else's installation id, and if the handler trusted it, a session would gain visibility of
+repositories it was never granted. Re-running OAuth makes GitHub the authority, which is the only
+source that cannot be forged by editing an address bar. For a user who has already authorised the
+App the redirect is silent, so the cost is one hop.
+
+**Consequences.** The path that widens a session is the same path that created it, so there is one
+place to audit rather than two. The repository sync also happens there, which means no unauthenticated
+request can cause writes on behalf of an installation.
+
+---
+
+## D-038 — `X-GitHub-Delivery` is an idempotency key, stored and unique
+
+**Date:** 2026-08-28 · **Status:** ACTIVE · **Chapter:** 6
+
+**Context.** GitHub delivers webhooks *at least* once. A delivery that times out, or that answers
+with a 5xx, is redelivered — and Chapter 6 deliberately answers 503 when the broker is unreachable,
+which makes redelivery a designed-for path rather than an edge case.
+
+**Decision.** `audits.delivery_id` holds the `X-GitHub-Delivery` header and carries a UNIQUE
+constraint. The handler looks for an existing audit with that id before opening a new one and, if
+it finds one, answers 202 with `{"status": "duplicate"}` and does not enqueue again.
+
+**Why the constraint and not just the lookup.** The lookup makes the common case correct; the
+constraint makes the racing case correct. Two deliveries arriving together both find nothing and
+both insert, and only a database-level guarantee stops the second. Same reasoning as D-026: an
+invariant the application checks is an invariant until somebody adds a second writer.
+
+**Why not dedupe on `(repository_id, head_sha)` instead.** Because D-034 requires that pair *not*
+to be unique — re-analysing one commit under a new calibration artifact is how a recalibration gets
+evaluated. Delivery id is orthogonal to that: it identifies one HTTP request GitHub made, which is
+exactly the thing that must not happen twice.
+
+**Consequences.** `delivery_id` is nullable, because an audit opened by any other route — a corpus
+replay, a manual re-run in Chapter 15 — has no delivery behind it. A redelivery after a broker
+failure finds the existing row and does **not** republish it; recovering a stranded `queued` audit
+is a sweep's job, and the row is visible and diagnosable in the meantime.
+
+---
+
+## D-039 — `superseded` is a status, not a failure
+
+**Date:** 2026-08-28 · **Status:** ACTIVE · **Chapter:** 6
+
+**Context.** D-034 settled that an audit still running for a superseded head is abandoned rather
+than finished. It did not say what the row then says. The four statuses in migration 0001 were
+`queued`, `running`, `succeeded`, `failed`, so the cheap option was `failed` with an
+`error_reason` of "superseded".
+
+**Decision.** `audit_status` gains a fifth value, `superseded`, in migration 0003.
+
+**Why.** Pushing again is the single most ordinary thing a developer does to a pull request. Under
+the cheap option a five-commit branch produces four failed audits, the dashboard is mostly red, and
+the genuine failure rate — the number that says whether this system works — becomes unreadable by
+anyone who has not memorised the convention. A distinct state costs one migration and keeps
+"failed" meaning failed.
+
+**Cost, recorded honestly.** Postgres will not let `ALTER TYPE ... ADD VALUE` be used inside the
+transaction that adds it, and Alembic runs a migration in one transaction, so the enum is replaced
+rather than extended: create a new type, cast the column across, drop the old one, rename. The
+CHECK constraint from 0001 has to come off first and go back on afterwards, because Postgres stores
+it with the literal already bound to the old type — without that, the ALTER fails with "operator
+does not exist: audit_status_new <> audit_status". The downgrade folds `superseded` rows into
+`failed` with a reason, exercised by a test with a real row in it: every other migration test runs
+against an empty `audits` and cannot catch a data migration at all.
+
+**Consequences.** `fail_audit` refuses to move a superseded audit — being overtaken is not a
+failure, and a worker that crashes on an already-abandoned run must not relabel it. `claim_audit`
+refuses it too, so an in-flight task stops at the claim.
+
+---
+
+## D-040 — The API addresses the worker's task by name, never by import
+
+**Date:** 2026-08-28 · **Status:** ACTIVE · **Chapter:** 6
+
+**Decision.** `apps/api` publishes with `celery.send_task("codesheriff.run_audit", [audit_id])`. It
+does not import `codesheriff_worker`. The name is duplicated as a constant in each package, with a
+test asserting the two are equal.
+
+**Why.** The `import-linter` layers contract puts both apps on the same layer, so the import is
+already forbidden — but the contract is right rather than merely inconvenient. Importing the worker
+would pull the agents, the LLM client, `tree-sitter` and Wasmtime into the process that has to
+answer GitHub in under three seconds, and would put a directly callable pipeline function in scope
+of the request handler. That is `AUDIT.md` 4.3 with one import statement standing between it and
+recurring.
+
+**The cost, and what pays for it.** A duplicated string can drift, and drift is silent: the API
+keeps queueing audits, the worker keeps waiting for a task nobody sends, and the symptom is
+indistinguishable from a worker that is not running.
+`apps/api/tests/test_task_name_contract.py` asserts the two constants match *and* that Celery
+registered the task under that name — naming it in a constant is not the same as registering it,
+and forgetting `name=` registers it under a module path instead. A test is not part of the import
+graph the contract constrains, which is exactly why it may see both sides.
+
+---
+
+## D-041 — The queue carries an audit id and nothing else
+
+**Date:** 2026-08-28 · **Status:** ACTIVE · **Chapter:** 6
+
+**Decision.** The Celery message is a single UUID string. Repository, pull request number, head
+SHA, installation and the previous comment id are all read from Postgres by the worker.
+
+**Why.**
+
+1. **A second copy can disagree with the first.** The audit row is written before the message is
+   published. A message carrying the same facts is a snapshot that ages, and the first time the two
+   differ nothing will say which is right.
+2. **Redis is not storage.** No schema, no constraints, no retention guarantee. The `audits` table
+   has CHECK constraints enforcing contract invariants (D-026); a message body has none.
+3. **The payload is attacker-authored.** A pull request title and branch name are chosen by whoever
+   opened the PR. Serialising them into a broker puts untrusted text in a component with no
+   validation, waiting for the next consumer to trust it.
+
+Celery is configured `json`-only for serialisation and accepted content, for the same reason: a
+pickle deserialiser reachable from a queue is remote code execution for anyone who reaches Redis.
+
+**Consequences.** The worker cannot run without a database, which is correct — it cannot write its
+result anywhere else either. The order in the handler is fixed and only one order is safe: commit
+the row, then publish. Committing first can strand a queued audit nothing was told about, which is
+visible and recoverable; publishing first can hand a worker an id that a rollback removed, which
+fails forever for reasons nothing records.
+
+---
+
+## D-042 — Each process loads only the credentials it can use
+
+**Date:** 2026-08-28 · **Status:** ACTIVE · **Chapter:** 6
+
+**Context.** `apps/api` and `apps/worker` both talk to GitHub as the same App, and the obvious move
+is one settings object and one gateway shared between them.
+
+**Decision.** Two settings classes (`ApiConfig`, `WorkerConfig`) and two gateways, with disjoint
+contents. The API holds the OAuth client secret and the webhook secret; the worker holds neither.
+The worker holds the LLM credentials from Chapter 11 onward; the API holds none. The App id and
+private key are in both, because both mint installation tokens — shared as environment values, not
+as a Python object.
+
+**Why.** The union of two processes' credentials is a strictly larger blast radius than either, and
+it grows by default: the next person adding a setting adds it to the shared object, and it reaches
+a process with no use for it. The two also authenticate differently — the API acts as a *user*
+through OAuth to answer "what may this person see" (D-035), the worker acts as an *installation* to
+read a diff and write a comment — so a merged gateway would be one interface every implementation
+had to satisfy in both roles.
+
+**The duplication, stated plainly.** `require_github_app()` exists in both configs,
+near-identically: about forty lines. That is cheaper than the alternative and, unlike the
+alternative, it does not get worse as either side grows. A third consumer would be worth
+revisiting; two is not enough to justify a shared package.
+
+Also duplicated: `apps/worker/tests/payloads.py`, a copy of the API's schema-driven fixture
+generator. The two test trees cannot import each other for the same reason the two packages cannot.
+The module is generic and knows nothing about either app, so there is nothing app-specific to drift.
+
+---
+
+## D-043 — smee.io for local webhook delivery
+
+**Date:** 2026-08-28 · **Status:** ACTIVE · **Chapter:** 6
+
+Resolves the webhook-tunnelling half of `PROJECT_CONTEXT.md` §7 open question 4. The Docker Compose
+half was settled in Chapter 1: Postgres and Redis in containers, the API and worker on the host.
+
+**Decision.** Local development uses a smee.io channel, forwarded with `npx smee-client`. ngrok
+stays documented as the alternative for when raw HTTP has to be inspected.
+
+**Why smee.** The channel URL is permanent and needs no account, so the App's webhook URL is entered
+once and never again — with ngrok's free tier the URL is per-session unless an account is created
+and a static domain claimed, and a stale URL means deliveries that silently go nowhere. smee is
+also GitHub's own tool for this, and it replays past deliveries, which matters here: the signature
+is computed over exact bytes, and the cheapest way to debug a mismatch is to send the same bytes
+again.
+
+**Why ngrok is still worth naming.** It shows the full request and response, which smee does not. A
+signature that verifies in a test and fails against GitHub is almost always a body-encoding
+difference, and that is visible in ngrok's inspector and nowhere else.
+
+**Consequences.** `PUBLIC_WEBHOOK_URL` is gone from `.env.example`. Nothing in either process needs
+to know its own public address — the URL lives on the GitHub App, and the tunnel is a client the
+developer runs, not configuration the application reads.
+
+---
+
+## D-044 — The corpus is 60 hand-written units in 30 twin pairs; cross-PR scenarios wait for Chapter 12
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 7
+
+**Decision.** `packages/corpus` ships 60 units: three twin pairs for each of the ten CWEs in
+`IN_SCOPE_CWES`. Every pair is the same function, in the same file, under the same symbol, once
+vulnerable and once safe. The ~15 cross-PR scenarios that `PROJECT_CONTEXT.md` §5 also names are
+**not** in this chapter; they land with the context agent in Chapter 12.
+
+**Why 60 and not 20.** The chapter's stated bar is one vulnerable case and one safe twin per CWE,
+which is 20 units. Twenty cannot carry a 60/20/20 split: validation and test would hold four units
+each, and an ECE computed on four items is not a measurement. Three pairs per CWE is the smallest
+number that leaves every split non-trivial.
+
+**Why the cases are hand-written.** §5 already settled this — at this size every label must be
+certain, and clean twins cannot be reliably extracted from real commits. Writing them also forced
+the twins to be *near*: the safe member of `cwe-089-order-sort` still builds its query with an
+f-string, and the safe member of `cwe-798-warehouse-connect` still passes a string literal to
+`psycopg.connect`. A twin that differs only in the presence of the bug is what makes a false
+positive measurable; a twin that also differs in style measures style.
+
+**Why cross-PR scenarios wait.** A cross-PR scenario is a case plus a precedent history for the
+context agent to retrieve against. §5 fixes that the agent indexes *per-symbol documents*, not
+per-PR ones, but the document shape itself is Chapter 12's to design. Authoring fifteen histories
+against a guessed schema now would mean rewriting them later, and a corpus rewritten after it has
+been used to fit anything is worse than a corpus that arrives late.
+
+**Consequences.** `corpus_hash` changes when they land. That is safe *only* because Chapter 14
+fits the ratios and Chapter 12 precedes it — no calibration artifact will exist yet to invalidate.
+If the order of those chapters ever changes, this becomes a real problem and the scenarios must be
+authored first. `context.rag` is listed on only 6 of the 30 vulnerable cases (the CWE-862 and
+CWE-639 ones) until then, which is the smallest positive count of any agent and is expected: it is
+a corroborating witness, not a soloist.
+
+**Also decided here.** One vulnerability per vulnerable case, never two. A unit carrying two
+findings would need two labels and two keys, and the "did the agent find it" question would stop
+being a lookup.
+
+---
+
+## D-045 — Splits are assigned by twin pair, and immutability is made detectable rather than claimed
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 7
+
+**Decision.** `splits.json` assigns **`pair_id`**, never `case_id`, at 60/20/20 —
+18 / 6 / 6 pairs, 36 / 12 / 12 units. Assignment is stratified by CWE from a recorded seed
+(`20260829`). `codesheriff-corpus assign` will place unassigned pairs and **refuses to move a pair
+that already has a split**.
+
+**Why by pair.** PLAN.md asks for a test that fails if a twin pair is split. Assigning the pair
+makes that unrepresentable rather than merely tested: twins differ by a sanitizer call, so a
+vulnerable member in calibration and its safe twin in test would mean a ratio fitted on all but a
+few characters of the case it is later scored against. The test exists anyway, because the
+construction is a choice a later change could reverse while the other tests kept passing.
+
+**Why 60/20/20.** Calibration has twelve cells to fill — four agents times three evidence kinds —
+and a cell with two observations in it produces a ratio that Laplace smoothing is holding up
+unaided. Validation and test each answer one scalar question and can afford to be smaller.
+
+**Immutability is not enforced, and saying so matters.** The obvious mechanism is a committed
+checksum verified by a test. That is precisely the mechanism this repository already defeated:
+`AUDIT.md` 4.8 records the expected SHA-256 being rewritten to make the test pass. A guard whose
+cheapest bypass is editing the guard is not a guard. What exists instead:
+
+- `assign` will not move a settled pair, so growing the corpus cannot silently rebalance it;
+- `split_hash` is recorded on every `calibration_runs` row, so a run fitted before an edit no
+  longer matches the splits it claims to have been fitted on.
+
+The property is **detection after the fact**, not prevention. That is honest and it is enough:
+the failure this guards against is drift, not sabotage.
+
+**The limitation, stated rather than engineered away.** Six pairs cannot cover ten CWEs. Every CWE
+has at least one calibration pair — asserted by a test — but the validation and test splits each
+reach only six of ten, and under this seed CWE-89 falls entirely inside calibration. So the final
+ECE and Brier numbers are **aggregate claims across CWEs, not per-CWE claims**, and the paper must
+report them that way. The seed was fixed before the draw was inspected and has not been rerolled;
+reseeding until the distribution looked better is the exact behaviour §6 exists to prevent.
+
+**Consequences.** `calibration_runs.corpus_hash` and `.split_hash` — nullable since Chapter 3 with
+nothing to put in them — now have computable values. Both are defined over the *canonical loaded
+form*, not raw file bytes: reflowing a comment in a `case.yaml` is not a change to the corpus and
+must not invalidate a fitted run, while a line of `post.py`, a label, or a `detectable_by` entry is
+and does. Both are independent of git, so they can be recomputed from an installed wheel.
+
+
+**One defect found by running the CLI twice.** `corpus_hash` was different on every invocation.
+`CorpusCase.detectable_by` is a `frozenset`, a frozenset iterates in an order derived from its
+members' hashes, and Python randomises string hashing per process — so the serialised case, and the
+hash over it, changed run to run. A calibration run could never have been shown to match the corpus
+it was fitted on, which is the hash's only job.
+
+Fixed with a field serialiser that sorts, which is the identical mechanism and identical reason
+`Evidence.covered_cwes` carries one (D-024) — the contract had already solved this exact problem and
+the corpus reintroduced it. No in-process test could catch it: `corpus_hash() == corpus_hash()` is
+true within one interpreter. `test_hashes_are_stable_across_processes` runs the hash in subprocesses
+under fixed and random `PYTHONHASHSEED` values, and produces five distinct hashes if the serialiser
+is removed.
+
+---
+
+## D-046 — Corpus case sources are real `.py` files, and are data rather than code
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 7
+
+**Decision.** A case is a directory holding `case.yaml`, `post.py`, and optionally `pre.py`, inside
+the package so it ships in the wheel. `packages/corpus/src/codesheriff_corpus/cases/` is excluded
+from `ruff` and from `mypy` in the root `pyproject.toml`.
+
+**Why not source embedded in YAML.** The alternative was one YAML file per case with the code as a
+block scalar. The code is the case: it has to survive tree-sitter, carry honest line numbers, and
+be reviewable in a diff. Indentation inside a block scalar is none of those, and an indentation
+error in a corpus case is a mislabelled case rather than a syntax error someone notices.
+
+**Why excluded from the linters.** These files are deliberately vulnerable by construction.
+Linting them either fails the gate or — much worse — creates steady pressure to fix the
+vulnerability the case exists to contain. `ruff` would rewrite `os.system(f"ping {host}")` given
+the chance, and that case would then be silently mislabelled.
+
+Excluding them costs a real check, so `test_case_sources_are_valid_python` compiles every `pre.py`
+and `post.py` instead. It only parses; nothing executes. That check matters more here than
+elsewhere: tree-sitter tolerates broken syntax by design, so a stray indent would not fail the
+static agent — it would quietly analyse a fragment.
+
+**Directory names are hyphenated** (`cwe-089-user-lookup-vuln`), which is how every Python tool is
+told a directory is not a package. Verified: `grimp` walks the tree for `lint-imports` without
+attempting to import them.
+
+---
+
+## D-047 — `detectable_by` is authored from a pre-registered rule, before any agent runs
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 7
+
+**Decision.** Every vulnerable case names the agents that could in principle find it. The field is
+assigned at authoring time from the rule below, and is **not** revised after seeing what an agent
+actually did. Safe twins carry the field empty, and the schema rejects a safe case that sets it.
+
+| Agent | Listed when |
+|---|---|
+| `structural.taint` | a source reaches a modelled sink through the function, so a path exists to prove |
+| `structural.semgrep` | a syntactic pattern identifies it without needing a path |
+| `semantic.hosted` | always, on every vulnerable case — it reasons about intent |
+| `context.rag` | repository precedent is the signal: the CWE-862 and CWE-639 cases |
+| `runtime.sfi` | a sandbox could *observe* it — a process spawned, a file opened outside the root, a network attempt, code compiled. Not XSS (no browser), not SQL injection (no database), not a hardcoded credential (nothing happens) |
+
+**Why this is the most dangerous field in the schema.** It exists for a good reason — §5 requires
+that a static miss on a semantic-only case not be scored as a failure — and it is exactly the field
+that could excuse any miss whatsoever if it were edited after the fact. Widening one entry after a
+disappointing run is a single-word change that no test would catch and that would raise a measured
+number. Writing the rule down first is what makes that edit visible as a deviation rather than
+invisible as a judgement call.
+
+**Enforced mechanically where it can be.** `lint-imports` forbids every agent package from
+importing `codesheriff_corpus` — a separate contract from the layering one, because the reason is
+different in kind. An agent that can read `label` is being told the answer rather than measured; an
+agent that can read `detectable_by` can be excused by the field designed to excuse it fairly. The
+leak would not look like cheating; it would look like a convenient import in a test helper that
+someone later reached for from the agent itself.
+
+`test_the_authorisation_cwes_have_no_static_path` additionally pins the heterogeneity claim: no
+CWE-862 or CWE-639 case may ever list a static backend. That claim is the clearest evidence the
+four-agent argument has, and it would be lost to a single well-meaning edit.
+
+---
+
+## D-048 — Extraction reads whole fetched blobs; GitHub's `patch` is read nowhere
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 8
+
+**Decision.** `codesheriff_engine.extraction` receives both versions of every changed file as
+complete source and derives `changed_lines` by `difflib` over the two. Nothing in the package —
+and nothing in `apps/worker` that feeds it — reads the `patch` field, and `PullRequestFile` does
+not carry one.
+
+**Rationale.** The superseded `github/parser.py` used the patch for two different jobs and got both
+wrong. It concatenated hunk fragments into a synthetic `post_src` that was syntactically broken and
+carried wrong line numbers (`AUDIT.md` 4.2), and it skipped outright any file GitHub declined to
+send a patch for, which is exactly the large diffs where a review matters most (`parser.py:102`).
+Both failures come from the same mistake: treating a summary of the code as the code.
+
+Diffing the blobs removes the large-diff branch **structurally**. There is no code path that can
+behave differently for a file with no patch, so there is nothing to remember and nothing to
+regress. The cost is one extra API call per modified file, which is affordable against 5,000 per
+hour per installation and is not paid at all for added, copied, deleted or non-Python files.
+
+It also puts production extraction on the *same* derivation as
+`codesheriff_corpus.models.CorpusCase.changed_lines`, which already used `difflib`. That parity is
+load-bearing rather than tidy: every likelihood ratio is fitted on corpus units and applied to
+production units, and that is only sound if the two are the same kind of object.
+
+**Consequences.** A whitespace-only change yields no units at all, and a deletion is anchored to
+the nearest line of code — including the `replace`-with-a-blank-line form, which is how a removed
+decorator usually appears in a real diff and which is the entire D-013 signal for CWE-862 and
+CWE-639.
+
+---
+
+## D-049 — The unit is the outermost function; a module-scope change gets a `<module>` unit
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 8
+
+**Decision.** A changed line is attributed to the outermost enclosing `def` — a top-level function
+or a method, never a nested closure. A changed line with no enclosing function produces one
+`<module>` unit per file, whose `post_src` is the **whole file**, untruncated, and whose
+`changed_lines` are only the lines outside every function.
+
+**Rationale.** §5 makes the changed function the unit of analysis, and `AUDIT.md` 4.1 records what
+happens without one: units were per-file with `symbol=None`, so `qualified_symbol` was always
+`<module>` and every finding anywhere in a file collapsed onto a single `finding_key`. That is the
+D-004 bug reached by another route, and the frozen contract cannot prevent it on its own, because a
+null symbol is legitimate for a genuinely module-scope change.
+
+**Outermost, not innermost.** A closure's free variables are bound in its parent, so a unit
+containing only the closure is a fragment whose taint sources are invisible and whose intent the
+semantic agent has to guess — `AUDIT.md` 4.2's failure arrived at from the opposite direction. The
+cost is a larger `post_src` for the semantic agent, which is the cheaper mistake.
+
+**A module unit at all.** CWE-798 is in the closed set and hard-coded credentials sit at module
+scope more often than not. Emitting only function units would make that CWE structurally
+undetectable in production while the corpus scores it fine — a gap between the measured system and
+the shipped one, which is the failure mode this project exists to argue against.
+
+**The whole file, never a slice.** Assembling "the module-scope statements" would be synthesising
+source again. Oversized units are for the agent to abstain on and never for extraction to trim
+(CLAUDE.md); the fetch budget in `MAX_BLOB_BYTES` is a separate mechanism that skips a file whole
+rather than analysing part of one.
+
+**One unit per qualified name.** `@overload` stubs and conditional redefinitions define the same
+name twice in one file. Both would produce the same `finding_key`, so two units would apply one
+agent's likelihood ratio twice to a single finding, and would collide on `change_units`' UNIQUE
+(audit_id, unit_id). The **last** definition wins, because that is the one Python binds — choosing
+the longest instead reads as reasonable and silently picks the stub whenever the two are the same
+length.
+
+---
+
+## D-050 — The comment reports coverage as counts; a file path never reaches it
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 8
+
+**Decision.** The pull request comment states how many functions were extracted and how many files
+were not analysed, with a plain-English reason for each. It names no file. Every file that produces
+no unit is recorded with a `SkipReason` rather than dropped.
+
+**Rationale.** Two separate problems, one answer.
+
+A file path is chosen by whoever opened the pull request, so it is attacker-controlled text of
+exactly the kind `AUDIT.md` 0.4 describes — a name like `` x](javascript:…).py `` escapes a
+markdown table cell. Chapter 6 established that nothing from the pull request is echoed, and a path
+is from the pull request. The dashboard is where paths belong, behind rendering that escapes them
+(Chapter 16).
+
+Separately, the superseded parser dropped files for three different reasons with a bare `continue`
+each and told nobody. "This pull request is clean" and "we did not look at this pull request"
+rendered identically, which is `AUDIT.md` 4.4 in another module. Coverage is a fact about the audit
+and belongs in its record; `SKIP_WORDING` is asserted to be total over `SkipReason`, so a reason
+added later cannot reach a comment as a `KeyError`.
+
+---
+
+## D-051 — `packages/engine` gains extraction; the `github/` package is deleted
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 8
+
+**Decision.** Extraction lives in `codesheriff_engine.extraction` and holds no HTTP client, no
+GitHub client and no database session. Fetching lives in `apps/worker` — two new `GitHubGateway`
+methods and `pipeline.py`. `codesheriff_engine/github/` is deleted: `parser.py` outright, and
+`reporter.py` moved up to `codesheriff_engine/reporting.py`.
+
+**Rationale.** The split is what lets Chapter 14 run extraction over corpus cases with no
+credentials at all. A single module that both fetched and extracted would make the calibration
+harness need an installation token to build a `ChangeUnit`, and §6's reproducibility requirement
+would quietly become unmeetable.
+
+The package deletion is bookkeeping with a point behind it: after Chapter 6 removed the webhook and
+the API client, `codesheriff_engine/github/` contained only markdown rendering, and CLAUDE.md
+already warns that a GitHub client reappearing in `packages/engine` is the `AUDIT.md` 4.3 mistake. A
+directory named `github` inside the component forbidden from touching GitHub is an invitation.
+
+**Considered and rejected: a separate `packages/extraction`.** It would keep tree-sitter out of the
+package §6 wants reproducible, at the cost of a sixth workspace member and a new `import-linter`
+layer. PLAN.md Chapter 8 names the engine, the layering already permits it, and the boundary that
+actually matters — extraction cannot reach the network or the database — is enforced by the
+existing "Fusion and calibration cannot reach the database" contract either way.
+
+---
+
+## D-052 — The witness, not the agent, is the unit of fusion
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 9 · **Implements** D-007, D-011
+
+**Decision.** `codesheriff_engine.fusion.witnesses` holds a fixed roster of four witnesses and a
+registry mapping every backend `agent_id` to one of them. Fusion multiplies exactly one likelihood
+ratio per witness, per finding — four factors, always four, whatever the agents did or did not say.
+
+Within a witness, backends combine by **plain max**, and this resolves the question D-011 left open
+*provisionally*. Max never exceeds what a single backend claimed alone, so it cannot inflate; two
+silences stay one silence rather than squaring; and a detection is the witness's statement even when
+its sibling backend was silent. Chapter 14 replaces the rule with one chosen on corpus data.
+
+An `agent_id` in no registry entry **raises**. `apps/worker` catches this at agent load instead, so
+a mis-declared id costs one log line at start-up rather than every audit.
+
+**Rationale.** Two defects, one cause. `AUDIT.md` 1.4: iterating only the agents that emitted made
+the posterior monotonically non-decreasing in the number of agents that alerted, because every
+detection tier exceeds 1.0 — an agent that looked and found nothing could not lower a number, and an
+agent that could not look was indistinguishable from one that had. `AUDIT.md` 2.4: `structural.taint`
+and `structural.semgrep` had separate table rows, so two "high" hits multiplied to **8.5 x 7.0 =
+59.5x** out of one rule-based analysis of one source text.
+
+Both are the same mistake — counting statements instead of witnesses — and both inflate the
+posterior exactly where the project claims rigor.
+
+**Consequences.** `DEFAULT_LIKELIHOOD_TABLE` is gone; `PROVISIONAL_RATIOS` is keyed by witness and
+holds a `silence` ratio the old table had no place for. There is deliberately **no** table entry for
+an abstention: it is exactly 1.0 by definition, and a fitted number there would mean the act of
+failing carried information about the code.
+
+The likelihood ratios are clamped and the posterior is not, reversing `AUDIT.md` 2.7. Bounding each
+witness's claim bounds a quantity that has a meaning; clamping the posterior at 0.9999 merely hid an
+unbounded odds product behind a number shaped like a probability.
+
+**A property of the provisional table worth keeping when the fitted one lands:** no single witness
+can reach the alert threshold alone. The strongest structural detection takes a 0.05 prior to 0.31,
+against a threshold of 0.70. One mechanical witness proving reachability is a weaker claim than four
+witnesses agreeing, and the threshold should be able to tell them apart.
+
+---
+
+## D-053 — Debate is deleted rather than ported
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 9 · **Implements** D-009
+
+**Decision.** `packages/engine/fusion/debate.py` and its tests are deleted, along with every
+setting that served it: `enable_debate`, `conflict_threshold`, `debate_model`,
+`debate_timeout_seconds`, and the three LLM API keys on `EngineConfig`. `httpx` is dropped from the
+engine's dependencies. Debate returns as a witness that **emits its own evidence** — never as a step
+that overwrites a posterior — with the LLM client that runs it, in Chapter 11.
+
+`debate.synth` is deliberately absent from `WITNESS_OF_AGENT`. It reads what the other witnesses
+said, so it is maximally dependent on all of them; registering it as an independent witness would be
+the D-008 anchoring violation wearing a different hat. Where its contribution belongs is Chapter 11's
+to decide.
+
+**Rationale.** `AUDIT.md` 2.2: it assigned `fusion.posterior_probability` directly, which destroys
+calibration on precisely the contested cases the debate exists for and makes the step unmeasurable.
+`AUDIT.md` 2.3: because no LLM key is configured by default, the *normal* path was
+`_heuristic_debate_resolution` — substring matching over lowercased source, returning a hard-coded
+0.25 or 0.85, in which `"int("` counted as a sanitizer and `"int("` is a substring of `print(`. Any
+code containing a print statement was classified sanitised and its posterior forced to 0.25.
+
+There is no version of that function worth keeping, and no version of the module worth keeping
+around it.
+
+**Consequences.** `EngineConfig` now holds no credential of any kind, which is the state
+`CLAUDE.md` describes for it. `FusionResult.consensus_rationale` survives as an unset field, because
+`findings.consensus_rationale` is NOT NULL and dropping it would mean a migration for a column
+Chapter 11 will fill.
+
+---
+
+## D-054 — Running agents belongs to `apps/worker`; the engine keeps extraction and fusion
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 9
+
+**Decision.** `codesheriff_engine.orchestrator` moves to `apps/worker/analysis.py` and is deleted
+from the engine, along with `codesheriff_engine.reporting`. The engine CLI loses `run` and gains
+`fuse`, which takes a JSON list of `Evidence` and prints the posterior with the factor each witness
+contributed.
+
+**Rationale.** `CLAUDE.md` already says `apps/worker` "owns the pipeline and all agents", and the
+worker is the only process that declares the four agent packages as dependencies. The engine reached
+them by `try: import static_agent` — an *undeclared* runtime dependency, which meant a fusion package
+could pull in an LLM client, and which made the layering the `import-linter` contracts describe true
+only by accident.
+
+`reporting.py` was a second pull request comment renderer, complete with the file path D-050 keeps
+out of one, diverging from the comment the worker actually posts. `apps/worker/comment.py` says it
+is "the only place that builds the body"; now it is.
+
+**Consequences.** There is no longer any way to run a full analysis from `codesheriff-engine`. That
+is the point — the arithmetic is what is worth having at a prompt, and "why is this 31% and not 96%"
+is answered by the per-witness breakdown `fuse` prints, which previously required a full run to see.
+
+---
+
+## D-055 — A unit nobody detected anything in yields evidence and no finding
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 9
+
+**Decision.** `fuse_all_evidence` returns `[]` when no detection was made. The synthetic
+`finding_key="abstention:all_agents"` is deleted at its source. `compute_bayesian_fusion` raises if
+asked for a key no detection carries.
+
+**Rationale.** That marker was a raw string in the key space `contracts.finding_key()` owns — the
+`AUDIT.md` 1.1 bypass one layer above where the `Evidence` validator can reach, since a
+`FusionResult` is not an `Evidence`. `codesheriff_storage.persistable_findings` had to be built as a
+wall against a value the engine itself minted.
+
+A finding is something an agent found. What records that a quiet unit was looked at is its evidence
+rows, which `apps/worker` persists whether or not anything was detected — including the silences,
+which are the statement that makes "we analysed this and found nothing" a result rather than an
+absence of one.
+
+**`persistable_findings` stays.** It is cheap, it is the only thing between a hand-built key and the
+`findings` table, and this repository has already reintroduced that class of bug once by another
+route. A wall is not made redundant by nothing currently running into it.
+
+---
+
+## D-056 — A backend states coverage over what it did *not* find, alongside what it did
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 9
+
+**Decision.** `static_agent.emission.with_residual_silence` appends one SILENCE over
+`covered_cwes - detected_cwes` to a backend's detections. Both static backends use it. A backend
+that detects everything it can reach emits no silence, because a silence over an empty set is not
+expressible and would not mean anything if it were.
+
+**Rationale.** A backend that reaches ten CWEs and detects one has learned two things, and used to
+report only the first: `analyze_taint` and `run_semgrep` each returned *either* detections *or* a
+silence, so the moment a backend detected anything, its coverage of every other CWE went unstated.
+
+That has a cost now that fusion consumes silence. A unit where the taint engine finds SQL injection
+and the semantic agent claims command injection should have the taint engine's silence on CWE-78
+pulling that second finding down; with no silence emitted it contributed exactly nothing.
+
+The contract always permitted this — a SILENCE and a DETECTION are separate statements about the
+same unit. Nothing built them together, which is the ordinary way a contract goes unused. Subtracting
+the detected CWEs is what keeps the pair coherent: a witness must not both alert on a finding and
+vouch for it.
+
+---
+
+## D-057 — An agent with no model abstains; the implicit stub is removed
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 9 · **Partially closes** `AUDIT.md` 3.12
+
+**Decision.** `SemanticAgent` no longer falls back to `StubLLMClient` when no API key is configured.
+It sets `llm_client = None`, logs a warning at construction, and abstains with reason
+`llm_unavailable` on every unit. An explicitly injected client is still honoured — that is a
+deliberate script, and it is how the tests drive the agent.
+
+**Rationale.** Found by running the pipeline end to end after fusion started consuming silence.
+`StubLLMClient` answers anything but one demo fixture with `{"findings": []}`, which the agent
+correctly turned into SILENCE across all ten in-scope CWEs — so an unconfigured deployment had a
+witness that had read nothing arguing, at a likelihood ratio of 0.50, that every change was safe.
+Its vote was indistinguishable from a real model's.
+
+This is `AUDIT.md` 3.12 ("a missing API key reports clean"), and it is the exact failure D-005 exists
+to prevent: an agent that could not look voting the code innocent. It was survivable while fusion
+ignored silence. Chapter 9 made it harmful, so Chapter 9 fixes it rather than leaving it for Chapter
+11, which owns the rest of that agent.
+
+**Consequences.** On a machine with no LLM key — including this one — the semantic witness
+contributes exactly 1.0 rather than 0.50. That is a *higher* posterior on quiet units than before,
+and it is the correct one: nothing looked, so nothing was learned.
+
+---
+
+## D-058 — Every parameter of the analysed function is an untrusted source
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 10
+
+**Decision.** `structural.taint` seeds taint at every parameter of the unit's function except the
+receiver (`self`, `cls`), under the origin id `function_parameter`. It is not a pattern in
+`sources.yml` because it is not a pattern.
+
+**Rationale.** The unit of analysis is one function (D-049). Anything crossing that boundary comes
+from code this analysis cannot see, and for a *security* analysis the conservative reading of an
+unseen caller is that it is attacker-influenced until something inside the function proves
+otherwise.
+
+The corpus settles it empirically: nine of the thirteen calibration cases `detectable_by` predicts
+for this agent depend on it, and none of those functions mentions a request object at all —
+`search(self, term)`, `serve_avatar(request, filename)`, `fetch(self, target)`,
+`render_notification(template_source, user)`. Restricting sources to framework request objects would
+have made the engine structurally incapable of reaching them, which is a recall ceiling imposed by
+the rule set rather than by the technique.
+
+**Consequences.** This is the most aggressive choice in the engine and the one most likely to
+generate false positives outside the corpus. Three things bound it: a real sink is still required,
+sanitizers and guards still clear taint, and CWE-22 additionally requires a path composition
+(D-061). On the calibration split it produces **0 false positives across 18 safe cases**. That
+number is from the split reserved for development and is not a calibrated figure.
+
+**Rejected: `os.environ` and `sys.argv` as sources.** Both are operator-controlled, not
+attacker-controlled — whoever sets an environment variable on the process already holds the
+privileges any sink would grant them, so a flow from one to a shell is a deployment decision. The
+corpus agrees: the *safe* member of `cwe-798-warehouse-connect` reads its DSN from `os.environ`
+precisely because that is the fix.
+
+---
+
+## D-059 — Rules match AST call expressions; a sink declares its class and its dangerous arguments
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 10 · **Closes** `AUDIT.md` 3.3, 3.4, 3.5
+
+**Decision.** Three changes to the rule model, each replacing a line-oriented mechanism:
+
+1. A sink `match` is `fullmatch`ed against the **callee** of a call node, and against each dotted
+   suffix of it, so one rule covers `session.execute` and `self.session.execute`. Keyword predicates
+   (`requires_kwarg`, `forbids_kwarg`) read the call's actual keyword arguments.
+2. Every sink declares a `class` — `injection`, `command`, `xss`, `path`, `deserialization`, `code`,
+   `ssrf` — and `RuleSanitizer.clears` is read against it. A sanitizer edge only removes a flow for
+   the classes it clears.
+3. Every sink declares `args`, the positional indices that are dangerous.
+
+Rule models use `extra="forbid"`.
+
+**Rationale.** All three were the same defect wearing different clothes: the analysis was reading
+text rather than structure.
+
+`AUDIT.md` 3.3 — `re.search` over raw lines meant `# TODO: replace os.system with subprocess`
+registered a critical CWE-78 sink, `\beval` matched the identifiers `evaluate` and `evalContext`,
+and `requires_arg`/`forbids_arg` were same-line-only, so `subprocess.run(cmd,\n shell=True)` was
+missed and `yaml.load(f)` with `Loader=SafeLoader` on the next line was reported.
+
+`AUDIT.md` 3.4 — `clears` was declared and never read, so taint died if *any* sanitizer matched
+*any* line between source and sink. An `html.escape` anywhere in a function silenced its `os.system`.
+
+`AUDIT.md` 3.5 — §5 forbids modelling parameterised SQL as a sanitizer, and it was one. As a
+sanitizer it cleared taint for the whole function, so a safe `execute(q, (uid,))` on line 5 excused
+a vulnerable `execute(f"...{x}")` on line 9. As `args: [0]` on the sink it is a property of the call,
+which is what §5 requires — and it is the only model that gets `cwe-089-order-sort` right, where
+**both twins pass parameters separately** and the vulnerable one concatenates a tainted sort column
+into argument 0.
+
+`extra="forbid"` because the old `extra="ignore"` meant adding `class:` to a YAML rule would have
+been silently dropped and the rule would have gone on behaving like the one it was meant to replace.
+
+**Consequences.** `ssrf` is a seventh class beyond the six §5 lists. CWE-918 is in `IN_SCOPE_CWES`
+and its sinks are neither command nor injection; without its own class, a URL-encoding sanitizer
+would have cleared it, and an encoded link to a metadata service still reaches it.
+
+---
+
+## D-060 — A validating guard is a definition; an emptiness check is not
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 10
+
+**Decision.** An `if` whose body exits — `raise`, `return`, or a call to `abort`/`exit` — and whose
+condition **applies a call or a membership test to a variable** creates a graph node that redefines
+that variable, with an incoming edge clearing every class. A condition that merely tests a variable's
+own truthiness or nullity creates nothing.
+
+**Rationale.** Two forces, in opposite directions.
+
+Guards are how five of the calibration safe twins are safe, and none of them uses a sanitizer:
+`if template_name not in self.known_templates(): raise`,
+`if not is_public_https_url(url): abort(400)`,
+`if self.resolve_public_address(target) is None: raise ValueError`. Without guard recognition every
+one of those is a false positive.
+
+But `cwe-502-cache-get-vuln` opens with `if blob is None: return None` and is genuinely vulnerable
+two lines later. Treating a bare null check as validation would suppress it — and null checks are
+everywhere, so the suppression would be broad and invisible.
+
+The line between them is whether the condition *does something to* the value or merely *looks at
+whether it exists*. That is checkable on the AST and needs no knowledge of what the validator
+actually validates.
+
+**Rejected: naming the project's validator functions in the rules.** Writing
+`is_public_https_url` and `resolve_public_address` into `sanitizers.yml` would have passed the same
+cases and would have been fitting the rules to the corpus — the exact failure §6 exists to prevent.
+The generic form is weaker per case and honest.
+
+**Consequences.** A guard that does not really validate is a false negative this engine will not
+catch. That is the deliberate trade: the corpus measures it, and `DEFECTS.md` is where instances get
+recorded as they are found.
+
+---
+
+## D-061 — Path traversal requires a base path to escape
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 10
+
+**Decision.** Sinks of class `path` carry `requires_path_composition: true`. The finding is reported
+only when the tainted value was joined onto something — `os.path.join(base, name)` or
+`base + "/" + name` — somewhere on the flow.
+
+**Rationale.** Traversal means escaping a base directory. A function handed a whole path and opening
+it has not been tricked into anything; the caller chose the path, and that is the entire interface.
+
+Without this, D-058 makes every function that takes a path and opens it a critical CWE-22 finding.
+It would fire on **both** members of `cwe-502-config-load`, whose safe twin also does `open(path)` —
+a false positive on a safe case, and on the one class of function most likely to appear in a diff.
+
+**Consequences.** A traversal that reaches a sink without a visible join — a path assembled in a
+helper, or an f-string this heuristic does not recognise — is missed. Narrower and right beats
+broader and noisy for a witness whose entire value is that its detections are mechanical proofs.
+
+---
+
+## D-062 — JavaScript abstains rather than being analysed with a Python model
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 10
+
+**Decision.** `language_key` accepts Python only. Every other language returns an abstention with
+reason `language_not_modelled`. The JavaScript rules are deleted from `sinks.yml` and
+`sources.yml`.
+
+**Rationale.** Everything the engine does is Python-shaped: argument positions, keyword arguments,
+`with`-statement binding, parameter seeding, guard recognition. Running it over a JavaScript tree
+produces confident nonsense, and a confident wrong answer costs more than an abstention — an
+abstention contributes a likelihood ratio of exactly 1.0 and changes no posterior (D-052).
+
+This is not a capability loss. What is being deleted is a regex over raw lines whose `\beval` matched
+`evaluate` and `evalContext` (`AUDIT.md` 3.3). Scope is Python-first and JS/TS is unscheduled
+(`CLAUDE.md`, §6); the corpus is Python-only, so a JavaScript finding could not be measured even if
+it were correct.
+
+**Consequences.** `test_engine_js.py` is deleted and replaced by an assertion that JavaScript
+abstains. The old `unsupported_language` reason is renamed `language_not_modelled`, because the
+engine does not merely lack rules — it has no model of the language.
+
+---
+
+## D-063 — The corpus measurement is a test on the calibration split; `bench` is deleted
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 10 · **Implements** D-010
+
+**Decision.** `static_agent/cli.py`'s `bench` command is deleted. The measurement it pretended to
+perform lives in `packages/agent_static/tests/test_corpus_calibration.py`, which loads the corpus,
+runs the engine over the **calibration split only**, and asserts recall and false-positive counts
+per case.
+
+**Rationale.** `bench` took a `--corpus` path, ignored it, and printed
+`precision: 1.0, recall: 1.0, fpr: 0.0`. D-010 requires it deleted so nothing in this repository can
+report perfect scores again.
+
+A test rather than a command, for a reason that outlasts this chapter: §6 permits the test split to
+be evaluated exactly once, at the end, and a CLI anyone can point at any split is precisely how that
+gets violated by accident. `test_only_the_calibration_split_is_read` asserts the restriction rather
+than trusting it. Chapter 14 owns the evaluation harness and the split discipline that goes with it.
+
+**The import does not breach D-047.** That contract names the `static_agent` package — an agent that
+can read `label` is being told the answer. A test is where labels are supposed to be read, it is the
+only place these numbers can come from, and `lint-imports` still reports five contracts kept.
+
+**Consequences.** Development on this engine now happens against 36 labelled cases, and the
+validation and test splits stay unread. The numbers those tests assert — 13/13 and 0/18 — are a
+development measurement on the split reserved for development, and nothing may present them as
+calibrated.
+
+---
+
+## D-064 — The names in `.env.example` are the names the code reads
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 11 (prerequisite)
+
+**Decision.** `SemanticConfig` drops `env_prefix="LLM_"` and declares an explicit `alias` per field,
+matching `WorkerConfig` and `ApiConfig`. `api_key` accepts `GEMINI_API_KEY`, `GOOGLE_API_KEY` or
+`LLM_API_KEY`. `load()` no longer reaches for `os.getenv`. `agent_id` and `agent_version` become
+module constants rather than settings fields.
+
+**Rationale.** Found while configuring a real key. `.env.example` documented `GEMINI_API_KEY`,
+`SEMANTIC_MODEL`, `SEMANTIC_N_SAMPLES` and three more; the settings loader read `LLM_MODEL`,
+`LLM_N_SAMPLES` and so on, so **every one of those lines was read by nothing**. And `load()` took
+the key from `os.getenv("GEMINI_API_KEY")`, which reads the *process* environment, while
+`pydantic-settings` parses `.env` into the settings object without exporting to `os.environ`.
+
+So following `.env.example` exactly produced `api_key=None` and an agent that abstained on every
+unit. The abstention was correct and honest (D-057), which is what made it hard to see: the system
+reported accurately that it could not run, and the reason was that the documented way of configuring
+it did nothing.
+
+`agent_id` stops being configurable because fusion refuses an `agent_id` that maps to no witness
+(D-052) — an environment variable that could rename this witness is a way to make every audit raise,
+and the identity is what fitted likelihood ratios attach to.
+
+**Consequences.** `test_config.py` asserts the correspondence in both directions: every documented
+key is a validation alias of a field, and no `SEMANTIC_*` line exists that nothing reads. A
+configuration key the code does not read is not configuration; it is a claim.
+
+---
+
+## D-065 — The model is pinned, and pinned to one that exists
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 11 (prerequisite)
+
+**Decision.** `SEMANTIC_MODEL` defaults to a specific version, never a `-latest` alias, and the
+default must name a model the API still serves. A test asserts the default is not floating and that
+it agrees with `.env.example`.
+
+**Rationale.** Two separate failures, found by pointing a real key at the API.
+
+**Floating is unreproducible.** `gemini-flash-latest` resolves to whatever Google currently points
+it at, so the model that fits the likelihood ratios in Chapter 14 need not be the model scored
+against them afterwards. §6 requires fitted numbers to be reproducible from a recorded artifact, and
+a model identifier that silently changes underneath makes that unverifiable.
+
+**Model names expire, and the default had already expired.** `gemini-2.0-flash` — the committed
+default and the documented one — returns `404: no longer available`. `gemini-2.5-flash` returns
+`404: no longer available to new users`, so a key created today cannot reach it whatever the docs
+say. A default that names a dead model is a live failure mode.
+
+**Consequences.** Bumping the model is a deliberate edit in two places that a test keeps in
+agreement, and it should be accompanied by re-running whatever calibration depends on it. Verify a
+model answers `generateContent` before pinning it; the list endpoint alone is not enough, since a
+model can be listed and still refused to new keys.
+
+**Recorded for Chapter 11, not fixed here.** `HostedLLMClient` has a fixed 30s timeout and no retry.
+Free-tier `503 high demand` is common enough that a single sample loses often, and all three samples
+failing surfaces as `schema_violation` — which misattributes a transport failure to the model's
+output. Retry with backoff, and a distinct `provider_unavailable` reason, belong with the rest of
+that agent's rebuild.
+
+---
+
+## D-066 — The untrusted region is bounded by a per-request sentinel, and the exemplars sit inside it
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 11
+
+**Context.** `AUDIT.md` 0.3. The old template interpolated `pre_src` and `post_src` between literal
+`<code_to_analyze>` tags. Code containing that closing tag ended the data region, and everything
+after it read as trusted instruction. The system prompt's boundary paragraph was well written and
+did not help, because the delimiter itself was forgeable by the person whose code was being read.
+
+**Decision.** The untrusted region is delimited by `CODESHERIFF-` plus eight bytes from `secrets`,
+drawn fresh for every request, and the prompt states in advance that any text inside the block
+claiming to close it — or repeating the sentinel — is itself the attack. The **exemplars are
+rendered inside the same sentinel**, with the same `BEGIN`/`END` framing as the real unit.
+
+**Rationale.** A delimiter the author of the analysed code cannot predict cannot be forged, and
+`secrets` rather than `random` because this is the whole injection boundary: a value from a seeded
+generator could be reconstructed by someone who sees enough output to infer its state.
+
+Presenting the exemplars in the *same* frame is the less obvious half. A worked example shown in a
+different wrapper would teach the model that the sentinel is decorative formatting — the exemplars
+are the longest and most attended-to part of the prompt, so whatever they demonstrate about the
+delimiter is what the model learns about it. Identical framing teaches that everything inside a
+sentinel is code to be judged, which is exactly the behaviour the real request depends on.
+
+The cache key is computed against a **fixed** stand-in sentinel (`CACHE_KEY_NONCE`). A random value
+per request would make every cache lookup a miss and turn the cache into a write-only table; the
+constant makes the key mean "this prompt, modulo the sentinel", which is the equivalence the cache
+wants, and it still changes when the template, the exemplars or the code change.
+
+**Consequences.** The rendered prompt is not reproducible byte-for-byte across requests, so anything
+needing a stable identity for a prompt — the cache key, and the cassette fingerprint in D-068 — must
+render a second time with the constant. Both do.
+
+---
+
+## D-067 — Model prose that reads as an instruction is dropped whole, never sanitised
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 11
+
+**Context.** `AUDIT.md` 0.4. Model-authored `rationale`, `functional_intent` and
+`violated_safety_invariant` flowed verbatim into the pull request comment and into a markdown table
+with no pipe escaping. The only control was a 400-character truncation. §5 requires rationales
+screened so injected strings are not echoed.
+
+**Decision.** Every field of model prose is screened in `mapping.py`, which is the only place an
+`LLMFinding` becomes an `Evidence` — so no path to a stored row, a pull request comment or the
+dashboard skips it. Prose that reads as an instruction is **dropped entirely** and the finding is
+reported from `_structured_summary` instead: the CWE, the gate-validated sink expression, the
+severity and the exploitability, with a line saying the model's own wording was withheld.
+
+**Rationale.** Escaping is the wrong instinct here. An injected string that is escaped is still
+*published* — to a reviewer, to the dashboard, to whoever reads the comment next — and the attack it
+carries is aimed at that reader rather than at the markdown parser. Sanitising it would faithfully
+reproduce the payload with its metacharacters neutered, which defeats the rendering bug and not the
+attack.
+
+Dropping the prose costs nothing that matters, and that is what makes the choice cheap: whether the
+code is vulnerable does not depend on how the model chose to describe it. The finding survives
+screening either way. Only the narration is lost, and only for findings whose narration was already
+untrustworthy.
+
+`sink_expression` is quoted in the fallback summary and is *not* screened, because the hallucination
+gate has already checked it appears verbatim in `post_src`. It is attacker-influenced text, but it
+is attacker-influenced text that is genuinely present in the code under review — which is precisely
+the claim being made about it.
+
+**Consequences.** A screening rejection is logged with the field and the reason, so a repeated
+rejection on ordinary findings shows up as a screening rule that is too tight rather than as
+silently degraded output. `prose_screened` is recorded on the `semantic_intent` artifact, so
+Chapter 14 can check whether screened findings behave differently from unscreened ones before any
+ratio is fitted across both.
+
+---
+
+## D-068 — The agent is measured from committed cassettes, and an injected replay analyses the injected source
+
+**Date:** 2026-08-29 · **Status:** ACTIVE · **Chapter:** 11
+
+**Context.** Chapter 11 requires four things at once: a safe-twin pass rate and an injection
+subversion rate measured on **real model output**, and **zero live API calls in the suite**. A test
+that calls the provider satisfies the first two and breaks the last, spends free-tier quota on every
+commit, and cannot run in CI at all.
+
+**Decision.** `tools/record_cassettes.py` calls the live API once, over the **calibration split
+only**, and commits what came back. The suite replays those recordings through the real
+`SemanticAgent.analyze()` path with a `CassetteClient`, and a socket-layer autouse fixture fails any
+non-loopback connection. Each cassette records the fingerprint of the prompt it answered — the
+rendered prompt with the sentinel replaced by the constant from D-066 — and a test compares it, so a
+changed template, system prompt or exemplar set marks every recording stale instead of quietly
+measuring a prompt nobody sends.
+
+The injected variants are built by `injected_source()`, which lives beside the cassettes and is
+imported by **both** the recorder and the replay.
+
+**Rationale.** Cassettes buy three things past the criterion. The measurement is **deterministic**,
+so a regression is a code change rather than the model having a different day. It is **free**, which
+matters on a project whose hard constraint is zero recurring cost. And it is **inspectable** — the
+exact bytes the model returned are in the repository, which is what lets a number in the report be
+argued about later rather than taken on trust.
+
+Sharing `injected_source()` is not tidiness; it is the correctness of the measurement. The injected
+comment is two lines long, so it shifts every line number in the unit. When the replay built the
+injected unit from the *clean* source, every line the model reported fell outside the unit's bounds,
+the hallucination gate correctly rejected the finding, and the case counted as a lost detection —
+reporting **100% injection subversion** across ten cases where the model had in fact resisted the
+injection and named the vulnerability correctly. One definition used by both sides is what makes
+that class of mismatch impossible rather than merely unlikely.
+
+Recording is restricted to the calibration split for the same reason the taint measurement is
+(D-063). A recording script pointed at validation or test would be iterating against a reserved
+split, and the fact that the iteration is slow, manual and expensive does not make it not fitting.
+
+**Consequences.** A prompt change is now a two-step operation: edit, then re-record, or the suite
+goes red on staleness. That friction is deliberate and it is the point — a prompt edit invalidates
+every number measured against the old prompt, and the alternative is a green suite reporting a rate
+that describes a prompt nobody sends any more.
+
+The cassettes are a snapshot of one model on one date. They are development measurements on the
+split reserved for development, and D-010 applies: nothing may present them as calibrated. Chapter
+14 fits the ratios, and if the model is re-pinned (D-065) every recording must be refreshed first.
+
+---
+
+## D-069 — `assign` reads the committed file directly; routing it through `load_splits` re-drew the corpus
+
+**Date:** 2026-08-30 · **Status:** ACTIVE · **Fixes** a defect in D-045's mechanism · **Chapter:** 12
+
+**Decision.** `codesheriff-corpus assign` reads `splits.json` through a new `read_splits_file`,
+which parses the committed assignment and applies **none** of `load_splits`'s consistency checks.
+Consumers keep going through `load_splits`.
+
+**The defect.** D-045 promises that assignment "will not move a pair that already has a home", and
+`assign` implements that faithfully — given the existing assignments. The CLI obtained them with:
+
+```python
+try:
+    existing = dict(load_splits().assignments)
+except CorpusError:
+    existing = {}
+```
+
+`load_splits` raises `CorpusError` when any known pair has no split. That is correct for a reader —
+a half-assigned file would let a case drop silently out of a split. But it is precisely the state
+the corpus is in **whenever new cases have just been added**, which is the only situation in which
+`assign` is ever run. So the one command whose job is to extend an assignment received an empty one
+and re-drew the entire corpus from the seed.
+
+Adding the eight Chapter 12 pairs and re-running it moved **16 of the 30 settled pairs**, including
+four in or out of the sealed test split:
+
+```
+cwe-089-user-lookup      calibration -> test
+cwe-639-profile-update   test        -> calibration
+cwe-862-admin-export     validation  -> test
+cwe-798-token-signing    test        -> calibration
+```
+
+Had that been committed, every future claim about the test split would have described a split that
+was silently reshuffled the last time anyone added a case. §6 permits the test split to be evaluated
+exactly once; a split whose membership changes underneath that evaluation makes the claim
+meaningless, and nothing in the suite would have said so.
+
+**Why the guard was worth keeping anyway.** The temptation is to make `load_splits` tolerant. That
+trades a loud failure in one command for a silent one everywhere else: `cases_in(Split.CALIBRATION)`
+would quietly return fewer cases than the corpus holds. The right shape is two readers with
+different contracts, which is what this is.
+
+**What it cost, and what survives.** Reproducibility is now weaker than it was, and honestly so.
+`test_assignment_is_reproducible_from_the_recorded_seed` asserted that a from-scratch draw
+reproduces the committed file; that cannot hold for a corpus grown in increments, because the first
+thirty pairs were drawn when the corpus held thirty. Re-deriving the whole assignment needs the
+order cases were added in, not the seed alone.
+
+What replaced it is checkable, and is what the integrity claim actually rests on:
+
+- `test_assignment_is_a_fixed_point_of_the_recorded_seed` — running the recorded procedure over the
+  recorded assignment changes nothing, so no pair sits anywhere the procedure would not have put it.
+- `test_a_from_scratch_draw_is_deliberately_not_reproduced` — asserts the *difference*, so a future
+  re-draw from scratch shows up as this test starting to pass rather than as a large diff nobody
+  reads.
+- `test_assignment_never_moves_a_pair_that_already_has_a_split`, which already existed and passed
+  throughout — it exercises `assign` directly and never went near the CLI's error handling. That is
+  the lesson worth keeping: the invariant was tested, the *call site* was not.
+
+**Also fixed here.** `test_split_sizes_match_the_recorded_ratios` compared each split against
+`round(total * ratio)`, which does not sum to the total — at 38 pairs it asks for 23 + 8 + 8 = 39.
+It agreed while the corpus held 30 pairs, because 30 divides 60/20/20 exactly. It now compares
+against `_targets`, the largest-remainder allocation `assign` itself uses.
+
+---
+
+## D-070 — Precedent is per-symbol merged source, and a corpus history has the same shape as a stored one
+
+**Date:** 2026-08-30 · **Status:** ACTIVE · **Closes** Chapter 7's deferred deliverable · **Chapter:** 12
+
+**Decision.** A precedent record is *one merged pull request, one file, one qualified symbol, one
+bounded excerpt of accepted source*. It has three representations and they are deliberately the same
+shape:
+
+| Where | Type |
+|---|---|
+| The database | `codesheriff_storage.PrecedentChunk` / `PrecedentMatch` |
+| The corpus | `codesheriff_corpus.PrecedentRecord`, from `precedent/*.py` beside the case |
+| The agent | `context_agent.precedent.Precedent` |
+
+**Rationale.** Chapter 7 deferred the ~15 cross-PR scenarios because "a cross-PR scenario is a case
+plus a precedent history, and the shape of a precedent document is Chapter 12's to design". Fixing
+it alongside the agent is what makes the two sides provably the same: an agent measured against a
+corpus history that differed in shape from a stored chunk would not be the agent that runs in
+production, and a ratio fitted on one could not be applied to the other.
+
+**Per symbol, never per pull request** (PROJECT_CONTEXT.md §5). `bge-small-en-v1.5` truncates at 512
+tokens, so a PR-level document is silently cut and matches poorly against a function-level query —
+and a per-PR vector cannot answer "which symbol carried this guard", which is the only question the
+context agent asks.
+
+**Both twins carry the same history.** A twin whose history differed would let the agent be right
+about the pair for the wrong reason: the difference, rather than the guard, would be doing the work.
+`test_twins_share_a_precedent_history` asserts it.
+
+**What was authored.** Eight new twin pairs (16 cases), all CWE-862 and CWE-639, in which the unit
+alone carries no evidence of a missing control and only the repository's history does — five of them
+landed in the calibration split, covering all three ways a control gets established. Six existing
+calibration cases additionally gained histories as **negative controls**, where precedent
+establishes a convention that is real, that the unit really breaks, and that this witness must
+decline to report: `escape()` on the CWE-79 pair, `@rate_limit` on the CWE-918 pair, and a history
+with no controls at all on the CWE-89 pair, which must read as SILENCE rather than an abstention.
+
+**Consequences.** `corpus_hash` changes, which Chapter 7 anticipated and which is safe only because
+no calibration artifact exists yet. Precedent sources are compiled by a test for the same reason
+`post.py` is — tree-sitter tolerates broken syntax, so a stray indent would silently establish a
+convention from a fragment. Method sources are written at column zero with `enclosing_class` set,
+matching the existing cases; an indented excerpt does not compile.
+
+---
+
+## D-071 — The context agent mines its control vocabulary from precedent and classifies it with a fixed table
+
+**Date:** 2026-08-30 · **Status:** ACTIVE · **Closes** `AUDIT.md` 0.2, 3.7, 3.8 · **Chapter:** 12
+
+**Decision.** `context.rag` reads the **control surface** of a unit and of each retrieved excerpt —
+decorators and called names, from the syntax tree — and reports a control that the repository's own
+history establishes and this unit does not apply. Which controls a repository applies is *learned*;
+which of them are authorization controls is a *fixed* table in `classify.py`.
+
+**No LLM.** `CLAUDE.md` gives this witness the basis "this repository's own precedent" and the
+failure mode "repo has no relevant history". A model-driven version would share `semantic.hosted`'s
+failure mode — confidently wrong, or agreeable — and heterogeneity is the entire justification for
+fusing four witnesses rather than trusting one. `reasoning/prompts/cross_pr_v1.md`, which the audit
+found was referenced by no code, is deleted rather than wired up.
+
+**Both halves are needed.** All-learned would mean inferring a CWE from a name whose meaning the
+agent was never told. All-fixed would be a second rule engine with a hard-coded guard list — which
+is `structural.taint` with worse coverage, and correlated with it.
+
+**Established two ways.** The same qualified symbol carrying the control in one merge settles it:
+frequency cannot decide a function that has only ever been merged once, and matching is on the
+symbol rather than the path, because a move is what changes the path. Otherwise two or more distinct
+retrieved symbols must share it — one neighbour's habit is a coincidence, and treating it as a rule
+would make every added function a regression against whichever neighbour retrieval returned.
+
+**CWE-862 and CWE-639 only,** and the narrowness does three jobs. A control that maps to nothing
+cannot be reported at all, since `Evidence.detection` requires an in-scope CWE — that is the
+mechanism stopping a mined convention from becoming a finding. These are the two CWEs the taint
+engine holds no rules for, which is what `CLAUDE.md` means by the authorization cases existing "to
+prove heterogeneity". And reporting CWE-89 from a missing `execute(query, params)` convention would
+put this witness in the structural witness's territory by a weaker method.
+
+`rate_limit`, `throttle` and `audit_log` are absent from the table rather than excluded from it, and
+there is no bare `access`, `check`, `verify`, `validate` or `require` token — the four commonest
+verbs in any codebase would turn `validate_payload` into an access control. Two corpus pairs carry
+histories that fire exactly these traps on both twins, so the omissions are measured, not trusted.
+
+**It corroborates, it does not solo** (D-012). Evidence is keyed through `unit.key_for(cwe)`. With
+the provisional ratios its strongest detection takes a 0.05 prior to 0.18 against a 0.70 threshold,
+so a finding it raised alone could never alert; a witness that can only corroborate must key like
+one.
+
+**Numbers that are provisional and say so** (D-010). `MIN_SUPPORTING_SYMBOLS` is 2,
+`FULL_CREDIT_SIMILARITY` is 0.85, `min_similarity` is 0.35 and `top_k` is 5. `raw_score` is 0.85 for
+the strong form — same symbol, or three or more siblings — and 0.65 otherwise, damped only once
+similarity falls below full credit. An earlier version multiplied by raw similarity and pushed every
+detection backed by perfectly good 0.9 precedent down to 0.765, below the 0.8 tier boundary in
+`WitnessRatios.for_score`: retrieval doing its job demoted every claim the agent could make, and the
+tier boundary stopped meaning anything.
+
+---
+
+## D-072 — Retrieval is a Protocol the agent declares and `apps/worker` implements
+
+**Date:** 2026-08-30 · **Status:** ACTIVE · **Closes** `AUDIT.md` 0.2, 3.8 · **Chapter:** 12
+
+**Decision.** `context_agent` declares `PrecedentRetriever` and holds no store, no session, no
+embedding model and no local directory. `apps/worker/precedent/` supplies the implementation, and
+`load_agents(deps=AgentDeps(precedent_retriever=...))` injects it. `chroma_db_dir` is gone with the
+store it pointed at.
+
+**Cross-repository retrieval is impossible structurally** (`AUDIT.md` 0.2). `repository_id` is bound
+when the retriever is constructed; `retrieve(unit, limit)` takes no repository, and
+`search_precedents` filters in SQL. `unit.repo` is deliberately not consulted — it is a string on an
+object the agent was handed, whereas the binding comes from the audit's own repository row. The
+superseded store put every repository in one global Chroma collection and never recorded which
+repository a document came from, so no filter could even be added without a full re-ingest. A filter
+that must be passed correctly is one that will eventually be passed wrongly.
+
+**Embedding failure is loud** (`AUDIT.md` 3.8). There is no fallback branch. A missing library, an
+unloadable model and a wrong output dimension each raise `RetrievalUnavailableError`, which the
+agent records as a `retrieval_unavailable` abstention — distinct from `no_precedent`, because a
+store that is down is not a repository that is new. Conflating them is what let an MD5 term-hasher
+report, silently and forever, that every repository it was pointed at happened to have no relevant
+history. `sentence-transformers` is declared by `apps/worker`, the package that actually uses it.
+
+**One model, both directions.** `load_embedder` serves ingestion and querying, and `query_text`
+renders both sides identically. A store written with one model and queried with another is a
+distance between two unrelated vector spaces: it does not error, it answers wrongly.
+
+**The retriever opens its own session.** Agents run concurrently in a thread pool, a SQLAlchemy
+`Session` is not thread-safe, and the audit's session is mid-transaction with unflushed evidence
+rows on it. It is handed the session *factory* instead.
+
+**Ingestion is a backfill command, not a pipeline step.** An audit that also ingested would make the
+store's contents depend on which pull requests happened to be reviewed and in what order, and would
+put a write transaction inside a read the agents are already running concurrently against. It also
+means Chapter 14 can stand up a precedent store with no GitHub credentials. Only the merged side is
+indexed: the base version is already precedent from an earlier merge, and indexing both would let a
+control that a pull request deliberately removed go on establishing itself forever.
+
+---
+
+## D-073 — The runtime witness *observes*; it never proves
+
+**Date:** 2026-09-01 · **Status:** ACTIVE · **Chapter:** 13
+
+**Decision.** `runtime.sfi` executes the changed function once inside the sandbox with every
+parameter bound to a uniquely tokenised untrusted value, and reports which dangerous operations
+that value actually reached. It is forced execution with synthesised inputs, and everything about
+how it reports follows from that being an observation rather than a proof.
+
+**Taint is a substring, not a wrapper.** Each untrusted value is a `str` subclass whose text is a
+random token. An f-string, a `+`, a `%`, a `.format()` and an `os.path.join` all carry the token
+into the result for free, because they carry the characters — so the probe models none of Python's
+string semantics, which is the half a wrapper-based tracker gets wrong. Detection is then "does the
+argument text contain a live token", and **composition** is "and is it not exactly that token",
+which is how D-061's path rule is enforced by a string comparison rather than a dataflow analysis.
+
+**Four propagation rules, and each is a claim about trust.** Attribute access on an untrusted object
+stays untrusted; a call on an untrusted receiver returns untrusted data; a call to an unmodelled
+free function *clears* taint and is recorded as a guard (D-079); a sink's result is untrusted,
+which is how `yaml.load(handle)` is reached through `open(path)`. The third is the load-bearing one
+— `secure_filename(name)` may be a sanitiser, a validator or a no-op, and clearing is the direction
+that does not manufacture false positives out of code that defends itself.
+
+**Every parameter is a source, `self` included**, for the reason the static engine gives (D-058):
+the unit is one function, so its signature is the trust boundary.
+
+**It reports five CWEs, and the five it omits are the mechanism.** CWE-89 and CWE-79 are absent
+because their sinks are *methods on objects the probe itself fabricated* — a cursor the harness
+built calling a stub the harness installed. An "observation" there would be the harness observing
+itself, and reporting it would make this witness a weaker restatement of the structural one, which
+is exactly the correlation D-011 exists to prevent. CWE-862, CWE-639 and CWE-798 are absent because
+there is nothing to observe: a missing authorisation check is the absence of an event and a
+hard-coded credential is a fact about the source text. The corpus pre-registered exactly these five
+in `detectable_by` before this agent existed, which is what makes the narrowness a claim rather
+than a convenience.
+
+**One score, not a spread.** `OBSERVED_SCORE` is 0.85 and there is no medium or low tier. The other
+witnesses grade themselves because a taint path can be longer or shorter and a model can be more or
+less sure; an execution either reached the argument or it did not. Inventing a spread to fill
+`WitnessRatios.for_score`'s tiers would be inventing a confidence the probe does not measure. Still
+provisional (D-010) — Chapter 14 may find it wants those tiers.
+
+**Measured** on the calibration split, the way Chapters 10 to 12 measured theirs: **9/9** on the
+cases the corpus predicts for it, **0 false positives across 23 safe twins**, in ~14 s for 46 cases.
+
+---
+
+## D-074 — The interpreter is pinned by digest and never committed
+
+**Date:** 2026-09-01 · **Status:** ACTIVE · **Chapter:** 13
+
+**Decision.** The sandbox runs `python-3.12.0.wasm` from `vmware-labs/webassembly-language-runtimes`,
+identified by `INTERPRETER_SHA256` and verified on load. It is 26 MB, it lives in a gitignored
+`.wasm-runtimes/`, and it is fetched deliberately by a person.
+
+**Not committed**, because a binary in a git history is in that history forever, and this project's
+reproducibility argument rests on artifacts being identified by digest rather than by having been
+checked in once.
+
+**Not downloaded by the agent**, because an agent that pulled executable code over the network at
+analysis time would be the supply-chain problem this project exists to notice. `runtime-agent
+doctor` prints the URL and the digest; a person runs `curl`.
+
+**A digest mismatch is fatal, not a warning.** The whole security argument is that untrusted code
+runs inside an interpreter we chose, and a build we did not choose carries no such argument. It is
+also not the interpreter the numbers were measured against: a build whose `pickle` is missing turns
+a detection into an abstention, and one whose `socket` works turns the sandbox into a proxy.
+`verify_interpreter_digest=False` exists for deliberately testing another build and logs a WARNING
+naming the digest it loaded, so a run made that way is identifiable afterwards from its own logs.
+
+**Tests that need it are marked `wasm` and skip without it**, on the `db` precedent (D-029): the
+sandbox runs a real interpreter in a real Wasmtime engine or those tests do not run. The isolation
+tests themselves do *not* need it — they are hand-written WebAssembly, and they run everywhere.
+
+---
+
+## D-075 — Capabilities are absent, not filtered
+
+**Date:** 2026-09-01 · **Status:** ACTIVE · **Chapter:** 13
+
+**Decision.** `WasiConfig` is constructed empty and stays that way. No `inherit_env`, no
+`inherit_stdin`, no `preopen_dir`. The guest gets an argv, three file descriptors backed by host
+temporary files, and nothing else.
+
+**"The sandbox holds no credentials" is a structural property, not a filter.** The guest's
+`os.environ` is `{}` because there was nothing to inherit from — not because a deny-list removed
+the interesting keys. A filter is a list somebody has to keep correct, and the first variable named
+something other than `*_TOKEN` defeats it. `test_the_guest_environment_is_empty_even_when_the_host_is_not`
+sets a `GITHUB_TOKEN`, a `DATABASE_URL` and an LLM key on the host and proves the guest still counts
+zero; without that setup the assertion would pass against an empty host and prove nothing.
+
+**The network is absent in the strongest available sense.** WASI preview1 defines no `sock_connect`,
+so a module importing one **fails to instantiate** — the denial lands before the guest's first
+instruction, and `test_a_module_that_asks_to_connect_cannot_even_load` asserts `fuel_used == 0` to
+say so. `sock_accept` does exist and is useless: accepting needs a listening descriptor and nothing
+creates one. This is the difference from a container, where the syscall exists and a policy stands
+in front of it.
+
+**`SandboxPolicy` has no field that grants anything.** Three numeric bounds, and a test asserts that
+shape rather than only the behaviour. A policy object with an `allow_network` flag is one flag away
+from not being a sandbox, and the flag would eventually be set by somebody debugging a fixture at
+midnight.
+
+**Four caps, because each covers another's blind spot.** Fuel is a deterministic WebAssembly
+instruction budget — the same unit exhausts it at the same instruction on every machine, which is
+what a calibration run needs and what a wall clock cannot promise. Epoch interruption is the
+wall-clock backstop, because fuel counts guest instructions and a guest blocked in a host call burns
+none of it. Memory is a linear-memory ceiling, so an allocation loop raises `MemoryError` inside the
+guest instead of taking the worker down with it. Capabilities are the fourth. Both time caps are
+armed on every run.
+
+---
+
+## D-076 — One execution backend, and no fallback path
+
+**Date:** 2026-09-01 · **Status:** ACTIVE · **Chapter:** 13
+
+**Decision.** Wasmtime is the only way this agent runs anything. There is no subprocess executor,
+no "trusted corpus" fast path, and no in-process fake — not even for tests.
+
+**Wasmtime and not Docker**, per `PROJECT_CONTEXT.md` §5. A container is OS-level isolation: the
+guest runs as native code, the kernel is the boundary, and the host's process table, network
+namespace and credentials are one misconfiguration away. WebAssembly is software fault isolation —
+the guest cannot name an address outside its linear memory and cannot perform an operation the host
+did not hand it as an import. The SFI claim in this project's title requires the second kind.
+
+**And no second backend, because a test-only host executor is a fallback branch**, and this
+repository has already shipped two: the MD5 term-hasher that stood in for embeddings (`AUDIT.md`
+3.8) and the substring matcher that stood in for debate (D-053). Both were introduced as the
+convenient path and both became the default path, silently. A host executor would be reached for
+the first time a `wasm`-marked test was inconvenient, and from then on the measurement would be of
+code running on the machine holding the database credentials.
+
+The cost is real and accepted: without the interpreter the agent abstains on every unit and the
+corpus measurement skips. That is the honest report of a machine that cannot run this witness, and
+it costs the posterior nothing.
+
+---
+
+## D-077 — An abstention that names where it looked, and a `doctor` that agrees
+
+**Date:** 2026-09-01 · **Status:** ACTIVE · **Chapter:** 13
+
+**Decision.** `interpreter_unavailable` and `interpreter_digest_mismatch` are separate reasons, the
+explanation on each names every path consulted and the URL and digest to fix it, and
+`runtime-agent doctor` prints the same search — every candidate, hit or miss — plus the active
+resource bounds.
+
+**Because an agent that abstains on every unit is otherwise indistinguishable from one that is
+quietly doing nothing.** That is the failure mode of `AUDIT.md` 3.8 restated: a component reporting
+"no relevant history" forever, with no log line, where the truth was that it had never worked. A
+search that reports only its result is indistinguishable from a search that was never run, so
+`InterpreterSearch` carries the full candidate list and `doctor` prints all of it.
+
+**Two reasons rather than one** because they need different fixes. Absent means fetch it; wrong
+digest means the file on disk is not the artifact this agent was measured against, and re-fetching
+a corrupt download is a different action from investigating a substituted one.
+
+Every non-detection outcome keeps its own reason for the same reason — `fuel_exhausted` and
+`timed_out` describe a budget, `unit_raised` and `no_safe_entrypoint` describe the unit,
+`sandbox_trapped` describes the sandbox. Collapsing them into `analysis_failed` would make the
+difference between "this agent needs more fuel" and "this code does not run" invisible in exactly
+the data Chapter 14 reads.
+
+---
+
+## D-078 — The guest driver is data, not an import
+
+**Date:** 2026-09-01 · **Status:** ACTIVE · **Chapter:** 13
+
+**Decision.** `agent_runtime/guest/driver.py` is read as text by `probe.py` and handed to the guest
+as `-c` source. It is a real file rather than a string constant, and it has no `__init__.py` and no
+importer on the host. The root `pyproject.toml` excludes it from `mypy` and nothing else.
+
+**A real file** because 300 lines of program embedded in a string constant is a program nobody
+reviews or diffs. This is the same call `cases/` gets (D-046): it is source that some *other*
+interpreter runs, so it lives on disk as source.
+
+**Excluded from `mypy` only.** Its entire mechanism is a `str` subclass that deliberately misreports
+what it is — `__getattribute__` answers for a module when the value is clean and for a string when
+it is tainted — and `--strict` cannot describe that without annotating the lie as the truth. It
+stays inside `ruff`, which catches the undefined names that would actually break it, and a test
+asserts it imports nothing outside the guest's standard library: a driver that grew a third-party
+import would fail inside the sandbox and report `probe_error` on every unit, a silent total outage.
+
+**The unit never touches the guest's own standard library.** Every free name resolves to a proxy
+through a `__missing__`-backed globals dict, and `open`, `eval`, `exec`, `compile`, `__import__`,
+`input` and `breakpoint` are replaced in `__builtins__`. Defence in depth rather than convenience —
+the sandbox already denies the capabilities, and this denies the names.
+
+**Decorators are stripped before compiling.** A decorator the probe cannot resolve evaluates to a
+proxy and calling a proxy returns a proxy, so the name the unit defines would not be the function
+and every decorated unit would report `no_safe_entrypoint`. It costs this witness nothing it claims:
+the CWEs a decorator carries are the access-control ones, which `COVERED_CWES` omits precisely
+because running a function once cannot observe a check that is not there.
+
+**Nothing the guest says is taken on trust.** The trace is located by a per-request sentinel from
+`secrets` — the same decision as the semantic agent's prompt delimiter (D-066), because the unit can
+print and a unit that has read this file would print a trace of its own. A reported sink name not in
+`SINKS` is dropped, and the **CWE is re-derived from our table**, so analysed code cannot invent a
+finding or relabel a path traversal as a command injection. Every published word comes from the sink
+table and the agent's own verbs, which is why — unlike model prose (D-067) — the explanation needs
+no screening pass before it reaches a pull request comment.
+
+---
+
+## D-079 — A value a guard inspected abstains; it does not report, and it does not fall silent
+
+**Date:** 2026-09-01 · **Status:** ACTIVE · **Chapter:** 13
+
+**Decision.** When the **exact** token that reached a sink was earlier passed to a call the probe
+could not evaluate, the agent emits `guard_unresolved` rather than a detection or a silence.
+
+**Because forced execution cannot evaluate a guard it had to stub.** `if not is_public_url(url):
+raise` is a real SSRF defence, and the probe answered `is_public_url` itself — so the run reached
+`requests.post(url)` only because the harness let it. Reporting would be a false positive on
+precisely the code that defends itself, which is the worst possible place for a security tool to be
+wrong. Falling silent would argue, below a likelihood ratio of 1.0, that guarded code is clean on
+the strength of a guard nobody read. Neither is honest, so the witness says it could not tell, at
+exactly 1.0.
+
+**Exact-token matching, and no propagation through derivation.** `self._namespaced(key)` also
+consumes a token, and it is a namespacing helper rather than a validator. Propagating "guarded"
+down the derivation chain would turn every unit that transforms its input into an abstention —
+`cwe-502-cache-get-vuln` among them, which is a real deserialisation bug. The rule only fires when
+the value that reached the sink is the value that was inspected.
+
+On the calibration split this converts two safe twins — `cwe-918-link-preview-safe` and
+`cwe-918-webhook-test-safe` — from would-be false positives into abstentions. Both are exactly the
+shape the rule describes: an unmodelled predicate consulted on the URL that is then fetched.
+
+---
+
+## D-080 — The fitted artifact is the only source of a ratio, a prior or a threshold
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14
+
+**Decision.** `calibration.json` — fitted on the calibration split, committed inside
+`codesheriff_engine` — is where every likelihood ratio, the base rate and the alert threshold come
+from. `fusion/ratios.py` keeps the *type* and the clamp bounds and holds no numbers at all.
+`PROVISIONAL_RATIOS`, `PROVISIONAL_PRIOR`, `PROVISIONAL_ALERT_THRESHOLD` and `FALLBACK_RATIOS` are
+deleted rather than relabelled.
+
+**Because a number that announces its own provisionality still gets multiplied in.** Every one of
+those constants carried a comment saying it was not fitted, and `apps/worker/comment.py` printed a
+banner saying so on every render. The system was scrupulously honest and completely uncalibrated —
+which is the practice the paper criticises, carried out carefully. Deleting the constants is what
+makes the claim structural: with no fallback table, a missing artifact raises instead of quietly
+producing a number nobody measured.
+
+`packages/engine/tests/test_no_unfitted_numbers.py` parses the whole source tree rather than
+grepping it, and bans `DEFAULT_PRIOR` alongside `PROVISIONAL_PRIOR` — the objection was never the
+word "provisional".
+
+---
+
+## D-081 — A silence that fits at or above 1.0 is clamped, and the raw value is recorded
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14
+
+**Decision.** `WitnessRatios.silence` is typed `lt=1.0`. A witness whose fitted silence exceeds
+that is clamped to `SILENCE_CEILING = 0.999`, `CellFit.raw_ratio` keeps the fitted value, and the
+fit logs a warning naming the witness.
+
+**Because §5's invariant and the data can disagree, and the invariant is the one with a reason.** A
+silence at or above 1.0 would make "looked and found nothing" evidence *for* a vulnerability, which
+is not a claim any silence supports. But a weak witness really can be silent on vulnerable code more
+often than on safe code, and that is a fact about the witness rather than about the code. The clamp
+keeps the semantics; the recorded raw value keeps the honesty. Absorbing it silently would mean the
+artifact showed a number no observation produced.
+
+No witness hit the ceiling in the Chapter 14 fit. The path is exercised by a unit test rather than
+by the corpus, which is the right way round: the constraint has to hold for the fit after next.
+
+---
+
+## D-082 — There is no fallback ratio table; a witness missing from a fit is an error
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14 · **Supersedes** part of D-011
+
+**Decision.** `CalibrationArtifact.load` refuses an artifact whose witness set is not exactly
+`fusion.witnesses.WITNESSES`, and `_ratios_for` raises on a table missing a row. `FALLBACK_RATIOS`
+is gone.
+
+**Because the roster is fixed, so a missing row means an incomplete fit.** The fallback existed to
+keep an unregistered witness timid, and `fit_ratios` now covers every registered witness whether or
+not it ever spoke — a witness that abstained throughout fits to 1.0 in its detection cells, which is
+the correct value for a witness nothing is known about and is *derived* rather than asserted. A
+fallback would only ever be reached by a partial table, and filling one in is how an unfitted factor
+gets into a posterior nobody can later account for.
+
+---
+
+## D-083 — Rates measured on a balanced split are reweighted to the declared base rate
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14
+
+**Decision.** The prior is **declared**, not measured (`DEFAULT_BASE_RATE = 0.03`), and the artifact
+records the corpus prevalence it was rescaled from plus the rescaling factor. Every rate computed on
+a split — precision and recall in the threshold sweep, ECE and Brier — is importance weighted to
+that base rate before it is reported.
+
+**Because the corpus is twin-paired, so its prevalence is 0.5 by construction.** Reading a prior off
+it would state that one changed function in two is vulnerable. What the corpus legitimately supplies
+is the likelihood ratios, which are conditioned on the label and therefore prevalence-invariant —
+which is exactly why a balanced corpus is the right shape for fitting them. Prevalence enters once,
+as a stated assumption that can be changed without refitting anything.
+
+The weighting matters most for the threshold. Unweighted, a 50/50 split makes almost any cut point
+look precise, because half the changes really are vulnerable; the threshold selected under that
+assumption would be far too low for a repository where 3% are.
+
+---
+
+## D-084 — `CALIBRATION_PATH` selects an artifact; nothing else about the numbers is configurable
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14
+
+**Decision.** `EngineConfig` has no `prior_probability`, `alert_threshold` or `ratios` fields. It
+has one setting — which artifact to load — and the artifact ships inside the package, so the setting
+is normally unset.
+
+**Because an operator who can raise the threshold from an environment variable can make a calibrated
+system uncalibrated without changing a line of code or leaving a trace.** Every audit records the
+calibration run it was opened under precisely so that what it ran under is knowable afterwards; a
+settings object that could override the artifact's numbers would make that record a description of
+the artifact rather than of the run.
+
+---
+
+## D-085 — The calibration harness runs the production agent loader, with per-case bindings
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14
+
+**Decision.** `codesheriff-worker calibrate observe` calls the same `load_agents` and `analyse_unit`
+an audit calls, with `AgentDeps` extended to carry an optional `llm_client`. The per-case
+dependencies — the corpus retriever and the replayed model responses — are **rebound** between cases
+rather than rebuilt with the agents.
+
+**Because a ratio fitted against a differently assembled agent describes an object production never
+builds.** A research harness that constructed its own `SemanticAgent` and `RuntimeAgent` would be
+the same class of mistake as a test that passes against a shell: everything would look measured.
+Rebinding rather than reloading is the one concession, and it is a performance one — the runtime
+sandbox compiles a 26 MB CPython module, and rebuilding it 76 times measures patience.
+
+It paid for itself immediately: running 46 units through one production-shaped agent is what
+surfaced D-088, a defect that only appears on the second unit of an audit.
+
+---
+
+## D-086 — The audit path cannot import the corpus, even though the worker can
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14
+
+**Decision.** A new `import-linter` contract forbids `codesheriff_worker.tasks`, `.pipeline`,
+`.analysis`, `.comment` and all of `codesheriff_api` from importing `codesheriff_corpus`. The
+harness under `codesheriff_worker.calibration` may.
+
+**Because putting the harness in `apps/worker` (D-085) gave the production process an import path to
+`label` and `detectable_by`.** D-047 stops the agents; this stops the pipeline around them. The leak
+would not look like cheating — it would look like a convenient import in the pipeline for "just
+checking" whether a unit matches a known case.
+
+---
+
+## D-087 — A cell with no observations contributes exactly 1.0, not a smoothed ratio
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14
+
+**Decision.** Where a cell was selected by neither a vulnerable nor a safe claim, its ratio is 1.0.
+The Laplace value the counts would have implied is recorded as `CellFit.smoothed_ratio`.
+
+**Because smoothing an empty cell reports the class balance of a different cell's observations.**
+With both counts at zero the ratio reduces to `(N_safe + 4α) / (N_vulnerable + 4α)`. `runtime.sfi`
+spoke on 9 vulnerable claims and 5 safe ones, so its two never-observed detection tiers came out at
+0.69 — mild evidence of *safety*, on a tier no witness has ever selected. That is the abstention
+principle in another costume: no observation is no evidence, and no evidence is 1.0 (D-005).
+
+---
+
+## D-088 — Budget exhaustion abstains, and the budget is per unit
+
+**Date:** 2026-09-03 · **Status:** ACTIVE · **Chapter:** 14
+
+**Decision.** `BudgetTracker.reset()` is called at the top of every `SemanticAgent.analyze`, and a
+unit whose budget stopped the sampling loop before any sample completed abstains `budget_exceeded`
+rather than falling through to SILENCE.
+
+**Two production defects, both found by running 46 corpus cases through one agent.**
+
+`budget_usd_per_unit` accumulated for the life of the agent object, and one agent analyses every
+unit of an audit — so it was a per-*process* budget wearing a per-unit name. The first few units of
+a pull request were analysed and every unit after them abstained. In the harness it showed up as
+"Budget reached after 0 of 3 samples" on thirty consecutive cases.
+
+With that fixed, the remaining path was worse. Zero samples with no provider failure and no schema
+failure fell through to the SILENCE a completed analysis returns — an agent that stopped before its
+first call reporting "reviewed the unit and reported no in-scope finding" across all ten in-scope
+CWEs, at a likelihood ratio below 1.0. That is `AUDIT.md` 3.12 reached by a different road, and it
+would have pushed posteriors *down* on units nobody looked at.
+
+---
+
+## D-089 — The dashboard reports the fitted numbers; it does not let anyone choose them
+
+**Date:** 2026-09-05 · **Status:** ACTIVE · **Chapter:** 15
+
+**Context.** PLAN.md Chapter 15 lists "per-repo config: alert threshold, enabled agents, CWE
+scope". That was written before Chapter 14 existed. D-080 makes `calibration.json` the only source
+of a ratio, a prior or a threshold, and D-084 removes `alert_threshold` from `EngineConfig`
+entirely on the grounds that an operator who can raise it leaves no trace. Implementing the
+chapter as written would reverse both, so it was raised before anything was built (§8).
+
+**Decision.** Settings is **read-only over the fitted artifact**. The threshold, the four-witness
+roster and the closed CWE set are rendered as facts with their provenance — which split each was
+selected on, which corpus hash it was measured against, and how many observations sit behind each
+cell. The one writable per-repository setting stays what it already was: whether CodeSheriff
+analyses that repository at all.
+
+**Because each of the three would break something specific.**
+
+A **per-repository threshold** would make `findings.alert_threshold` a description of a setting
+rather than of a run. The column exists so that a threshold selected later cannot retroactively
+rewrite which past findings were alerts; a threshold chosen per repository, per week, by whoever
+found the dashboard noisy, makes the evaluation unfalsifiable in the same way and without the
+audit trail.
+
+**Per-repository agent toggles** would leave the fitted ratios describing a system that is not the
+one running. The ratios were fitted over four witnesses with fusion iterating all of them; a
+switched-off witness is not the same object as an abstaining one, because the abstention is
+recorded, named and priced at exactly 1.0, and the switch is invisible in the artifact.
+
+A **narrowed CWE scope** would quietly change what every recall figure means. The set is closed,
+the database enforces it as a constraint generated from the contract, and every fitted number was
+measured against exactly it.
+
+**Consequence.** §7 open question 2 is closed. The dashboard's read contract is: `GET /audits`
+(keyset-paginated summaries), `GET /audits/{id}` (units, statements and findings),
+`GET /stats/overview` (counts, never a score) and `GET /calibration` (the artifact verbatim). None
+of them computes a probability; each reads what a run recorded. A future need to suppress alerts
+on a noisy repository should be met by a view filter that says how many it is hiding — never by
+moving the threshold that decided them.
+
+---
+
+## D-090 — The odds product is persisted with the finding, not recomputed for the reader
+
+**Date:** 2026-09-06 · **Status:** ACTIVE · **Chapter:** 16
+
+**Context.** Chapter 16 is the findings page: "finding detail, per-agent evidence breakdown,
+posterior display, taint path rendering". `fusion.bayes` has produced a `WitnessContribution` per
+witness since Chapter 9 — the stance, the ratio-table cell it selected, the likelihood ratio read
+from that cell, and the backends that spoke. It reached the CLI and the pull request comment and
+was then **discarded**. Nothing wrote it to a row, so a stored finding carried a posterior that
+could not be taken apart, and the page whose entire purpose is explaining a number had nothing to
+explain it with.
+
+**Decision.** `findings` gains a nullable JSONB `contributions` column (migration `0004`), written
+by `mapping.to_finding` from what fusion computed. The route reads it. Nothing recomputes it.
+
+**Because the alternative dates every explanation to today.** Recomputing the factors at read time
+means re-running the arithmetic against whichever artifact is active *now*. An audit that ran under
+an earlier calibration would then be explained by ratios it never used, and the breakdown would
+contradict the posterior stored beside it — the same failure `alert_threshold` is stored per
+finding to prevent (§6). It would also put a probability computation behind a read route, and no
+route in this API performs one.
+
+There is deliberately **no backfill**. The factors are a property of a run; recomputing them for
+historical findings would date every one of them to today's artifact, which is the thing this
+decision exists to prevent.
+
+**NULL and empty are different, and JSON `null` is neither.** A CHECK constraint forbids an empty
+array, so the column has exactly two states: a recorded breakdown, or none. "Not recorded" and "no
+witness contributed" are different claims — the same silence-versus-abstention distinction the
+evidence rows are built on (D-005) — and the API reports which one holds through
+`contributions_recorded`, so the page can decline to draw four neutral factors it never measured.
+
+The JSON scalar `null` is the third state that had to be closed off. SQLAlchemy persists Python
+`None` into a JSONB column as `'null'::jsonb` unless the type declares `none_as_null=True`; that
+value reads back as `None` in Python while being NOT NULL in SQL. The model declares the flag and
+the CHECK rejects the value, so a future writer that forgets it fails loudly. This was found by the
+constraint during Chapter 16's first database run, not reasoned about in advance.
+
+**Consequence.** A posterior is auditable factor by factor from the row that recorded it. The
+witness roster on the page comes from `fusion.witnesses`, not from the evidence, so four factors are
+always drawn — a page assembled from the agents that spoke would shorten to the ones that alerted,
+which is D-007 rendered in HTML.
+
+---
+
+## D-091 — A finding is addressed through its audit, never by key alone
+
+**Date:** 2026-09-06 · **Status:** ACTIVE · **Chapter:** 16
+
+**Context.** Chapter 4 scaffolded `/findings/[key]` against mock data. Chapter 16 had to decide
+whether a bare `finding_key` identifies a finding.
+
+**Decision.** The route is `GET /audits/{audit_id}/findings/{finding_key}`, and the page is
+`/audits/[id]/findings/[key]`. The scaffolded `/findings/[key]` is deleted.
+
+**Because the key is not unique.** `finding_key` is a digest of file, symbol and CWE — deliberately
+excluding the sink expression (§5) — so the same key recurs every time the same function is
+re-analysed on a new head SHA. That recurrence is a feature: it is what makes a posterior comparable
+across runs. But it means a bare key names a set, and resolving it to "the most recent one this
+session may see" would silently answer a different question than the one asked. Two installations
+analysing the same open-source function hold the same key exactly.
+
+Routing through the audit also puts the installation filter where it already is. The query scopes
+through `Audit -> Repository -> installation_id` (D-035), so the finding route has no filter of its
+own to forget.
+
+**Consequence.** `codesheriff_storage.reporting.finding_detail` takes both an `audit_id` and a
+`finding_key`, and returns None for "no such audit", "no such finding in it" and "not yours" alike
+— the route answers 404 to all three, because distinguishing them confirms that a finding exists on
+a repository the caller cannot see.
+
+The evidence it returns is the **whole unit's**, not the rows carrying the key. A silence and an
+abstention both have `finding_key IS NULL`: an agent that found nothing has no key to name, and one
+that could not run has nothing to say about anything. Filtering on the key would return only
+detections, which is the subset that makes a posterior look inevitable. Detections of a *different*
+key are excluded, because a DETECTION carries no `covered_cwes` and so says nothing about this
+finding.
+
+---
+
+## D-092 — Patching is its own package, one layer above `contracts` and below everything else
+
+**Date:** 2026-09-06 · **Status:** ACTIVE · **Chapter:** 17
+
+**Context.** Chapter 17 had to put patch generation somewhere. Three places were plausible: a fifth
+agent package, a module inside `codesheriff_engine`, or `apps/worker` beside the code that runs the
+agents.
+
+**Decision.** A new workspace member, `packages/patch` (`codesheriff_patch`), sitting directly above
+`codesheriff_contracts` in the `import-linter` layers and below `corpus`, `engine`, `storage` and
+both apps. A seventh contract forbids it from importing the four agents, either app, `httpx`,
+`githubkit` or `celery`.
+
+**Not a fifth agent.** `patch.hosted` emits no `Evidence` and is deliberately absent from
+`WITNESS_OF_AGENT`. It reads the finding the four witnesses produced, so it is maximally dependent
+on all of them; registering it would multiply a fifth factor into the odds product drawn from what
+the other four already said — the anchoring violation D-008 exists to prevent, wearing a different
+hat. Fusion refuses an unregistered `agent_id` (D-052), so the absence is enforced rather than
+merely intended.
+
+**Not inside the engine.** The engine is the layer §6 requires to be reproducible from a corpus hash
+with no credentials. A subsystem whose normal path calls a hosted model does not belong under that
+guarantee, and D-025's argument applies unchanged: the next person who needs a lookup adds one, and
+the property quietly stops being checkable.
+
+**Not inside `apps/worker`.** The verification ladder is the research contribution of this chapter
+and has to be testable on its own — against a scripted model, with no key, no quota, no database and
+no interpreter. Code that lives beside a Celery app and a GitHub client acquires them.
+
+The layer position is the whole statement about what a patcher may know: a `ChangeUnit`, a CWE, and
+nothing about fusion, the corpus, the database or GitHub. `codesheriff_storage` sits above it
+because `mapping.to_patch_proposal_row` writes a proposal's outcome; the patcher never reaches back.
+
+**Consequence.** The model arrives through a `PatchModel` protocol the package declares and
+`apps/worker` implements, and the witnesses arrive through `Rechecker` the same way — the split
+D-072 established for retrieval, for the same reason. `PatchConfig` reads `GEMINI_API_KEY` under the
+same names `SemanticConfig` does, because it is one credential per process (D-042) and not one per
+subsystem, but it reads it *itself* rather than through the agent's settings object: a subsystem
+that borrows another's configuration inherits its defaults by accident.
+
+---
+
+## D-093 — Three drafts, and a retry carries the rejection reasons, never the rejected draft
+
+**Date:** 2026-09-06 · **Status:** ACTIVE · **Chapter:** 17
+
+**Context.** "Draft → verify → retry" (PLAN.md Chapter 17) leaves two things unspecified: how many
+retries, and what a retry is told.
+
+**Decision.** `MAX_DRAFTS = 3`, including the first. Each attempt is drafted **fresh** from the same
+unit, with an accumulating list of CodeSheriff's own rejection reasons rendered *outside* the prompt
+sentinel. The rejected draft is never sent back.
+
+**Because the draft is untrusted text.** It is model output shaped by source the pull request author
+wrote. The whole prompt is built around one boundary — a per-request `secrets` sentinel with the
+unit inside it and instructions outside (D-066) — and feeding a previous completion back as context
+puts attacker-influenced text on the instruction side of that line. The rejection reasons are ours:
+they come from a closed set of check names and this system's own phrasings.
+
+**Because three is where iteration stops and search begins.** The reasons are specific enough to act
+on — "you changed the signature", "you referenced a name the file does not import" — so a second and
+third attempt are genuinely better informed. Beyond that, a loop that keeps going until something
+passes is selecting for a draft that satisfies the checks rather than one that repairs the code, and
+the checks are cheap enough that the difference would not show from outside. A finding with no
+verified draft after three publishes nothing.
+
+**A transport failure ends the loop immediately** and is recorded as `patcher_unavailable`, not
+`unverified`. The model was told nothing, so a second request would be byte-identical to the first;
+and `HostedLLMClient` already owns a bounded retry policy of its own (D-065), so repeating here
+multiplies one budget by the other — nine requests against a free tier for one finding, each with
+its own backoff. The two failures are also different facts: one is a patcher that could not run and
+the other is a repair this system rejected, the same distinction `Evidence` draws between an
+abstention and a silence (D-005).
+
+**Consequence.** `ProposalOutcome` has nine members and none of them is collapsed, because the pull
+request comment has to tell a reader which one happened. `NO_REPAIR_OFFERED` — the model returned
+the function unchanged — is not retried either: asking the same question again is not new
+information.
+
+---
+
+## D-094 — "Verified" never means the repository's test suite ran, because it never runs
+
+**Date:** 2026-09-06 · **Status:** ACTIVE · **Chapter:** 17 · **Resolves §7 open question 3**
+
+**Context.** §7 asked what "verified" means when a repository has no test suite, and PLAN.md Chapter
+17 listed "test-suite run where available" among the checks.
+
+**Decision.** **CodeSheriff does not run the repository's test suite, and the ladder does not change
+when one exists.** Verification is a fixed sequence of checks this system can perform against any
+repository: the patch parses, it preserves the signature its callers depend on, it references no
+name the file does not have, it changes something, and the deterministic witnesses re-examine the
+repaired function and report whether the weakness is still there.
+
+**Because "where available" is the dangerous half of the sentence.** Running a repository's suite
+means executing arbitrary code with its dependencies, its network and its filesystem — everything
+the Wasmtime sandbox exists to deny (§5, D-075), on a host holding the database credentials. D-076
+records that this repository has already shipped that shape twice. A ladder that degraded to "we ran
+their tests when they had some" would also report two different meanings of the same word depending
+on a property of the repository, and the stronger meaning would be the unsafe one.
+
+**A check has three outcomes, not two.** `passed`, `failed`, `not_run` — the same distinction D-005
+draws between silence and abstention, applied to verification. The runtime witness is unavailable on
+a machine with no WASI interpreter, and a suggestion published as "verified in a sandbox" on such a
+machine would claim an observation nobody made. Every published suggestion carries the whole ladder
+with its outcomes, so a reader can see which rungs were empty; `verified` additionally requires that
+at least one witness actually re-examined the patch, so four passing text checks over code nothing
+looked at is not enough.
+
+**A witness that never detected the weakness cannot certify its removal.** Its silence on the
+patched function is the same silence it gave the original. `regression:` rungs are emitted only by
+witnesses that detected the CWE *before* the patch; every witness contributes a `no_new_weakness:`
+rung. The suggestion body says which is which.
+
+**The semantic witness does not recheck.** Re-asking a hosted model whether the repair it drafted is
+a repair is the drafter's own family grading the drafter, and it is non-deterministic — the same
+draft would be publishable on one run and not on the next. `context.rag` is excluded for a different
+reason: its basis is the repository's merged history, which a proposed patch is not part of, so it
+would answer about the original function every time.
+
+**Consequence.** The published suggestion states, in the reviewer's own pull request, that this
+system did not run their tests and will not. That sentence is the answer to §7 question 3 delivered
+where it matters, rather than only in this file.
+
+---
+
+## D-095 — A suggestion is anchored inside `changed_lines`, or it is not published
+
+**Date:** 2026-09-06 · **Status:** ACTIVE · **Chapter:** 17
+
+**Context.** A GitHub suggested change is a review comment anchored to a run of lines on the head
+commit. GitHub rejects a review comment on a line outside a diff hunk, and D-048 records that this
+system deliberately never reads GitHub's `patch` field — so the hunks are not knowable.
+
+**Decision.** The repair is narrowed to the smallest contiguous run of lines whose replacement turns
+the original into the draft, and it is published **only if every line of that run is in
+`ChangeUnit.changed_lines`**. A verified repair that reaches outside is recorded `not_anchorable`,
+nothing is posted, and the pull request comment says why.
+
+**Because `changed_lines` is the only span known to be in the diff.** It comes from `difflib` over
+the two fetched blobs, which is what makes a corpus unit and a production unit the same kind of
+object (D-048). Context lines inside a hunk are also valid anchors, but which lines those are is
+exactly what reading `patch` would tell us — and reintroducing that field to make suggestions land
+more often would undo the reason it is absent. Posting on a guess is not free either: the API call
+fails at the end of an audit and the suggestion is lost with no record of what it said.
+
+**A fenced code block in the summary comment was considered and rejected.** To be useful it would
+have to carry the file path and the source, and the summary comment carries neither (D-050).
+
+**No re-drafting for a narrower repair.** Where a repair lands is a property of the pull request's
+diff, not of the draft's quality; re-drafting against it would be searching for a patch that fits
+the hunk rather than one that fixes the bug.
+
+**Anchoring works at all because of an accident of extraction that is worth stating.**
+`ChangeUnit.post_src` is built by joining *whole lines* of the head file, so line `i` of `post_src`
+is byte-identical to line `start_line + i` in the file, leading indentation included. The
+replacement lines therefore need no re-indentation and the file need not be fetched again. It also
+means `post_src` does not parse on its own, which is why every parse in this package dedents first.
+
+**Unlike the summary comment, a review comment is never edited in place.** D-034's one-comment rule
+exists because a developer who pushes six times should get one summary that changes. A review
+comment is bound to a commit: the next push produces a new head SHA and a new anchor, GitHub marks
+the previous one outdated, and editing it would leave a suggestion pointing at code that has moved.
+
+---
+
+## D-096 — No model prose is published, so there is nothing to screen
+
+**Date:** 2026-09-06 · **Status:** ACTIVE · **Chapter:** 17
+
+**Context.** D-067 has `semantic_agent` screen model prose in `mapping.py` and drop
+instruction-shaped text rather than escaping it. A patcher that emitted a summary or a rationale
+would need the same pass.
+
+**Decision.** The response schema carries exactly one field — the repaired function. No summary, no
+rationale, no title, no confidence. What the reviewer sees is the suggestion block, the diff it
+makes, and CodeSheriff's own account of which checks it survived.
+
+**Because the correct amount of untrusted prose to publish is none.** D-078 reached the same place
+from the other direction: the runtime witness needs no screening pass because every published word
+comes from `sinks.py` and the agent's own verbs. A patch explains itself by being applied — the
+reviewer is looking at the code, which is the thing under discussion. Model prose here would add
+nothing the diff does not show while creating a channel that has to be defended.
+
+Two guards remain on the one field that is published. A response repeating the request sentinel is
+discarded outright: the sentinel is random per request and no source file can contain it, so its
+presence means something in the file was trying to look like the frame around it. And a response
+that is not the requested JSON object is refused rather than re-parsed as loose code — a fallback
+parser would be reached the first time the model wandered, and it would extract something from
+output that had stopped following instructions, which is precisely what an injection produces.
+
+---
+
+## D-097 — The patch is hashed, not stored
+
+**Date:** 2026-09-06 · **Status:** ACTIVE · **Chapter:** 17
+
+**Context.** `patch_proposals` records what the patcher did about each alert-worthy finding. Storing
+the repaired function alongside would make the dashboard able to show it.
+
+**Decision.** The row holds `patch_sha256` and nothing of the source. The repaired function lives in
+memory for as long as it takes to post a suggestion, and nowhere else.
+
+**Because §6 keeps source out of the database, and a patch is a harder case than the code under
+review, not an easier one.** `to_change_unit_row` hashes `post_src` because it is somebody else's
+file; a patch is somebody else's file *with our edit in it*. If it was published it already lives in
+the pull request, under the control of the person who owns it. A copy here would be a second,
+uncontrolled one — retained after they delete the branch, and readable by anyone with the database.
+The digest answers the only question a row has to: whether two audits proposed the same repair.
+
+**A row exists for every alert-worthy finding, including the ones that produced no suggestion.** A
+table holding only the successes would report "the function was over the size budget so nothing was
+requested" and "three repairs were drafted and every one failed a check" as the same silence, and
+only the second is a defect report waiting to be written into `DEFECTS.md`. `checks` stores the
+ladder as the run performed it, for the reason `findings.contributions` is stored (D-090): a rung's
+outcome is a property of the run, and re-deriving it later would judge an old proposal by today's
+witnesses. NULL means no draft reached verification, and the CHECK keeps an empty array and the JSON
+scalar `null` out — the same three-state discipline, found the same way.
+
+**`published` is a fact about GitHub, not about the patch.** A verified, anchorable repair that the
+API refused is `verified` and unpublished: this system failing rather than the repair failing, and
+the two must not be collapsed. A failure to post is written to the row and never raised — the
+audit's summary comment is worth more than any one suggestion.
+
+**Consequence, stated rather than left implicit.** Nothing on the dashboard reads this table yet.
+Chapter 17's scope is generation and verification, and the place a suggestion is consumed is the
+pull request, where it already appears. The row is the audit record; surfacing it is a small read
+route and a panel on the finding page, and it is named here so it is a known gap rather than a
+silent one.

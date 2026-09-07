@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-022-template-delete-safe",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "d7d86242e19a60f6",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

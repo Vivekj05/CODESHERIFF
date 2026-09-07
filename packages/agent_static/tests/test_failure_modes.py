@@ -23,7 +23,10 @@ def test_unsupported_language_abstains() -> None:
 
     assert len(results) > 0
     abstentions = [e for e in results if e.kind is EvidenceKind.ABSTENTION]
-    assert any(e.reason == "unsupported_language" for e in abstentions)
+    # `language_not_modelled` since Chapter 10, and the rename carries the distinction: the engine
+    # does not merely lack rules for COBOL, it has no model of the language at all. JavaScript now
+    # takes the same path rather than being analysed with Python-shaped assumptions.
+    assert any(e.reason == "language_not_modelled" for e in abstentions)
     # Never SILENCE: the agent could not read this language at all, so it has no
     # opinion to offer. Silence here would be counted as reassurance (D-005).
     assert not any(e.kind is EvidenceKind.SILENCE for e in results)

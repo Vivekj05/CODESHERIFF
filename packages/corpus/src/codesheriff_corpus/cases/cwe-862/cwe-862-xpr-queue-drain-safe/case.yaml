@@ -1,0 +1,18 @@
+case_id: cwe-862-xpr-queue-drain-safe
+pair_id: cwe-862-xpr-queue-drain
+label: safe
+cwe: CWE-862
+file: app/jobs/queue.py
+symbol: drain_dead_letters
+start_line: 37
+decorators: ['@bp.post("/jobs/dead-letters/drain")', '@admin_required']
+imports: [flask.jsonify]
+precedent:
+  - pr_number: 95
+    file: app/jobs/legacy_queue.py
+    qualified_symbol: drain_dead_letters
+    source: 95-drain_dead_letters.py
+rationale: >-
+  The same move with the decorator carried across, against the same single precedent
+  record. An agent that fires here has concluded that moving a function is itself a
+  regression.

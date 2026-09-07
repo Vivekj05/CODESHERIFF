@@ -1,0 +1,12 @@
+case_id: cwe-639-invoice-fetch-safe
+pair_id: cwe-639-invoice-fetch
+label: safe
+cwe: CWE-639
+file: app/billing/views.py
+symbol: get_invoice
+start_line: 30
+imports: [flask.jsonify]
+rationale: >-
+  The caller's account is part of the query, so an id belonging to another tenant simply
+  does not match and the request 404s. Ownership is enforced in the lookup rather than
+  checked after it, which leaves no window in which the wrong row is loaded.

@@ -1,0 +1,23 @@
+case_id: cwe-639-xpr-report-share-safe
+pair_id: cwe-639-xpr-report-share
+label: safe
+cwe: CWE-639
+file: app/reports/service.py
+symbol: share_report
+enclosing_class: ReportService
+start_line: 118
+decorators: []
+imports: [app.reports.models.Report]
+precedent:
+  - pr_number: 126
+    file: app/reports/service.py
+    qualified_symbol: ReportService.get_report
+    source: 126-get_report.py
+  - pr_number: 133
+    file: app/reports/service.py
+    qualified_symbol: ReportService.delete_report
+    source: 133-delete_report.py
+rationale: >-
+  The same method with assert_owner in the position its siblings put it, immediately
+  after the lookup. Everything else is unchanged, so an agent that fires on both has
+  keyed on the word share rather than on the missing guard.

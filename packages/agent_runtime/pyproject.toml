@@ -1,13 +1,33 @@
-[project]
-name = "codesheriff-agent-runtime"
-version = "0.1.0"
-description = "Runtime agent: Wasmtime + WASI software fault isolation"
-requires-python = ">=3.12"
-dependencies = ["codesheriff-contracts", "pydantic>=2.7.0"]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[project]
+name = "codesheriff-agent-runtime"
+version = "0.2.0"
+description = "Runtime agent: Wasmtime + WASI software fault isolation"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "codesheriff-contracts",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.0",
+    # Declared here, not only in the root requirements. AUDIT.md 3.8 is what happens when an
+    # agent's analysis silently depends on something its own package does not ask for.
+    # Wasmtime is not optional infrastructure for this agent: it IS the agent. There is no
+    # second execution backend to fall back to, deliberately (D-076).
+    "wasmtime>=25.0.0",
+    "typer>=0.12.0",
+]
+
+[project.scripts]
+runtime-agent = "agent_runtime.cli:app"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_runtime"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+# ruff and mypy are configured once, in the workspace root pyproject.toml (D-023).

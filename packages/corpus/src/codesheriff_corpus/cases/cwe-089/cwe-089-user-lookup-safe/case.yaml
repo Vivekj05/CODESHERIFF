@@ -1,0 +1,12 @@
+case_id: cwe-089-user-lookup-safe
+pair_id: cwe-089-user-lookup
+label: safe
+cwe: CWE-89
+file: app/api/users.py
+symbol: get_user
+start_line: 42
+imports: [flask.request, app.db.cursor]
+rationale: >-
+  The same untrusted value reaches the same execute call, but as a bound parameter rather
+  than as text: the driver sends the statement and the value separately, so the value can
+  never be parsed as SQL. This is a property of the call, not a sanitizer on the value.

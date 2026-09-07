@@ -1,14 +1,36 @@
+# Where untrusted data enters a unit.
+#
+# `match` is a regex tested with `match` (prefix) against the text of an *expression node* —
+# an attribute access, a call, or a subscript — so `request.args` matches
+# `request.args.get("id", "")` and `request.data` matches `request.data["plan"]`.
+#
+# **Every parameter of the analysed function is also a source**, and that is not in this file
+# because it is not a pattern. See `defuse.PARAMETER_ORIGIN`. The unit of analysis is one
+# function; anything crossing that boundary comes from code this analysis cannot see, so the
+# conservative reading is that it is attacker-influenced until something in the function proves
+# otherwise. Nine of the thirteen calibration cases the taint engine is expected to detect depend
+# on it — `search(self, term)`, `serve_avatar(request, filename)`, `fetch(self, target)` — and
+# none of them mentions a request object at all.
+#
+# `self` and `cls` are excluded: they are the receiver, not an argument.
+
 python:
-  - id: flask.request.args
-    match: "request\\.(args|form|json|values|cookies)"
-    cwe_hint: injection
-  - id: os.environ
-    match: "os\\.environ"
-    cwe_hint: injection
-  - id: sys.argv
-    match: "sys\\.argv"
-    cwe_hint: injection
-javascript:
-  - id: express.req
-    match: "req\\.(query|body|params|headers)"
-    cwe_hint: injection
+  - id: http.flask_request
+    match: "request\\.(args|form|values|cookies|headers|data|files|json|stream)"
+
+  - id: http.flask_get_json
+    match: "request\\.get_json"
+
+  - id: http.django_request
+    match: "request\\.(GET|POST|FILES|META|body|COOKIES)"
+
+  - id: http.starlette_request
+    match: "request\\.(query_params|path_params|form|body)"
+
+# `os.environ` and `sys.argv` are deliberately NOT sources.
+#
+# Both are operator-controlled rather than attacker-controlled: whoever sets an environment
+# variable on the process already holds the privileges any sink here would grant them, so a flow
+# from one to a shell is a deployment decision and not a vulnerability. Treating them as untrusted
+# is a well-known false-positive source, and the corpus agrees — the *safe* member of
+# `cwe-798-warehouse-connect` reads its DSN from `os.environ` precisely because that is the fix.

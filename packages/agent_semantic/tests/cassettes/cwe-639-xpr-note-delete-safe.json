@@ -1,0 +1,10 @@
+{
+  "case_id": "cwe-639-xpr-note-delete-safe",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_fingerprint": "563a10da872a0572",
+  "samples": [
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}",
+    "{\n  \"findings\": []\n}"
+  ]
+}

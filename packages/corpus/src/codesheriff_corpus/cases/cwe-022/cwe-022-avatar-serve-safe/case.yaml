@@ -1,0 +1,12 @@
+case_id: cwe-022-avatar-serve-safe
+pair_id: cwe-022-avatar-serve
+label: safe
+cwe: CWE-22
+file: app/media/files.py
+symbol: serve_avatar
+start_line: 17
+imports: [os, flask.send_file, flask.abort, werkzeug.utils.secure_filename]
+rationale: >-
+  The same new route, but secure_filename strips directory separators and parent
+  references before the join, and returns an empty string for input that reduces to
+  nothing, which is rejected. The value reaching os.path.join is a bare filename.

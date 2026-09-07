@@ -1,0 +1,12 @@
+case_id: cwe-094-notification-template-safe
+pair_id: cwe-094-notification-template
+label: safe
+cwe: CWE-94
+file: app/notifications/render.py
+symbol: render_notification
+start_line: 31
+imports: [jinja2.Template]
+rationale: >-
+  Templates are loaded by name from a fixed mapping the application ships, so the source
+  compiled by Jinja is always author-written. The untrusted value is a key, and an
+  unknown key raises. The Template import is retained, so import-keyed rules see both.

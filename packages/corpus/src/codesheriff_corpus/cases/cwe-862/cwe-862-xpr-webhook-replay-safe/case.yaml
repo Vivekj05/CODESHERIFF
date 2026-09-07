@@ -1,0 +1,22 @@
+case_id: cwe-862-xpr-webhook-replay-safe
+pair_id: cwe-862-xpr-webhook-replay
+label: safe
+cwe: CWE-862
+file: app/internal/webhooks.py
+symbol: replay_delivery
+start_line: 88
+decorators: ['@bp.post("/internal/webhooks/<int:delivery_id>/replay")', '@requires_scope("internal")']
+imports: [flask.jsonify, flask.request]
+precedent:
+  - pr_number: 204
+    file: app/internal/webhooks.py
+    qualified_symbol: list_deliveries
+    source: 204-list_deliveries.py
+  - pr_number: 219
+    file: app/internal/jobs.py
+    qualified_symbol: cancel_job
+    source: 219-cancel_job.py
+rationale: >-
+  The same replay endpoint with the requires_scope decorator applied, against the same
+  history. The body is byte-identical, so the pair isolates the decorator and nothing
+  else.

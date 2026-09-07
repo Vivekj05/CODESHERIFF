@@ -6,6 +6,7 @@ import logging
 
 from codesheriff_contracts import IN_SCOPE_CWES, Artifact, ChangeUnit, Evidence
 from semantic_agent.schema import LLMFinding
+from semantic_agent.screening import screen, screen_all
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,19 @@ class HallucinationGate:
         return True, None
 
 
+def _structured_summary(finding: LLMFinding) -> str:
+    """What a finding says using only fields the gate has already validated.
+
+    The fallback when screening rejects the prose. `sink_expression` is safe to quote because
+    `HallucinationGate` has checked it appears verbatim in `post_src` — it is the author's code,
+    but it is code that is genuinely there, which is the claim being made.
+    """
+    return (
+        f"{finding.cwe} at `{finding.sink_expression[:120]}` — severity {finding.severity}, "
+        f"exploitability {finding.exploitability}. The model's own wording was withheld."
+    )
+
+
 def map_finding_to_evidence(
     finding: LLMFinding,
     unit: ChangeUnit,
@@ -66,22 +80,49 @@ def map_finding_to_evidence(
     raw_score: float = 1.0,
     confidence: float = 1.0,
 ) -> Evidence:
-    """Convert a validated LLMFinding into a canonical Evidence payload."""
+    """Convert a validated LLMFinding into a canonical Evidence payload.
+
+    **Every piece of model prose is screened here** (`AUDIT.md` 0.4). This is the only place an
+    `LLMFinding` becomes an `Evidence`, so no path from the model to a stored record, a pull
+    request comment or the dashboard skips it.
+
+    Screening is not merely escaping. Prose that reads as an instruction to whoever sees it next is
+    dropped entirely and replaced by `_structured_summary`, because sanitising an injection attempt
+    would still echo it. The finding itself survives either way: whether the code is vulnerable
+    does not depend on how the model chose to describe it.
+    """
     f_key = unit.key_for(finding.cwe)
 
-    explanation = (
-        f"{finding.title} ({finding.cwe}): {finding.rationale} "
-        f"Intent: {finding.functional_intent} Violates: {finding.violated_safety_invariant}"
-    )
+    title = screen(finding.title, field="title", max_length=120)
+    rationale = screen(finding.rationale, field="rationale")
+    intent = screen(finding.functional_intent, field="functional_intent")
+    invariant = screen(finding.violated_safety_invariant, field="violated_safety_invariant")
+    sources = screen_all(finding.untrusted_data_sources, field="untrusted_data_sources")
+
+    screened_out = [r for r in (title, rationale, intent, invariant) if r.rejected]
+    if screened_out:
+        logger.warning(
+            "Screening rejected %s on a %s finding in %s; reporting from validated fields only.",
+            ", ".join(sorted({r.reason for r in screened_out})),
+            finding.cwe,
+            unit.file,
+        )
+        explanation = _structured_summary(finding)
+    else:
+        explanation = (
+            f"{title.text} ({finding.cwe}): {rationale.text} "
+            f"Intent: {intent.text} Violates: {invariant.text}"
+        ).strip()
 
     artifacts = [
         Artifact(
             artifact_type="semantic_intent",
             content={
-                "functional_intent": finding.functional_intent,
-                "untrusted_data_sources": finding.untrusted_data_sources,
-                "violated_safety_invariant": finding.violated_safety_invariant,
+                "functional_intent": intent.text,
+                "untrusted_data_sources": sources,
+                "violated_safety_invariant": invariant.text,
                 "exploitability": finding.exploitability,
+                "prose_screened": bool(screened_out),
             },
         ),
         Artifact(

@@ -3,11 +3,21 @@ name = "codesheriff-corpus"
 version = "0.1.0"
 description = "Labelled corpus with committed, immutable splits"
 requires-python = ">=3.12"
-dependencies = ["codesheriff-contracts", "pydantic>=2.7.0"]
+dependencies = [
+    "codesheriff-contracts",
+    "pydantic>=2.7.0",
+    "pyyaml>=6.0",
+    "typer>=0.12.0",
+]
+
+[project.scripts]
+codesheriff-corpus = "codesheriff_corpus.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
+# Ships `cases/` too: the corpus must be loadable from an installed wheel, not
+# only from a source checkout, or `corpus_hash` means nothing off this machine.
 packages = ["src/codesheriff_corpus"]

@@ -1,0 +1,13 @@
+case_id: cwe-022-avatar-serve-vuln
+pair_id: cwe-022-avatar-serve
+label: vulnerable
+cwe: CWE-22
+file: app/media/files.py
+symbol: serve_avatar
+start_line: 17
+imports: [flask.send_file]
+detectable_by: [structural.taint, structural.semgrep, semantic.hosted, runtime.sfi]
+rationale: >-
+  A newly added route that concatenates a URL path segment onto UPLOAD_DIR and serves
+  the result. String concatenation applies no normalisation at all, so ../../etc/passwd
+  is served as readily as a filename. There is no pre-image; the whole function is new.

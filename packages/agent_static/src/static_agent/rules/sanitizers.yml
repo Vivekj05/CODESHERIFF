@@ -1,17 +1,73 @@
+# Calls that make a tainted value safe, and **for which sink classes**.
+#
+# `clears` is a list of sink classes and it is actually read (AUDIT.md 3.4). Escaping HTML does
+# not make a shell command safe. Until Chapter 10 any sanitizer matching any line between a source
+# and a sink suppressed the finding whatever either of them was, so an `html.escape` call anywhere
+# in a function silenced its `os.system`.
+#
+# `clears: [all]` means every class — the value stops being a string the attacker controls at all.
+#
+# `sql.parameterized` is **not here**, and must never come back. Passing parameters separately is
+# a property of the `execute` call, modelled as `args: [0]` on the sink (AUDIT.md 3.5, §5). As a
+# sanitizer it cleared taint for the whole function, so one safe `execute(q, (uid,))` excused
+# every vulnerable `execute(f"...{x}")` after it.
+
 python:
-  - id: sql.parameterized
-    match: "execute\\([^,]+,\\s*[\\(\\[]"
-    clears: [injection]
-  - id: shlex.quote
-    match: "shlex\\.quote"
-    clears: [command]
+  # ---- type coercion: the largest single false-positive reducer (§5, AUDIT.md 3.6) ------------
+  - id: coerce.numeric
+    match: "int|float|complex|round|len|abs|bool"
+    clears: [all]
+    # An `int()` that returns has returned an integer. There is no string left to inject with, so
+    # this clears every class rather than one. The previous rule set had no type coercion at all,
+    # which §5 names as "the largest false-positive source without them".
+
+  - id: coerce.identifier
+    match: "(uuid\\.UUID|UUID|ObjectId|bson\\.ObjectId)"
+    clears: [all]
+
+  - id: coerce.enum
+    match: "(datetime\\.(datetime|date)\\.(fromisoformat|strptime)|Decimal|ipaddress\\.ip_address)"
+    clears: [all]
+
+  # ---- escaping and quoting ------------------------------------------------------------------
   - id: html.escape
-    match: "(html\\.escape|markupsafe\\.escape)"
+    match: "(html\\.escape|markupsafe\\.escape|escape|bleach\\.clean|conditional_escape)"
     clears: [xss]
-  - id: path.safe_join
-    match: "(werkzeug\\.utils\\.secure_filename|os\\.path\\.basename)"
+
+  - id: html.format_html
+    match: "(format_html|render_to_string)"
+    clears: [xss]
+    # `format_html("<b>{}</b>", value)` escapes each argument as it interpolates, which is exactly
+    # the difference between the two members of `cwe-079-search-summary`.
+
+  - id: shell.quote
+    match: "(shlex\\.quote|pipes\\.quote)"
+    clears: [command]
+    # Not a bare `quote`: `urllib.parse.quote` would match it, and percent-encoding a string does
+    # not make it safe to hand to a shell.
+
+  - id: path.secure_filename
+    match: "(secure_filename|werkzeug\\.utils\\.secure_filename)"
     clears: [path]
-javascript:
-  - id: encodeURIComponent
-    match: "encodeURIComponent"
-    clears: [xss]
+
+  - id: path.basename
+    match: "(os\\.path\\.basename|basename|PurePath\\(.*\\)\\.name)"
+    clears: [path]
+
+  - id: url.quote
+    match: "(urllib\\.parse\\.quote|quote_plus|urlencode|encodeURIComponent)"
+    clears: [xss, path]
+    # Percent-encoding stops a value being read as path segments or markup. It does **not** make a
+    # URL safe to fetch — an encoded `http://169.254.169.254/` is still that address — so `ssrf` is
+    # deliberately not in this list.
+
+  # ---- allowlists ----------------------------------------------------------------------------
+  - id: allowlist.mapping_lookup
+    match: "[A-Z][A-Z0-9_]{2,}\\.get|[A-Z][A-Z0-9_]{2,}\\.__getitem__"
+    clears: [all]
+    # `SORT_COLUMNS.get(request.args.get("sort"))` returns a value the *program* chose, not one the
+    # attacker supplied — the attacker only picked which of them. The screaming-snake-case receiver
+    # is the signal that the mapping is a module constant rather than attacker-influenced data.
+    #
+    # This is what separates the members of `cwe-089-order-sort`, where both twins pass parameters
+    # separately and both build the ORDER BY clause with an f-string.

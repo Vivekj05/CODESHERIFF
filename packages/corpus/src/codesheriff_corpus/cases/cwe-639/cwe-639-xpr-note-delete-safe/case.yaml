@@ -1,0 +1,21 @@
+case_id: cwe-639-xpr-note-delete-safe
+pair_id: cwe-639-xpr-note-delete
+label: safe
+cwe: CWE-639
+file: app/notes/views.py
+symbol: delete_note
+start_line: 72
+decorators: ['@bp.delete("/notes/<int:note_id>")', '@require_owner']
+imports: [flask.jsonify]
+precedent:
+  - pr_number: 141
+    file: app/notes/views.py
+    qualified_symbol: get_note
+    source: 141-get_note.py
+  - pr_number: 152
+    file: app/notes/views.py
+    qualified_symbol: update_note
+    source: 152-update_note.py
+rationale: >-
+  The same delete endpoint with require_owner, matching its two merged siblings.
+  Identical body, identical history, so the pair isolates the ownership check.

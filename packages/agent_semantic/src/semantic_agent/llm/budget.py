@@ -16,11 +16,25 @@ MODEL_PRICING = {
 
 
 class BudgetTracker:
-    """Pre-call USD budget tracker and cumulative cost monitor."""
+    """Pre-call USD budget tracker for **one ChangeUnit**.
+
+    The ceiling is per unit, and `reset()` is what makes that true. One `SemanticAgent`
+    analyses every unit in an audit — `load_agents` runs once and `analyse_unit` runs per
+    unit — so a tracker that accumulated for the life of the agent would enforce a per-process
+    budget wearing a per-unit name: the first few units would be analysed and every unit after
+    them would abstain `budget_exceeded`, in a pull request that touched a dozen functions.
+
+    Found by the Chapter 14 harness, which analyses 46 corpus cases through one agent and
+    reported "Budget reached after 0 of 3 samples" on the last thirty of them.
+    """
 
     def __init__(self, budget_usd_per_unit: float = 0.05) -> None:
         self.budget_usd_per_unit = budget_usd_per_unit
         self.spent_usd: float = 0.0
+
+    def reset(self) -> None:
+        """Start a new unit. Called by `SemanticAgent.analyze`, once, before sampling."""
+        self.spent_usd = 0.0
 
     def estimate_cost(
         self, prompt_tokens: int, completion_tokens: int, model: str = "gemini-1.5-flash"

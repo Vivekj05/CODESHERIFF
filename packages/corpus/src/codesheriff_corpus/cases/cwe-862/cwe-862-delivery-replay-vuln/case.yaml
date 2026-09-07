@@ -1,0 +1,13 @@
+case_id: cwe-862-delivery-replay-vuln
+pair_id: cwe-862-delivery-replay
+label: vulnerable
+cwe: CWE-862
+file: app/webhooks/admin.py
+symbol: replay_delivery
+start_line: 63
+imports: [flask.jsonify, flask.abort]
+detectable_by: [semantic.hosted, context.rag]
+rationale: >-
+  A newly exposed endpoint that re-sends a stored webhook delivery, with authentication
+  but no permission check at all. Replay is a privileged operation and every other
+  endpoint in this module gates it. Nothing flows anywhere; what is absent is a check.

@@ -1,0 +1,27 @@
+case_id: cwe-862-xpr-team-invite-vuln
+pair_id: cwe-862-xpr-team-invite
+label: vulnerable
+cwe: CWE-862
+file: app/teams/service.py
+symbol: invite_member
+enclosing_class: TeamService
+start_line: 142
+decorators: []
+imports: [app.teams.models.Invitation]
+detectable_by: [semantic.hosted, context.rag]
+precedent:
+  - pr_number: 87
+    file: app/teams/service.py
+    qualified_symbol: TeamService.remove_member
+    source: 87-remove_member.py
+  - pr_number: 103
+    file: app/teams/service.py
+    qualified_symbol: TeamService.change_role
+    source: 103-change_role.py
+rationale: >-
+  A new method on a service class whose two other mutating methods were each merged
+  carrying the same permission_required decorator. Inviting a member with a role is a
+  membership mutation of the same kind, so the convention this repository established
+  covers it. Nothing inside the method body is wrong; the case is entirely about a
+  control the class has and this method does not, which no analysis of the unit in
+  isolation can see.

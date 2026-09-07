@@ -1,0 +1,12 @@
+case_id: cwe-094-rule-apply-safe
+pair_id: cwe-094-rule-apply
+label: safe
+cwe: CWE-94
+file: app/rules/engine.py
+symbol: apply_rule
+start_line: 66
+imports: []
+rationale: >-
+  The rule name selects from a fixed table of handlers the application ships, and an
+  unknown name raises rather than falling through. No user-supplied text is ever
+  compiled, so there is no code injection to defend against in the first place.

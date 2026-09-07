@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "codesheriff-contracts",
     "codesheriff-engine",
+    "codesheriff-patch",
     "codesheriff-storage",
     "codesheriff-agent-static",
     "codesheriff-agent-semantic",
@@ -13,7 +14,19 @@ dependencies = [
     "codesheriff-agent-runtime",
     "celery>=5.4.0",
     "redis>=5.0.0",
+    # auth-app brings the JWT signing needed to mint installation tokens.
+    "githubkit[auth-app]>=0.12.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.0",
+    "typer>=0.12.0",
+    # The precedent store's embedding model. Declared here, where it is used, and nowhere in an
+    # agent package: AUDIT.md 3.8 is what happened when an analysis silently depended on this
+    # library without asking for it, and answered with MD5 hashes when it was absent.
+    "sentence-transformers>=2.7.0",
 ]
+
+[project.scripts]
+codesheriff-worker = "codesheriff_worker.cli:app"
 
 [build-system]
 requires = ["hatchling"]

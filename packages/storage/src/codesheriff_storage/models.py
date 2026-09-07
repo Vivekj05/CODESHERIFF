@@ -70,12 +70,24 @@ class Base(DeclarativeBase):
 
 
 class AuditStatus(StrEnum):
-    """Lifecycle of one analysis run. Set by the worker, read by the dashboard."""
+    """Lifecycle of one analysis run. Set by the worker, read by the dashboard.
+
+    `SUPERSEDED` is a terminal state distinct from `FAILED` (D-039). A push to a PR branch abandons
+    the run for the previous head — its findings would describe code no longer at the head, and
+    D-034 requires it abandoned rather than finished. Recording that as a failure would put a red
+    mark on the dashboard for the single most ordinary thing a developer does, and would make the
+    error rate unreadable.
+    """
 
     QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    SUPERSEDED = "superseded"
+
+
+OPEN_AUDIT_STATUSES = (AuditStatus.QUEUED, AuditStatus.RUNNING)
+"""The non-terminal states. An audit in one of these can still be superseded."""
 
 
 class EvidenceKindDB(StrEnum):
@@ -104,6 +116,81 @@ _evidence_kind_enum = Enum(
     name="evidence_kind",
     values_callable=lambda enum_cls: [member.value for member in enum_cls],
 )
+
+
+class User(Base):
+    """One signed-in GitHub user. Identity only.
+
+    §6 puts multi-tenancy with billing out of scope, and this table is where that would creep in
+    first. There are no roles, no teams, no plans and no per-repository grants: what a user may see
+    is derived from GitHub at sign-in and held in their session, never stored as an ACL here
+    (D-035). A stored ACL is a copy of GitHub's answer that starts going stale immediately.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    """The GitHub user id — stable across renames, which `login` is not."""
+
+    login: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+    sessions: Mapped[list[Session]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class Session(Base):
+    """One signed-in browser session.
+
+    Two deliberate absences.
+
+    **No GitHub token is stored.** The OAuth access token is used once, at sign-in, to read the
+    user's identity and the installations they can see, and is then discarded. Nothing here can be
+    replayed against GitHub if this database leaks (D-036).
+
+    **The session token itself is not stored either** — only `token_sha256`. The cookie holds the
+    secret; the database holds a hash of it, so a database read does not hand over live sessions.
+    """
+
+    __tablename__ = "sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    token_sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    """SHA-256 of the opaque cookie value. Never the value itself."""
+
+    visible_installation_ids: Mapped[list[int]] = mapped_column(
+        ARRAY(BigInteger), nullable=False, default=list
+    )
+    """Installations this user could see at sign-in, from `GET /user/installations`.
+
+    A snapshot, and knowingly so: access granted or revoked on GitHub is reflected at the user's
+    next sign-in rather than immediately (D-035). The alternative — storing a GitHub credential to
+    re-ask on every request — trades a bounded staleness window for a permanent secret at rest.
+    """
+
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+    user: Mapped[User] = relationship(back_populates="sessions")
+
+    __table_args__ = (
+        Index("ix_sessions_expires_at", "expires_at"),
+        CheckConstraint("length(token_sha256) = 64", name="ck_sessions_token_hash_length"),
+        CheckConstraint("expires_at > created_at", name="ck_sessions_expiry_after_creation"),
+    )
 
 
 class Installation(Base):
@@ -221,6 +308,11 @@ class Audit(Base):
     pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
     base_sha: Mapped[str] = mapped_column(String(40), nullable=False)
     head_sha: Mapped[str] = mapped_column(String(40), nullable=False)
+
+    delivery_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    """`X-GitHub-Delivery` of the webhook that created this audit. Unique, so GitHub's at-least-once
+    redelivery cannot open a second run for work already queued (D-038). Nullable: an audit created
+    by any other route — a replay from the corpus, a manual re-run — has no delivery behind it."""
     status: Mapped[AuditStatus] = mapped_column(
         _audit_status_enum, nullable=False, default=AuditStatus.QUEUED
     )
@@ -420,10 +512,37 @@ class Finding(Base):
     line_numbers: Mapped[list[int]] = mapped_column(ARRAY(Integer), nullable=False, default=list)
     title: Mapped[str] = mapped_column(Text, nullable=False, default="")
     consensus_rationale: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    contributions: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    """The odds product, factor by factor, as the run computed it (Chapter 16).
+
+    One entry per witness in `WITNESSES` order, each carrying the stance, the ratio-table cell
+    it selected, the likelihood ratio read from that cell, and the backends that spoke. It is
+    stored rather than recomputed for the reason `alert_threshold` is: a finding must keep
+    explaining itself with the factors it actually used, and re-deriving the breakdown from
+    today's artifact would produce an explanation that contradicts the posterior beside it.
+
+    **NULL means not recorded, and is not the same as an empty breakdown.** Findings written
+    before this column existed have no factors to show, and a page that rendered them as "no
+    witness contributed" would be inventing a claim about a run that never made one — the same
+    silence-versus-abstention distinction the evidence rows are built on (D-005). The CHECK
+    keeps the ambiguous middle case, an empty array, out of the table.
+
+    `none_as_null=True` is load-bearing, not tidiness. Without it SQLAlchemy persists Python
+    `None` into a JSONB column as the JSON scalar `null`, which is a *value* — a third state
+    beside "recorded" and "not recorded", indistinguishable from the second in Python and from
+    neither in SQL. The CHECK rejects it, so the two states stay two.
+    """
+
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
 
     audit: Mapped[Audit] = relationship(back_populates="findings")
     calibration_run: Mapped[CalibrationRun | None] = relationship()
+    patch_proposal: Mapped[PatchProposalRow | None] = relationship(
+        back_populates="finding", cascade="all, delete-orphan", uselist=False
+    )
 
     __table_args__ = (
         UniqueConstraint("audit_id", "finding_key", name="uq_findings_audit_key"),
@@ -438,6 +557,115 @@ class Finding(Base):
         CheckConstraint(
             "is_alert_worthy = (posterior_probability >= alert_threshold)",
             name="ck_findings_alert_matches_threshold",
+        ),
+        CheckConstraint(
+            "contributions IS NULL OR (jsonb_typeof(contributions) = 'array' "
+            "AND jsonb_array_length(contributions) > 0)",
+            name="ck_findings_contributions_shape",
+        ),
+    )
+
+
+class PatchOutcomeDB(StrEnum):
+    """Mirror of `codesheriff_patch.ProposalOutcome` for the database enum.
+
+    Not the package enum itself, for the reason `EvidenceKindDB` is not the contract enum: a
+    Postgres enum type is part of the schema, and binding it directly would let a package edit
+    silently require a migration nobody wrote. `test_models.py` asserts the two sets are identical.
+    """
+
+    VERIFIED = "verified"
+    NOT_ANCHORABLE = "not_anchorable"
+    UNVERIFIED = "unverified"
+    NO_REPAIR_OFFERED = "no_repair_offered"
+    PATCHER_UNAVAILABLE = "patcher_unavailable"
+    UNIT_TOO_LARGE = "unit_too_large"
+    UNPARSEABLE_UNIT = "unparseable_unit"
+    DISABLED = "disabled"
+    NOT_ALERT_WORTHY = "not_alert_worthy"
+
+
+_patch_outcome_enum = Enum(
+    PatchOutcomeDB,
+    name="patch_outcome",
+    values_callable=lambda enum_cls: [member.value for member in enum_cls],
+)
+
+
+class PatchProposalRow(Base):
+    """What the patcher did about one finding, and what it did not do.
+
+    A row exists for **every** alert-worthy finding, including the ones that produced no
+    suggestion. "Three repairs were drafted and none survived the checks" and "the function was
+    over the size budget so none was requested" are different facts about this system, and a table
+    holding only the successes would report both as silence. The first is a defect report waiting
+    to be written into `DEFECTS.md`; the second is not.
+
+    **The patch itself is not here** (D-097). `patch_sha256` is the whole of it. §6 keeps source
+    out of the database, and a repaired function is somebody else's source with our edit in it —
+    a second uncontrolled copy of code whose author already controls the first. The place a patch
+    belongs is the pull request it was drafted for, and if it was published it is already there.
+    The digest is enough to answer the only question a row needs to: whether two audits proposed
+    the same repair.
+
+    **`published` is a fact about GitHub, not about the patch.** A verified, anchorable repair
+    that the API refused is `outcome = verified, published = false`, which is a failure of this
+    system rather than of the repair, and the two must not be collapsed.
+    """
+
+    __tablename__ = "patch_proposals"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    finding_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("findings.id", ondelete="CASCADE"), nullable=False
+    )
+    outcome: Mapped[PatchOutcomeDB] = mapped_column(_patch_outcome_enum, nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    drafts_requested: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    """How many times a model was asked. Zero for every outcome decided before drafting."""
+
+    checks: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    """The verification ladder as this run performed it: one entry per rung, with its name, its
+    status and its detail.
+
+    Stored rather than recomputed, for the reason `findings.contributions` is (D-090): a rung's
+    outcome is a property of the run, and re-deriving it later would judge an old proposal by
+    today's witnesses. NULL means no draft ever reached verification — a patcher that never ran
+    has no ladder, which is not the same as a ladder on which nothing passed.
+    """
+
+    patch_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    """SHA-256 of the repaired function. Present exactly when a repair was produced."""
+
+    published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    github_comment_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+
+    finding: Mapped[Finding] = relationship(back_populates="patch_proposal")
+
+    __table_args__ = (
+        UniqueConstraint("finding_id", name="uq_patch_proposals_finding"),
+        CheckConstraint("drafts_requested >= 0", name="ck_patch_proposals_drafts_non_negative"),
+        CheckConstraint(
+            "checks IS NULL OR (jsonb_typeof(checks) = 'array' AND jsonb_array_length(checks) > 0)",
+            name="ck_patch_proposals_checks_shape",
+        ),
+        CheckConstraint(
+            "patch_sha256 IS NULL OR patch_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_patch_proposals_sha_format",
+        ),
+        # Publishing something requires having something to publish. A published row with no
+        # digest would mean a suggestion nobody can identify was posted under this system's name.
+        CheckConstraint(
+            "published = false OR (patch_sha256 IS NOT NULL AND outcome = 'verified')",
+            name="ck_patch_proposals_published_has_a_patch",
+        ),
+        CheckConstraint(
+            "github_comment_id IS NULL OR published = true",
+            name="ck_patch_proposals_comment_implies_published",
         ),
     )
 
