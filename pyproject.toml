@@ -24,7 +24,23 @@ dev = [
 [tool.uv.workspace]
 members = ["packages/*", "apps/api", "apps/worker"]
 
+# PyTorch, CPU build only. `sentence-transformers` pulls torch, and on Linux the
+# default PyPI wheel drags ~2 GB of CUDA runtime with it (nvidia-cublas, -cudnn,
+# -curand, nvshmem and friends). CLAUDE.md is explicit that there is no dedicated
+# GPU here and that any fine-tuning has to fit a free Colab/Kaggle tier, so those
+# wheels are pure weight: nothing in this workspace can use them. It went unnoticed
+# because the Windows default wheel is already CPU-only — the cost only appears
+# when the corpus finally runs on Linux, which is where the fitted numbers come from.
+#
+# `explicit = true` keeps this index out of resolution for every other package;
+# only what names it below is drawn from it.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.uv.sources]
+torch = { index = "pytorch-cpu" }
 codesheriff-contracts = { workspace = true }
 codesheriff-corpus = { workspace = true }
 codesheriff-agent-static = { workspace = true }

@@ -23,6 +23,11 @@ dependencies = [
     # agent package: AUDIT.md 3.8 is what happened when an analysis silently depended on this
     # library without asking for it, and answered with MD5 hashes when it was absent.
     "sentence-transformers>=2.7.0",
+    # Declared explicitly, though sentence-transformers would pull it anyway, because a
+    # `tool.uv.sources` entry only reaches a *direct* dependency. Naming it here is what
+    # binds it to the CPU-only index in the workspace root; left transitive, Linux resolves
+    # the CUDA build and the corpus-run image grows by ~2 GB it can never use.
+    "torch>=2.2.0",
 ]
 
 [project.scripts]

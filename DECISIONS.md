@@ -2806,3 +2806,91 @@ Chapter 17's scope is generation and verification, and the place a suggestion is
 pull request, where it already appears. The row is the audit record; surfacing it is a small read
 route and a panel on the finding page, and it is named here so it is a known gap rather than a
 silent one.
+
+---
+
+## D-098 — Corpus runs happen in a pinned Linux image, which is not the sandbox
+
+**Date:** 2026-09-10 · **Status:** ACTIVE · **Chapter:** 18
+
+**Context.** `structural.semgrep` has no Windows build. Every observation behind the committed
+`calibration.json` was made on a Windows checkout, so the structural witness there has one backend
+behind it and the second abstained `tool_unavailable` on all 46 calibration units. `PLAN.md`
+Chapter 14 flags it, and Chapter 18 may not publish a structural number measured that way. Chapter
+18 also spends the single evaluation of the held-out split that §6 permits, so the run that counts
+needs a host where all four witnesses are live — and needs to be the *same* host twice, because
+ratios fitted under one set of tools and tested under another describe two different systems.
+
+**Decision.** `docker/corpus-run/Dockerfile` builds a Linux userland with Semgrep and Bandit in it,
+pinned: `python:3.12-slim-bookworm`, `uv==0.12.12`, the workspace resolved `--frozen` from
+`uv.lock`, `semgrep==1.176.1`, `bandit==1.9.4`. It is reached through a `corpus` compose profile,
+never by `docker compose up`. It has **no default CMD**: an image whose default command performs a
+measurement is one that eventually performs it by accident, and the test split may be measured once.
+
+**This is not the sandbox, and the distinction is the project's own.** §4 rejects Docker as the
+sandbox — a container is OS-level isolation, and the software-fault-isolation claim requires
+Wasmtime. Corpus cases still execute inside the WASI sandbox *within* this container, under the same
+fuel, wall-clock, memory and capability bounds. The interpreter is **mounted from the host, never
+baked into a layer**, so D-074's "fetched by a person, verified by digest" survives intact; the
+digest check runs in the container exactly as it does anywhere.
+
+**The venv lives at `/opt/venv`, outside the bind mount.** The repository is mounted at `/workspace`
+so that `calibration/observations/*.jsonl` and `calibration/responses/*.json` land on the host and
+can be committed. With the default location, that mount would shadow the image's interpreter with a
+Windows one full of `.pyd` files Linux cannot load. There is deliberately no named volume for it
+either: Docker seeds an empty one from the image and then keeps it, so a rebuilt image would go on
+running the dependencies of the old one — a stale-measurement bug that looks like nothing at all.
+
+**One thing is pinned only as far as the image, and it is written down rather than papered over.**
+`static_agent.config` asks for `p/security-audit` and `p/owasp-top-ten`, which Semgrep fetches from
+its registry. The build warms them in, so every run from one image sees identical rules — but a
+rebuild months later fetches whatever the registry serves then. Vendoring the YAML would close it
+and carries a redistribution question worth deciding deliberately. Until then the rule that matters
+is: **do not fit the ratios from one image and evaluate the test split from another.** Record the
+image id with the run.
+
+---
+
+## D-099 — The committed default names the model the fit was measured with
+
+**Date:** 2026-09-10 · **Status:** ACTIVE · **Chapter:** 18
+
+**Context.** `SemanticConfig.model` defaulted to `gemini-3.5-flash`, and `.env.example` documented
+the same — the two agreed, and a test keeps them agreeing. But every response in
+`calibration/responses/` was recorded under `gemini-3.1-flash-lite`, and the `semantic.hosted`
+likelihood ratios in `calibration.json` describe that model. The only thing supplying it was an
+uncommitted `.env` line on one developer machine.
+
+**Decision.** Both the default and `.env.example` name `gemini-3.1-flash-lite`, the model the fit was
+measured with. Changing it means re-recording every split and re-fitting, and the docstring says so.
+
+**Because the failure mode is silent and lands exactly on the number the project is about.** D-064's
+pinning rule already forbids a `-latest` alias, for the reason that a model must not change between
+the run that fits the ratios and the runs scored against them. A committed default naming a
+*different* model than the recordings is the same defect arriving by a different route: a fresh
+checkout would record the held-out split under a witness whose ratios were never fitted, the run
+would succeed, nothing would raise, and the posterior would be wrong in a way no test could see.
+The artifact is the only source of a ratio (D-080, D-082); this makes the checkout the only source
+of the witness that ratio describes.
+
+---
+
+## D-100 — torch is pinned to the CPU index for the whole workspace
+
+**Date:** 2026-09-10 · **Status:** ACTIVE · **Chapter:** 18
+
+**Context.** `apps/worker` depends on `sentence-transformers` for the precedent store's embeddings.
+On Linux the default PyPI torch wheel pulls the CUDA runtime with it — `nvidia-cublas`, `-cudnn`,
+`-curand`, `nvshmem`, `triton` and the rest. The first corpus-run image came out at **9.15 GB**.
+
+**Decision.** The workspace root declares an `explicit = true` `pytorch-cpu` index and points `torch`
+at it, and `apps/worker` names `torch` as a direct dependency so the source entry actually reaches
+it — `tool.uv.sources` applies to direct dependencies only, and left transitive the override does
+nothing. The image is **2.63 GB**.
+
+**Because nothing here can use a GPU, by constraint rather than by accident.** `CLAUDE.md` states
+there is no dedicated GPU and that any fine-tuning must fit a free Colab or Kaggle tier. The CUDA
+wheels were never going to execute; they were several gigabytes of download on every rebuild of the
+one image the fitted numbers come from. It went unnoticed for so long because the Windows default
+wheel is already CPU-only — the cost is invisible on the machine the project is developed on, and
+appears only on the machine the measurements are made on.

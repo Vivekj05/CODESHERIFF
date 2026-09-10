@@ -42,6 +42,42 @@ services:
       timeout: 3s
       retries: 10
 
+  # The Linux host for a corpus run (Chapter 18). Not started by default:
+  # `docker compose up` is for Postgres and Redis, and this container exists to
+  # be exec'd into deliberately. Bring it up with
+  #   docker compose --profile corpus run --rm corpus-run
+  corpus-run:
+    profiles: ["corpus"]
+    build:
+      context: .
+      dockerfile: docker/corpus-run/Dockerfile
+    image: codesheriff-corpus-run:latest
+    container_name: codesheriff-corpus-run
+    volumes:
+      # The repository itself, read-write: `calibrate observe` writes JSONL into
+      # calibration/observations/ and `calibrate record` writes JSON into
+      # calibration/responses/, and both are committed artifacts that must land
+      # on the host, not in a discarded layer.
+      - .:/workspace
+      # Note there is deliberately NO volume for the venv. It lives at
+      # /opt/venv, outside the bind mount, so the Windows `.venv` inside the
+      # repository cannot shadow it. A named volume here would be worse than
+      # nothing: Docker seeds an empty one from the image and then keeps it, so
+      # a rebuilt image would go on running the dependencies of the old one.
+    environment:
+      # The semantic witness. The model is pinned rather than defaulted: the
+      # recorded calibration responses were made with gemini-3.1-flash-lite, and
+      # a test split recorded under a different model would be a different
+      # witness from the one whose likelihood ratios were fitted.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY in .env before a run}
+      SEMANTIC_MODEL: ${SEMANTIC_MODEL:-gemini-3.1-flash-lite}
+      SEMGREP_SEND_METRICS: "off"
+    working_dir: /workspace
+    # No command. What runs is typed by a person, once.
+    entrypoint: ["/bin/bash"]
+    stdin_open: true
+    tty: true
+
 volumes:
   postgres-data:
   redis-data:

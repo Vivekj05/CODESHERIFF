@@ -1324,9 +1324,37 @@ source files, `lint-imports` **7** contracts kept. The **178 `db`-marked tests w
 Postgres and pass**, and migration `0005` was applied, rolled back to `0004` and re-applied against
 a real database. Both frontend gates green, unchanged.
 
-## Chapter 18 — Evaluation and ablations ⬜
+## Chapter 18 — Evaluation and ablations 🔨
 
 **The research payload.** Held-out test run — **evaluated exactly once**.
+
+**Started: the measurement host.** The corpus can now be run somewhere all four witnesses are
+live. `docker/corpus-run/` builds a pinned Linux image with `semgrep==1.176.1` and
+`bandit==1.9.4` in it, reached through a `corpus` compose profile and carrying no default
+command (D-098). Verified inside it: the corpus hashes match the host exactly, the WASI sandbox
+loads its mounted interpreter and the digest checks out, and Semgrep runs 201 rules and produces
+**22 findings across 6 distinct vulnerable corpus cases** — so the second structural backend is
+real signal, not a formality.
+
+Three things were fixed on the way there, each of which would have corrupted a measurement:
+
+- **`uv.lock` was stale.** `codesheriff-patch` was absent entirely — Chapter 17 added the package
+  and never relocked — so `uv sync --all-packages --frozen` failed on any fresh checkout,
+  including CI and this image. Relocked; the diff is 22 additive lines with no version churn.
+- **The committed semantic default named the wrong model** (D-099). Both `config.py` and
+  `.env.example` said `gemini-3.5-flash`, while every recorded response — and therefore every
+  fitted `semantic.hosted` ratio — came from `gemini-3.1-flash-lite`, supplied only by an
+  uncommitted `.env`. A fresh checkout would have recorded the held-out split under a witness the
+  ratios were never fitted for, silently.
+- **torch pulled the CUDA runtime on Linux** (D-100), taking the image to 9.15 GB for code that
+  cannot use a GPU. Pinned to the CPU index: 2.63 GB.
+
+**Not yet done, and in this order.** Re-observe calibration and validation in the image and
+**re-fit** — the committed artifact describes a one-backend structural witness, and a test split
+scored against it would be measuring a system that no longer exists. Then the comparators, built
+and debugged against those two splits: majority voting, the anchored-vs-blind ablation, and the
+Semgrep/Bandit/single-LLM baselines. The test split is opened last, once, with the image id
+recorded beside the result.
 
 ECE, Brier score, reliability diagram. Fusion vs. majority voting. Anchored vs. blind execution as a
 labelled ablation. Baselines against Semgrep, Bandit, and a single-LLM reviewer.

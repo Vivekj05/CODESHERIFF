@@ -54,11 +54,18 @@ class SemanticConfig(BaseSettings):
     witness that had read nothing arguing, at a likelihood ratio below 1.0, that the code is safe
     (`AUDIT.md` 3.12)."""
 
-    model: str = Field(default="gemini-3.5-flash", alias="SEMANTIC_MODEL")
-    """Pinned, never a `-latest` alias.
+    model: str = Field(default="gemini-3.1-flash-lite", alias="SEMANTIC_MODEL")
+    """Pinned, never a `-latest` alias, and pinned to the model the fit was measured with.
 
     A floating alias can change the model between the run that fits the likelihood ratios and
     every run scored against them, which makes a calibration figure unreproducible (§6).
+
+    This default is not a preference. Every recorded response in `calibration/responses/` was
+    produced by `gemini-3.1-flash-lite`, and the `semantic.hosted` likelihood ratios in
+    `calibration.json` describe *that* witness. A checkout whose default named a different
+    model would record the held-out split under a witness the ratios were never fitted for,
+    and the mismatch would be invisible — the run would succeed and the numbers would be wrong.
+    Changing it means re-recording every split and re-fitting, not editing one line.
 
     Model names expire. `gemini-2.0-flash` was this default until the API began answering 404
     "no longer available", and `gemini-2.5-flash` is refused to keys created after it shipped —
