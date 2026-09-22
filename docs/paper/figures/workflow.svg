@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 1180" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="black"/>
+    </marker>
+  </defs>
+  <style>
+    .box { fill:white; stroke:black; stroke-width:1.6; }
+    .sub { fill:white; stroke:black; stroke-width:1.2; }
+    .lbl { font-size:15px; font-weight:700; text-anchor:middle; }
+    .sub-lbl { font-size:12.5px; font-weight:700; text-anchor:middle; }
+    .sub-sub { font-size:10.5px; text-anchor:middle; fill:#333; }
+    .edge { stroke:black; stroke-width:1.6; fill:none; marker-end:url(#arrow); }
+    .tag { font-size:12px; font-weight:700; text-anchor:middle; }
+    .cont-lbl { font-size:12px; font-weight:700; }
+  </style>
+
+  <!-- Row 1 -->
+  <rect class="box" x="15" y="15" width="190" height="64"/>
+  <text class="lbl" x="110" y="41">GitHub Pull</text>
+  <text class="lbl" x="110" y="60">Request</text>
+
+  <rect class="box" x="285" y="15" width="190" height="64"/>
+  <text class="lbl" x="380" y="41">Webhook +</text>
+  <text class="lbl" x="380" y="60">Orchestrator</text>
+
+  <rect class="box" x="555" y="15" width="190" height="64"/>
+  <text class="lbl" x="650" y="41">Change</text>
+  <text class="lbl" x="650" y="60">Extraction</text>
+
+  <path class="edge" d="M205,47 L285,47"/>
+  <path class="edge" d="M475,47 L555,47"/>
+
+  <!-- connector down from Change Extraction to agents container, centered -->
+  <path class="edge" d="M650,79 L650,100 L380,100 L380,118"/>
+
+  <!-- Agents container -->
+  <rect class="box" x="15" y="118" width="730" height="185" rx="4"/>
+  <text class="cont-lbl" x="30" y="138">Parallel Agent Analysis</text>
+
+  <rect class="sub" x="32" y="150" width="165" height="135"/>
+  <text class="sub-lbl" x="114" y="172">Static Agent</text>
+  <text class="sub-sub" x="114" y="192">Taint-flow analysis</text>
+  <text class="sub-sub" x="114" y="207">+ Semgrep rules</text>
+
+  <rect class="sub" x="215" y="150" width="165" height="135"/>
+  <text class="sub-lbl" x="297" y="172">Semantic Agent</text>
+  <text class="sub-sub" x="297" y="192">LLM reasoning,</text>
+  <text class="sub-sub" x="297" y="207">n=3 samples</text>
+
+  <rect class="sub" x="398" y="150" width="165" height="135"/>
+  <text class="sub-lbl" x="480" y="172">Context Agent</text>
+  <text class="sub-sub" x="480" y="192">pgvector retrieval</text>
+  <text class="sub-sub" x="480" y="207">of merged history</text>
+
+  <rect class="sub" x="581" y="150" width="165" height="135"/>
+  <text class="sub-lbl" x="663" y="172">Runtime Agent</text>
+  <text class="sub-sub" x="663" y="192">Wasmtime + WASI</text>
+  <text class="sub-sub" x="663" y="207">SFI sandbox</text>
+
+  <!-- connector down to fusion -->
+  <path class="edge" d="M380,303 L380,325"/>
+
+  <!-- Bayesian Inference Engine -->
+  <rect class="box" x="180" y="325" width="400" height="72"/>
+  <text class="lbl" x="380" y="356">Bayesian Inference Engine</text>
+  <text class="sub-sub" x="380" y="376">Likelihood-ratio fusion + Disagreement Index</text>
+
+  <path class="edge" d="M380,397 L380,425"/>
+
+  <!-- Decision diamond -->
+  <polygon class="box" points="380,425 520,505 380,585 240,505"/>
+  <text class="tag" x="380" y="498">Alert-worthy?</text>
+  <text class="sub-sub" x="380" y="515">P(V|E) &#8805; threshold</text>
+
+  <text class="tag" x="200" y="497">Yes</text>
+  <text class="tag" x="565" y="497">No</text>
+
+  <!-- Yes branch: left, down to Patch box -->
+  <path class="edge" d="M240,505 L120,505 L120,560"/>
+
+  <rect class="box" x="20" y="560" width="200" height="72"/>
+  <text class="lbl" x="120" y="590">Patch Generation +</text>
+  <text class="lbl" x="120" y="609">Verification</text>
+
+  <path class="edge" d="M120,632 L120,700 L300,700 L300,725"/>
+
+  <!-- No branch: right, straight down to merge -->
+  <path class="edge" d="M520,505 L650,505 L650,700 L460,700 L460,725"/>
+
+  <!-- Merge box -->
+  <rect class="box" x="210" y="725" width="340" height="80"/>
+  <text class="lbl" x="380" y="755">GitHub PR Comment +</text>
+  <text class="lbl" x="380" y="774">Dashboard</text>
+  <text class="sub-sub" x="380" y="793">(every audit, alerted or clean)</text>
+
+</svg>

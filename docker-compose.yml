@@ -22,7 +22,7 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       # Enables the extension on first boot. Alembic owns the schema itself.
-      - ./scripts/init-pgvector.sql:/docker-entrypoint-initdb.d/00-pgvector.sql:ro
+      - ./backend/scripts/init-pgvector.sql:/docker-entrypoint-initdb.d/00-pgvector.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U codesheriff -d codesheriff"]
       interval: 5s
@@ -50,7 +50,7 @@ services:
     profiles: ["corpus"]
     build:
       context: .
-      dockerfile: docker/corpus-run/Dockerfile
+      dockerfile: backend/docker/corpus-run/Dockerfile
     image: codesheriff-corpus-run:latest
     container_name: codesheriff-corpus-run
     volumes:

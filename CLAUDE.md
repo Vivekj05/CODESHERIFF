@@ -27,11 +27,11 @@ criteria**, not optional analysis.
 
 | Document | Status | Use for |
 |---|---|---|
-| `PROJECT_CONTEXT.md` | **AUTHORITATIVE** | The finalized design. §5 "Finalized Decisions" overrides everything else. |
-| `DECISIONS.md` | **AUTHORITATIVE**, living | Decisions taken since, each with its rationale. Append here as you go. |
-| `AUDIT.md` | Current | What the code actually does vs. what it should. The gap list. |
-| `PLAN.md` | Current | The roadmap: 18 chapters, one per session, with live status. **Start here each session.** |
-| `DEFECTS.md` | Current, living | One line per false positive / false negative, written as found. |
+| `docs/specs/PROJECT_CONTEXT.md` | **AUTHORITATIVE** | The finalized design. §5 "Finalized Decisions" overrides everything else. |
+| `docs/architecture/DECISIONS.md` | **AUTHORITATIVE**, living | Decisions taken since, each with its rationale. Append here as you go. |
+| `docs/architecture/AUDIT.md` | Current | What the code actually does vs. what it should. The gap list. |
+| `docs/roadmap/PLAN.md` | Current | The roadmap: 18 chapters, one per session, with live status. **Start here each session.** |
+| `docs/roadmap/DEFECTS.md` | Current, living | One line per false positive / false negative, written as found. |
 | `docs/history/**` | **SUPERSEDED — DO NOT BUILD FROM THESE** | Archived drafts, kept for provenance. See `docs/history/README.md`. |
 
 ### Why `docs/history/00-START-HERE.md` is dangerous

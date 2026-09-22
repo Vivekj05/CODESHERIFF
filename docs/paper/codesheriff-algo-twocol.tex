@@ -1,0 +1,168 @@
+\documentclass[conference,10pt]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{amsmath,amssymb}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[margin=0.62in]{geometry}
+
+\setlength{\abovedisplayskip}{3pt}
+\setlength{\belowdisplayskip}{3pt}
+\setlength{\abovedisplayshortskip}{2pt}
+\setlength{\belowdisplayshortskip}{2pt}
+\setlength{\textfloatsep}{5pt}
+
+\algrenewcommand\algorithmicrequire{\textbf{Input:}}
+\algrenewcommand\algorithmicensure{\textbf{Output:}}
+\algrenewcommand\alglinenumber[1]{\scriptsize#1:}
+
+\newcommand{\LRr}{\Lambda}
+\newcommand{\clampop}{\operatorname{clamp}}
+
+\pagestyle{empty}
+
+\begin{document}
+
+\begin{algorithm}[H]
+\caption{Bayesian Multi-Agent Vulnerability Detection}
+\label{alg:main}
+\small
+\begin{algorithmic}[1]
+\Statex \textbf{Input:}
+\Statex \quad $D$ : pull request diff
+\Statex \quad $R$ : repository context
+\Statex \quad $\mathcal{M}$ : agent models and rule sets
+\Statex \quad $\pi$ : prior probability of vulnerability
+\Statex \quad $\LRr$ : fitted likelihood-ratio table
+\Statex \quad $\tau_V,\tau_S$ : vulnerable / safe thresholds
+\Statex \quad $\tau_D$ : disagreement threshold
+\Statex \textbf{Output:}
+\Statex \quad $Y$ : final verdict
+\Statex \quad $P(V\mid E)$ : posterior vulnerability probability
+\Statex \quad $DI$ : inter-agent disagreement index
+\Statex \quad $F,Z$ : patch and verification status
+\Statex
+\State $C \gets \textsc{ExtractChangedCode}(D)$
+\State $C \gets \textsc{IdentifyModifiedFunctions}(C)$
+\State $X \gets \textsc{BuildAnalysisContext}(C,R)$
+\Statex
+\Statex \textit{// Heterogeneous evidence generation (agents run blind)}
+\State $e_S \gets \textsc{StaticAgent}(X,\mathcal{M}_S)$
+\State $e_M \gets \textsc{SemanticAgent}(X,\mathcal{M}_M)$
+\State $e_C \gets \textsc{ContextAgent}(X,\mathcal{M}_C)$
+\State $e_R \gets \textsc{RuntimeSFI}(X,\mathcal{M}_R)$
+\State $E \gets \{e_S,e_M,e_C,e_R\}$
+\Statex
+\Statex \textit{// Evidence cell and likelihood ratio, one per agent}
+\ForAll{$a \in \{S,M,C,R\}$}
+  \State $z_a \gets \textsc{Cell}(e_a)$ \Comment{Eq.~(6)}
+  \If{$e_a$ could not run}
+    \State $L_a \gets 1$ \Comment{no evidence $\Rightarrow$ no update}
+  \Else
+    \State $L_a \gets \clampop\bigl(\LRr_a[z_a]\bigr)$ \Comment{Eq.~(7)}
+  \EndIf
+\EndFor
+\Statex
+\Statex \textit{// Bayesian evidence fusion}
+\State $O \gets \pi \,/\, (1-\pi)$
+\State $O_{\mathrm{post}} \gets O \times L_S \times L_M \times L_C \times L_R$
+\State $P(V\mid E) \gets O_{\mathrm{post}} \,/\, (1+O_{\mathrm{post}})$
+\Statex
+\Statex \textit{// Inter-agent disagreement}
+\ForAll{$a \in \{S,M,C,R\}$}
+  \State $p_a \gets \pi L_a \,/\,\bigl(\pi L_a + 1 - \pi\bigr)$ \Comment{Eq.~(8)}
+\EndFor
+\State $\bar{p} \gets \tfrac{1}{4}\sum_a p_a$
+\State $DI \gets \sqrt{\tfrac{1}{4}\sum_a (p_a-\bar{p})^2}$
+\Statex
+\Statex \textit{// Final decision}
+\If{$P(V\mid E) \ge \tau_V$}
+  \State $Y \gets \textsc{Vulnerable}$
+\ElsIf{$P(V\mid E) \le \tau_S$}
+  \State $Y \gets \textsc{Safe}$
+\Else
+  \State $Y \gets \textsc{Uncertain}$
+\EndIf
+\If{$DI \ge \tau_D$}
+  \State $Y \gets \textsc{AttachUncertaintyFlag}(Y)$
+\EndIf
+\Statex
+\Statex \textit{// Remediation}
+\If{$Y = \textsc{Vulnerable}$}
+  \State $F \gets \textsc{PatchAgent}(C,E)$
+  \State $Z \gets \textsc{Verifier}(F,C)$
+\Else
+  \State $F \gets \varnothing$;\ \ $Z \gets \textsc{NotRequired}$
+\EndIf
+\Statex
+\State \Return $Y,\ P(V\mid E),\ DI,\ F,\ Z$
+\end{algorithmic}
+\end{algorithm}
+
+\section*{Per-Agent Evidence Equations}
+
+Each agent replies in one of three ways: \emph{found something} with a raw score $\varrho\in[0,1]$,
+\emph{ran and found nothing}, or \emph{could not run}. Each obtains its $\varrho$ as follows.
+
+\smallskip\noindent\textit{A. Static agent.}\ \ Taint starts at every parameter and follows the
+def--use graph $G_c$, which is the graph with all edges that sanitise class $c$ removed. A dangerous
+call is reported only if a real path $\pi$ from a parameter to it exists in $G_c$:
+\begin{equation}
+\begin{split}
+\varrho_S=\clampop_{[0,1]}\bigl(&0.45+\delta(d)-0.25\,\varsigma\\
+&-0.0125\,\ell(\pi)+0.15\,\nu-0.20\,\tau\bigr)
+\end{split}
+\end{equation}
+$\ell(\pi)=\min(\max(0,|\pi|-2),4)$; $\delta$ is $0.20$ for a critical call and $0.10$ for a high one;
+$\varsigma,\nu,\tau$ flag a partial sanitiser, a network-facing unit and a test file.
+
+\smallskip\noindent\textit{B. Semantic agent.}\ \ The model is queried $n=3$ times with different
+seeds, and the score is its agreement with itself:
+\begin{equation}
+\varrho_M=\frac{|\{\,i : \text{sample } i \text{ reports this weakness}\,\}|}{n}
+\end{equation}
+A finding is kept only if its class is in scope, its file is the unit's, the line it quotes appears
+verbatim, and its line numbers lie inside the unit:
+\begin{equation}
+\begin{split}
+\Gamma(\phi)=\ & [c(\phi)\in\mathrm{CWE}_{\mathrm{sc}}] \wedge [\mathrm{file}(\phi)=f]\ \wedge\\
+& [\mathrm{sink}(\phi)\sqsubseteq s^{+}] \wedge [\mathrm{lines}(\phi)\subseteq[1,L_u]]
+\end{split}
+\end{equation}
+
+\smallskip\noindent\textit{C. Context agent.}\ \ A control $\gamma$ is \emph{established} if the same
+function carried it in an earlier merge, or if two or more distinct retrieved functions use it. One
+established but missing from the new code gives
+\begin{equation}
+\varrho_C=b\cdot\min\!\Bigl(1,\ \bar{s}/0.85\Bigr)
+\end{equation}
+with $b=0.85$ when the same function carried $\gamma$ or three or more others do, else $b=0.65$, and
+$\bar{s}$ the mean similarity of the supporting excerpts.
+
+\smallskip\noindent\textit{D. Runtime agent.}\ \ The function runs once in a WebAssembly sandbox with
+no network and no environment, each parameter bound to a unique marker $t_i$, so taint is substring
+containment. An execution either happened or it did not:
+\begin{equation}
+\mathrm{tainted}(v)\iff \exists i:\ t_i \sqsubseteq v, \qquad \varrho_R = 0.85
+\end{equation}
+If the value reached the sink only after a check the sandbox could not evaluate, the agent replies
+\emph{could not run}.
+
+\smallskip\noindent\textit{E. Cells and fusion.}\ \ Scores map to four cells, each cell to one fitted
+ratio:
+\begin{equation}
+z_a=\begin{cases}
+\textsc{strong}\ (\varrho_a \ge 0.8), \ \ \textsc{medium}\ (0.5 \le \varrho_a < 0.8)\\
+\textsc{weak}\ (\varrho_a < 0.5), \ \ \ \ \textsc{none}\ (\text{ran, found nothing})
+\end{cases}
+\end{equation}
+\begin{equation}
+\LRr_a(z)=\frac{P(z_a\!=\!z \mid V)}{P(z_a\!=\!z \mid \neg V)}
+\approx\frac{(n_1(z)+\alpha)/(N_1+4\alpha)}{(n_0(z)+\alpha)/(N_0+4\alpha)}
+\end{equation}
+An agent that could not run contributes exactly $1$, so it cannot move the posterior. The probability
+behind the disagreement index is that agent's factor alone:
+\begin{equation}
+p_a=\pi L_a \,/\, \bigl(\pi L_a + 1 - \pi\bigr)
+\end{equation}
+
+\end{document}

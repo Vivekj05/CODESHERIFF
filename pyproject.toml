@@ -22,7 +22,7 @@ dev = [
 # See DECISIONS.md D-002.
 # ---------------------------------------------------------------------------
 [tool.uv.workspace]
-members = ["packages/*", "apps/api", "apps/worker"]
+members = ["backend/core/*", "backend/agents/*", "backend/api", "backend/worker"]
 
 # PyTorch, CPU build only. `sentence-transformers` pulls torch, and on Linux the
 # default PyPI wheel drags ~2 GB of CUDA runtime with it (nvidia-cublas, -cudnn,
@@ -54,7 +54,7 @@ codesheriff-storage = { workspace = true }
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-src = ["packages/*/src", "apps/*/src"]
+src = ["backend/core/*/src", "backend/agents/*/src", "backend/*/src"]
 # Never touch Markdown. `ruff format` reformats fenced Python blocks inside .md,
 # which silently rewrote the archived specs in docs/history/ — the provenance
 # record of how the design diverged from its implementation. Those files are
@@ -62,7 +62,7 @@ src = ["packages/*/src", "apps/*/src"]
 # Corpus case sources are data, not code (D-046). They are deliberately vulnerable
 # by construction, so linting them either fails the gate or pressures someone into
 # fixing the vulnerability the case exists to contain.
-extend-exclude = ["*.md", "docs/history/", "packages/corpus/src/codesheriff_corpus/cases/"]
+extend-exclude = ["*.md", "docs/history/", "backend/core/corpus/src/codesheriff_corpus/cases/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
@@ -95,18 +95,18 @@ mypy_path = [
     # The cassette harness lives in the semantic agent's tests because it is test infrastructure,
     # but `tools/record_cassettes.py` — which is checked — imports it. On the path so the import
     # resolves; still excluded from being checked itself by the `/tests/` rule above.
-    "packages/agent_semantic/tests",
-    "packages/contracts/src",
-    "packages/corpus/src",
-    "packages/agent_static/src",
-    "packages/agent_semantic/src",
-    "packages/agent_context/src",
-    "packages/agent_runtime/src",
-    "packages/engine/src",
-    "packages/patch/src",
-    "packages/storage/src",
-    "apps/api/src",
-    "apps/worker/src",
+    "backend/agents/semantic/tests",
+    "backend/core/contracts/src",
+    "backend/core/corpus/src",
+    "backend/agents/static/src",
+    "backend/agents/semantic/src",
+    "backend/agents/context/src",
+    "backend/agents/runtime/src",
+    "backend/core/engine/src",
+    "backend/core/patch/src",
+    "backend/core/storage/src",
+    "backend/api/src",
+    "backend/worker/src",
 ]
 
 [[tool.mypy.overrides]]
@@ -129,7 +129,7 @@ module = [
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-testpaths = ["packages", "apps"]
+testpaths = ["backend/core", "backend/agents", "backend/api", "backend/worker"]
 python_files = ["test_*.py"]
 # Several packages have a tests/test_agent.py. Under the default prepend import
 # mode those collide on module name; importlib mode keeps them distinct without

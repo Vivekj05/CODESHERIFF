@@ -58,7 +58,12 @@ Static  Semantic  Context  Runtime      ← blind, parallel, no shared state
               ▼
    Bayesian fusion → posterior per finding
               ▼
-   PR comment + dashboard
+   PR Comment & Dashboard Artifacts:
+   - Calibrated posterior with per-agent evidence breakdown (Detections, Silences, Abstentions)
+   - Dynamic Mermaid.js sequence diagrams for change execution flow
+   - Structured file-by-file walkthrough & engineering summary
+   - Verified patch suggestions anchored in diff
+   - Interactive web dashboard with RAG search and engineering analytics
 ```
 
 Evidence comes in three kinds. **Detection** raises the odds. **Silence** — an agent ran and found
@@ -74,30 +79,60 @@ Patches are **suggestions only** — the system never commits or merges.
 
 ## Stack
 
-Python 3.12 · uv workspace · FastAPI · Celery + Redis · PostgreSQL 16 + pgvector · SQLAlchemy +
-Alembic · tree-sitter · Semgrep · scikit-learn · sentence-transformers (`bge-small-en-v1.5`, local)
-· Gemini Flash free tier · Wasmtime + WASI · Next.js + TypeScript + Tailwind + shadcn/ui
+* **Backend**: Python 3.12 · uv workspace · FastAPI · Celery + Redis · PostgreSQL 16 + pgvector · SQLAlchemy + Alembic · tree-sitter · Semgrep · scikit-learn · sentence-transformers (`bge-small-en-v1.5`, local) · Gemini Flash free tier · Wasmtime + WASI
+* **Frontend & SaaS**: Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS 4 · Base UI / shadcn/ui · Pinecone (vector DB) & Google `text-embedding-004` · Octokit GitHub API · TanStack Query v5 · Recharts · Mermaid.js
 
 Zero recurring cost: free-tier LLM, local embeddings, self-hosted everything.
 
 ## Layout
 
 ```
-packages/
-  contracts/     The single shared contract. Never vendored.
-  corpus/        Labelled cases + committed immutable splits
-  agent_static/  agent_semantic/  agent_context/  agent_runtime/
-  engine/        Fusion, calibration
-apps/
+backend/
   api/           FastAPI: verify HMAC, enqueue, 202. No analysis.
   worker/        Celery: owns the pipeline and all agents
-  dashboard/     Next.js — rendering layer only
+  core/
+    contracts/   Shared Pydantic data schemas
+    engine/      Bayesian fusion & inference engine
+    storage/     Database repositories (pgvector, redis)
+    patch/       Patch proposal and sandbox verification
+    corpus/      Labelled cases + committed immutable splits
+  agents/        The 4 specialist analysis agents
+    static/      Semgrep & Taint static analysis agent
+    semantic/    LLM semantic reasoning agent
+    context/     Repository context & RAG agent
+    runtime/     WASI / Wasmtime sandbox agent
+  calibration/   Observations, recorded responses
+  docker/        Corpus evaluation Dockerfiles
+  scripts/       Database init scripts (init-pgvector.sql)
+
+frontend/        Next.js 16 + React 19 web dashboard & SaaS platform
+  src/app/       Marketing landing page, dashboard routes, RAG API routes
+  src/components/ Analytics (Recharts, heatmap), Mermaid viewer, Base UI
+  src/lib/       Pinecone RAG, Gemini review generator, Octokit client, FastAPI edge
+
+examples/        Evaluation benchmarks (baseline_eval, paper_eval) and sample PRs
+
+docs/            Consolidated documentation (specs, architecture, roadmap, guides)
 ```
 
 ## Getting started
 
-Requires [uv](https://docs.astral.sh/uv/), Docker, and Node 20+.
+Requires Docker, Node 20+, and Python 3.12 with `uv`.
 
+### Quick Start (Windows)
+Use the one-click batch runner:
+```cmd
+# Start full development stack (Docker infra + API + Worker + Web Dashboard)
+codesheriff.bat dev
+
+# Run full test suite
+codesheriff.bat test
+
+# Run benchmark evaluations
+codesheriff.bat eval
+```
+
+### Manual Setup
 ```bash
 cp .env.example .env          # then fill it in
 docker compose up -d          # Postgres + pgvector, Redis
@@ -134,17 +169,18 @@ What is still missing is the RAG reasoning, the runtime sandbox, and the calibra
 missing agents abstain under their own names at a likelihood ratio of exactly 1.0, per unit, on the
 record — so a witness that is not built costs the posterior nothing and hides from nobody.
 
-The audit is in **[`AUDIT.md`](AUDIT.md)**, with a `file:line` citation for every claim. It is the
+The audit is in **[`docs/architecture/AUDIT.md`](docs/architecture/AUDIT.md)**, with a `file:line` citation for every claim. It is the
 baseline the rebuild is measured against.
 
 | Doc | What it's for |
 |---|---|
-| **[`PLAN.md`](PLAN.md)** | The roadmap: 18 chapters, one per session, with live status. **Start here.** |
+| **[`docs/roadmap/PLAN.md`](docs/roadmap/PLAN.md)** | The roadmap: 18 chapters, one per session, with live status. **Start here.** |
 | [`CLAUDE.md`](CLAUDE.md) | Session guidance, document hierarchy, invariants that must not be "simplified" |
-| [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) | **Authoritative** design. §5 overrides everything else |
-| [`DECISIONS.md`](DECISIONS.md) | Living record — every decision with its reason |
-| [`AUDIT.md`](AUDIT.md) | Conformance audit: what the code does vs. what it should |
-| [`DEFECTS.md`](DEFECTS.md) | One line per false positive / false negative, written as found |
+| [`docs/specs/PROJECT_CONTEXT.md`](docs/specs/PROJECT_CONTEXT.md) | **Authoritative** design. §5 overrides everything else |
+| [`docs/architecture/DECISIONS.md`](docs/architecture/DECISIONS.md) | Living record — every decision with its reason |
+| [`docs/architecture/AUDIT.md`](docs/architecture/AUDIT.md) | Conformance audit: what the code does vs. what it should |
+| [`docs/roadmap/DEFECTS.md`](docs/roadmap/DEFECTS.md) | One line per false positive / false negative, written as found |
+| [`docs/specs/G2_Synopsis_CodeSheriff.pdf`](docs/specs/G2_Synopsis_CodeSheriff.pdf) | Academic synopsis paper |
 | [`docs/history/`](docs/history/) | Superseded specs, kept for provenance |
 
 ⚠️ Anything in `docs/history/` is **superseded**. One of those documents is the direct cause of the

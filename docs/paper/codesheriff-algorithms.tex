@@ -1,0 +1,728 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{url}
+% hyperref intentionally omitted
+
+\algrenewcommand\algorithmicrequire{\textbf{Input:}}
+\algrenewcommand\algorithmicensure{\textbf{Output:}}
+
+\newcommand{\Unit}{u}
+\newcommand{\Ev}{\mathcal{E}}
+\newcommand{\Wit}{\mathcal{W}}
+\newcommand{\Cells}{\mathcal{Z}}
+\newcommand{\LR}{\Lambda}
+\newcommand{\clampop}{\operatorname{clamp}}
+\newcommand{\tierop}{\operatorname{tier}}
+\newcommand{\cellop}{\operatorname{cell}}
+\newcommand{\oddsop}{\operatorname{odds}}
+
+\begin{document}
+
+\title{CodeSheriff: Algorithms and Equations for\\Calibrated Multi-Witness Vulnerability\\Inference in Pull Requests}
+
+\author{\IEEEauthorblockN{Shubhankar Patil}
+\IEEEauthorblockA{\textit{CodeSheriff Project}\\
+shubhankarp258@gmail.com}}
+
+\maketitle
+
+\begin{abstract}
+CodeSheriff analyses each function changed by a pull request with four heterogeneous
+analysis agents and fuses their statements into a \emph{calibrated} posterior probability
+that the change introduces a vulnerability. This paper states the algorithm of each agent
+and the fusion and calibration arithmetic in closed form, exactly as implemented. The
+central design commitment is that the four agents are treated as four \emph{witnesses}
+rather than four detectors: fusion multiplies one likelihood ratio per witness whatever each
+agent said, an agent that could not run contributes the multiplicative identity, and every
+ratio, the prior and the alert threshold are estimated on disjoint data splits.
+\end{abstract}
+
+\begin{IEEEkeywords}
+static analysis, taint analysis, large language models, software fault isolation, Bayesian
+inference, probability calibration, expected calibration error
+\end{IEEEkeywords}
+
+\section{Notation and the Unit of Analysis}
+
+\subsection{Change unit}
+A pull request is decomposed into \emph{change units}. A change unit
+$\Unit=\langle f,\, \sigma,\, s^{-},\, s^{+},\, \ell,\, D\rangle$ is one outermost changed
+function: $f$ is the file path, $\sigma$ the qualified symbol, $s^{-}$ and $s^{+}$ the base
+and head source text of that function, $\ell$ the language and $D$ the set of changed line
+numbers, derived by textual diff over the two file blobs rather than from the forge's patch
+representation. A file whose change lies outside any function yields a single
+\texttt{<module>} unit carrying the whole file.
+
+\subsection{Finding key}
+Agents never see one another's output, so they must nevertheless agree on \emph{which}
+finding they are describing. The join is a content-free key over the unit and the weakness
+class, and it deliberately excludes the sink expression:
+\begin{equation}
+k(\Unit, c) \;=\; \mathrm{SHA256}\!\left(f \,\Vert\, \texttt{::} \,\Vert\, \sigma \,\Vert\, \texttt{::} \,\Vert\, c\right)_{[0:16]}
+\label{eq:key}
+\end{equation}
+where $c$ is drawn from a closed in-scope set of ten CWE classes. Including the sink text in
+\eqref{eq:key} causes a taint engine reporting \texttt{cursor.execute(query)} and a language
+model reporting \texttt{cursor.execute} to produce two distinct keys for one bug; every
+finding then becomes a singleton and the inference engine performs no update at all.
+
+\subsection{Evidence}
+Every agent returns at least one \emph{evidence} item per unit, of exactly one of three
+kinds:
+\begin{itemize}
+\item \textsc{Detection} $\langle a, k, c, r \rangle$: agent $a$ claims weakness $c$ at key
+$k$ with raw score $r \in [0,1]$;
+\item \textsc{Silence} $\langle a, C_a \rangle$: agent $a$ ran to completion and found
+nothing, where $C_a$ is the set of weakness classes it is capable of reporting;
+\item \textsc{Abstention} $\langle a, \rho \rangle$: agent $a$ could not run, with reason
+$\rho$.
+\end{itemize}
+The distinction between the last two is load-bearing and is the reason a boolean
+\texttt{abstained} flag is insufficient: silence is an observation and is assigned a
+likelihood ratio below unity, whereas abstention is the absence of an observation and is
+assigned exactly $1$. Returning an empty list from a successful analysis is a contract
+violation, because it is indistinguishable from silence while carrying none of its meaning.
+
+\subsection{Witnesses}
+Let $\Wit=\{\textsc{structural}, \textsc{semantic}, \textsc{context}, \textsc{runtime}\}$. A
+\emph{backend} is an implementation; a \emph{witness} is a basis for a decision. The map
+$\omega: a \mapsto W$ is total and fixed, and an unregistered $a$ raises rather than becoming
+a fifth witness. In particular \texttt{structural.taint} and \texttt{structural.semgrep} both
+map to \textsc{structural}: they are two rule-based analyses of the same source text and are
+maximally correlated, so fusing them as independent factors multiplies
+$8.5 \times 7.0 = 59.5$ out of a single witness.
+
+\section{Agent I: The Structural Witness}
+
+\emph{Basis:} a mechanical reachability proof over source syntax. \emph{Failure mode:} a bug
+with no syntactic pattern.
+
+\subsection{Def--use graph}
+The head source $s^{+}$ is parsed with tree-sitter and reduced to a directed graph $G=(N,E)$
+whose nodes are \emph{definitions} --- points where a value enters, is redefined, is
+validated, or is used --- and whose edges are flows. Every edge carries the set of sink
+classes it neutralises,
+\begin{equation}
+\mathrm{clears}: E \rightarrow 2^{\mathcal{C}}, \quad
+\mathcal{C}=\{\textsc{sql},\textsc{xss},\textsc{cmd},\textsc{path},\dots\}
+\end{equation}
+so that an \texttt{html.escape} edge clears \textsc{xss} on the hop it actually wraps and
+nowhere else. Three modelling choices are stated explicitly, because each is aggressive and
+each is necessary:
+
+\begin{enumerate}
+\item \textbf{Every parameter is an origin.} The unit of analysis is one function, so its
+signature is the trust boundary and anything arriving through it comes from code this
+analysis cannot see. Formally $O=\{n \in N : \mathrm{role}(n)=\textsc{source}\}$ contains
+every non-receiver parameter.
+\item \textbf{A validating guard is a definition.} \texttt{if x not in ALLOWED: raise}
+creates a node redefining $x$ with an incoming edge clearing all classes, so every later use
+resolves through it. An emptiness test such as \texttt{if x is None: return} establishes
+nothing about the value and creates no such node.
+\item \textbf{Path sinks require composition.} A sink rule may set
+$\mathrm{req}(r)=\mathrm{true}$, in which case a whole path handed in and used unchanged is
+the caller's choice, not a traversal.
+\end{enumerate}
+
+\subsection{Propagation}
+For sink class $c$ define the sanitiser-quotient graph
+\begin{equation}
+G_c \;=\; \bigl(N,\ \{\,e \in E \;:\; c \notin \mathrm{clears}(e)\,\}\bigr).
+\end{equation}
+The tainted set for $c$ is the least fixpoint of the transfer relation seeded at the origins,
+\begin{equation}
+T_c \;=\; \mu X.\; O \,\cup\, \{\, n' \in N \;:\; \exists\, n \in X,\ (n,n') \in E(G_c) \,\},
+\label{eq:fix}
+\end{equation}
+computed by the worklist of Algorithm~\ref{alg:taint}, which additionally records for each
+tainted node the origin its taint came from, so that a reported path can be rendered back to
+where the value entered rather than merely asserted to exist.
+
+A sink node $s$ carrying rule $r$ at argument position $j$ is reported iff
+\begin{equation}
+s \in T_{c(r)} \;\wedge\; \pi \neq \varnothing \;\wedge\; \bigl(\neg\,\mathrm{req}(r) \vee \mathrm{comp}(\pi)\bigr),
+\label{eq:report}
+\end{equation}
+where $\pi=\mathrm{shortestPath}_{G_{c(r)}}(o,s)$ and $\mathrm{comp}(\pi)$ holds iff some
+node on $\pi$ joins a base onto the tainted value.
+
+\begin{algorithm}[t]
+\caption{\textsc{StructuralTaint}$(\Unit)$}
+\label{alg:taint}
+\begin{algorithmic}[1]
+\Require change unit $\Unit$; source, sink and sanitiser catalogue
+\Ensure a list of evidence items; never an exception
+\If{$\ell$ unsupported \textbf{or} $|s^{+}| > 400\,000$ bytes}
+  \State \Return \textsc{Abstention}(\texttt{unsupported}\,/\,\texttt{too\_large})
+\EndIf
+\State $G \gets \textsc{BuildDefUse}(\textsc{Parse}(s^{+}))$
+\State $\mathcal{K} \gets \varnothing$ \Comment{key $\rightarrow$ strongest evidence}
+\ForAll{sink nodes $s$ with rule $r$ whose CWE is in scope}
+  \State $c \gets \mathrm{class}(r)$
+  \State \textbf{if} $T_c$ uncomputed \textbf{then} $T_c \gets$ fixpoint \eqref{eq:fix} on $G_c$
+  \State $o \gets \mathrm{origin}_{T_c}(s)$; \textbf{if} $o=\bot$ \textbf{then continue}
+  \State $\pi \gets \mathrm{shortestPath}_{G_c}(o,s)$
+  \State \textbf{if} \eqref{eq:report} fails \textbf{then continue}
+  \State $\kappa \gets k(\Unit,\mathrm{cwe}(r))$;\ \ $\varrho \gets$ \eqref{eq:sscore} with $L=|\pi|$
+  \State keep in $\mathcal{K}[\kappa]$ whichever of the old and new evidence has larger $\varrho$
+\EndFor
+\State \Return $\mathcal{K}$, plus \textsc{Silence}$(C_a \setminus \text{reported CWEs})$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Score}
+The raw score is deterministic and explicit. With danger class $d$, path length $L=|\pi|$,
+partial-sanitiser flag $\varsigma$, network-facing flag $\nu$ and test-file flag $\tau$,
+\begin{align}
+\varrho_{\mathrm{str}} = \clampop_{[0,1]}\Bigl(&0.45 + \delta(d) - 0.25\,\varsigma \nonumber\\
+&- 0.0125\,\min\bigl(\max(0, L-2),\,4\bigr) \nonumber\\
+&+ 0.15\,\nu - 0.20\,\tau\Bigr)
+\label{eq:sscore}
+\end{align}
+with $\delta(\textsc{critical})=0.20$, $\delta(\textsc{high})=0.10$ and $\delta(\cdot)=0$
+otherwise. Equation~\eqref{eq:sscore} explains an empirical observation reported in
+Section~\ref{sec:fitted}: with $\nu=1$ and $\varsigma=0$, a critical sink at path length
+$L \ge 3$ scores at most $0.7875$, so nearly every true structural detection falls in the
+\emph{medium} tier and the \emph{high} tier is populated by a single case.
+
+\section{Agent II: The Semantic Witness}
+
+\emph{Basis:} absorbed model knowledge --- intent, then trust boundaries, then the violated
+invariant. \emph{Failure mode:} the model is confidently wrong, or agreeable.
+
+\subsection{Prompt construction and the injection boundary}
+The analysed source is attacker-controlled text. It is enclosed by a \emph{per-request random
+sentinel} drawn from a cryptographic source, and no other delimiter appears in the prompt.
+The anti-sycophancy exemplars are placed \emph{inside} the same sentinel as the unit: they
+are the longest and most attended-to part of the prompt, and framing them differently would
+teach the model that the sentinel is decorative formatting, which is precisely the belief an
+injection needs.
+
+\subsection{Self-consistency}
+The model is sampled $n=3$ times at temperature $0.3$ with varying seeds, yielding responses
+$R_1,\dots,R_n$. Findings are clustered by key rather than by the model's own wording for the
+sink:
+\begin{equation}
+\mathcal{G}_\kappa = \Bigl\{\, \phi \in \textstyle\bigcup_{i} R_i \;:\; k(\Unit, \mathrm{cwe}(\phi)) = \kappa \,\Bigr\},
+\end{equation}
+and the raw score of a surviving cluster is the agreement rate
+\begin{equation}
+\varrho_{\mathrm{sem}}(\kappa) \;=\; \frac{|\mathcal{G}_\kappa|}{n}.
+\label{eq:semscore}
+\end{equation}
+Because \eqref{eq:semscore} measures the \emph{spread} between independently seeded samples,
+replaying one cached answer $n$ times would present itself as unanimous confidence; the
+sampling is therefore genuinely $n$-fold, or the score is meaningless. Cluster attributes
+merge by $\max$ over severity and exploitability and by union over evidence lines and named
+untrusted sources.
+
+\subsection{Hallucination gate}
+Let $\phi$ be a candidate finding and $L_u$ the line count of $s^{+}$. The gate is the
+conjunction
+\begin{align}
+\Gamma(\phi,\Unit) =\;& \bigl[\mathrm{cwe}(\phi) \in \mathrm{CWE}_{\mathrm{scope}}\bigr] \wedge \bigl[\mathrm{file}(\phi)=f\bigr] \nonumber\\
+&\wedge\; \bigl[\mathrm{sink}(\phi) \sqsubseteq s^{+}\bigr] \nonumber\\
+&\wedge\; \bigl[\forall \lambda \in \mathrm{lines}(\phi):\ 1 \le \varphi(\lambda) \le L_u\bigr]
+\label{eq:gate}
+\end{align}
+where $\sqsubseteq$ denotes verbatim substring containment and $\varphi$ normalises absolute
+line numbers to unit-relative ones. A rejection under \eqref{eq:gate} discards that finding
+and \emph{not} the whole sample, because one response can carry a real finding and an
+invention side by side. Comparison on the exact file path rather than the basename is
+required: matching on basename accepted a finding about \texttt{app/models/user.py} against
+\texttt{tests/user.py}. There is no tolerance term on the line bound, since a slack of $+5$
+accepts lines that do not exist, which is the hallucination the gate exists for.
+
+\subsection{Prose screening}
+Model prose is screened at the single point where a finding becomes evidence. Text that reads
+as an instruction to whoever sees it next is \emph{dropped}, not escaped, and the finding is
+republished from its validated fields alone. Escaping preserves the information and fixes the
+rendering, but an escaped injection is still delivered to the reader it targets; whether the
+code is vulnerable does not depend on how the model chose to describe it.
+
+\begin{algorithm}[t]
+\caption{\textsc{SemanticHosted}$(\Unit)$}
+\label{alg:sem}
+\begin{algorithmic}[1]
+\Require change unit $\Unit$; exemplar set; per-unit budget $B$
+\State $\varsigma \gets \textsc{RandomSentinel}()$;\ \ $P \gets \textsc{BuildPrompt}(\Unit,\varsigma)$
+\State $\mathcal{R} \gets \varnothing$
+\For{$i \gets 1$ \textbf{to} $n$}
+  \State \textbf{if} spend $\ge B$ \textbf{then break}
+  \State $\mathcal{R} \gets \mathcal{R} \cup \{\textsc{Sample}(P, \mathrm{seed}_i, T{=}0.3)\}$
+\EndFor
+\State \textbf{if} $\mathcal{R}=\varnothing$ \textbf{then return} \textsc{Abstention}(\texttt{budget})
+\State $\Phi \gets \{\phi \in \mathcal{R} : \Gamma(\phi,\Unit)\}$ \Comment{gate \eqref{eq:gate}}
+\State cluster $\Phi$ by $k(\Unit,\cdot)$; score each cluster by \eqref{eq:semscore}
+\State screen prose; emit one \textsc{Detection} per cluster
+\State \Return detections, or \textsc{Silence}$(C_a)$ if none survived
+\end{algorithmic}
+\end{algorithm}
+
+A budget exhausted before the first sample must yield \textsc{Abstention} and never
+\textsc{Silence}: the latter asserts ``reviewed the unit and found nothing'' across all ten
+in-scope classes, at a likelihood ratio below $1$, having read nothing.
+
+\section{Agent III: The Context Witness}
+
+\emph{Basis:} this repository's own merged precedent. \emph{Failure mode:} a repository with
+no relevant history. There is deliberately no language model in this agent; a model-driven
+variant would share the semantic witness's failure mode, and heterogeneity is the entire
+justification for fusing four witnesses.
+
+\subsection{Retrieval}
+Let $\mathcal{P}(\Unit)$ be the top-$k$ ($k=5$) merged code excerpts retrieved from the
+vector precedent store for repository $\varrho$, restricted to cosine similarity
+$\ge \tau_{\min}=0.35$. Repository scoping is structural: $\varrho$ is bound when the
+retriever is constructed and the retrieval call takes no repository argument, so
+cross-repository retrieval is unrepresentable rather than merely forbidden. Precedent is
+written by an offline backfill, one chunk per symbol and only the merged side, so a control
+that a pull request deliberately removed cannot go on establishing itself forever.
+
+\subsection{Establishment}
+Let $\Sigma(s)$ be the \emph{control surface} of source $s$ --- the decorators and guard
+calls it applies. For a control $\gamma$ let
+$\mathrm{car}(\gamma)=\{p \in \mathcal{P} : \gamma \in \Sigma(s_p)\}$, and let
+$\mathrm{sym}(\cdot)$ denote qualified symbols. The repository \emph{establishes} $\gamma$
+iff
+\begin{equation}
+\underbrace{\exists p \in \mathrm{car}(\gamma):\, \mathrm{sym}(p)=\sigma}_{\text{the same symbol carried it}}
+\ \vee\
+\underbrace{\bigl|\{\mathrm{sym}(p)\}_{p \in \mathrm{car}(\gamma)}\bigr| \ge 2}_{\text{sibling convention}}
+\label{eq:est}
+\end{equation}
+Matching is on the symbol and never on the path, because a move is exactly what changes the
+path. The sibling threshold is $2$ and not $1$: every function calls something no other
+function happens to call, so treating a single neighbour's habit as a rule would make every
+added function a regression against whichever neighbour retrieval returned.
+
+\subsection{Missing controls}
+With $A=\Sigma(s^{+})$ the controls the unit applies, and a \emph{fixed, partial} map
+$\mathrm{cwe}: \Gamma \rightharpoonup \{\text{CWE-862}, \text{CWE-639}\}$,
+\begin{equation}
+M = \bigl\{\, \gamma \in E \setminus A \;:\; \mathrm{name}(\gamma) \notin \mathrm{names}(A) \wedge \mathrm{cwe}(\gamma)\!\downarrow \,\bigr\}.
+\end{equation}
+Which controls a repository applies is \emph{learned}; which of them are authorisation
+controls is \emph{fixed}. Making both halves learned would infer a weakness class from a name
+whose meaning the agent was never told; making both halves fixed would be a second rule
+engine with a hard-coded guard list, correlated with the one that already exists. A mined
+control mapping to no in-scope class therefore cannot be reported at all --- escaping is not
+authorisation, so a repository where every merged view calls \texttt{escape()} has a real
+convention, a unit that drops it has really regressed, and this witness still says nothing.
+
+\subsection{Score}
+For $m \in M$ with support $\mathrm{sup}(m)$ (distinct supporting symbols) and mean
+supporting similarity $\bar{s}(m)$,
+\begin{equation}
+\varrho_{\mathrm{ctx}}(m) = b(m)\cdot\min\!\left(1,\ \frac{\bar{s}(m)}{0.85}\right),\ \
+b(m)=\begin{cases}0.85 & \text{strong}\\ 0.65 & \text{weak}\end{cases}
+\label{eq:ctxscore}
+\end{equation}
+where \emph{strong} means the same symbol carried the control or $\mathrm{sup}(m) \ge 3$.
+Damping is one-sided by construction: multiplying by raw similarity instead demoted a strong
+claim backed by excerpts at a perfectly good $0.9$ to $0.765$, so retrieval doing its job
+pushed every detection out of the high tier and the tier boundary ceased to mean anything.
+
+\begin{algorithm}[t]
+\caption{\textsc{ContextRAG}$(\Unit)$}
+\label{alg:ctx}
+\begin{algorithmic}[1]
+\Require change unit $\Unit$; repository-bound retriever
+\State \textbf{try} $\mathcal{P} \gets \textsc{Retrieve}(\Unit, k)$ \textbf{catch} unavailable
+  \State \quad \Return \textsc{Abstention}(\texttt{retrieval\_unavailable})
+\State \textbf{if} $\mathcal{P}=\varnothing$ \textbf{then return} \textsc{Abstention}(\texttt{no\_precedent})
+\State $E \gets$ controls satisfying \eqref{eq:est}; \ $A \gets \Sigma(s^{+})$
+\State $M \gets$ established, unapplied, in-scope controls
+\ForAll{CWE $c$ with $M_c \neq \varnothing$}
+  \State emit \textsc{Detection} at $k(\Unit,c)$ with score $\max_{m \in M_c}$ \eqref{eq:ctxscore}
+\EndFor
+\State \Return detections, or \textsc{Silence}$(\{\text{862},\text{639}\})$ if $M=\varnothing$
+\end{algorithmic}
+\end{algorithm}
+
+A store that is down and a repository that is new are different facts and receive different
+reasons; conflating them is what let a degenerate term-hashing fallback report noise with no
+log line.
+
+\section{Agent IV: The Runtime Witness}
+
+\emph{Basis:} direct observation. \emph{Failure mode:} code that will not run in a sandbox.
+It observes; it never proves.
+
+\subsection{The sandbox}
+The changed function is executed \emph{once} inside a WebAssembly (Wasmtime + WASI) sandbox
+under policy
+\[
+\Pi = \bigl\langle \text{fuel } 2{\times}10^{10},\ \text{wall clock } 15\,\mathrm{s},\ \text{memory } 512\,\mathrm{MiB} \bigr\rangle .
+\]
+Capabilities are \emph{absent}, not filtered: the guest environment is empty because nothing
+is inherited, not because a deny-list removed the interesting keys, and WASI preview1 defines
+no \texttt{sock\_connect}, so a module requesting network access fails to instantiate ---
+denial before the first guest instruction. The caps cover one another's blind spots: fuel is
+deterministic and is what a reproducible calibration run requires, epoch interruption is the
+wall-clock backstop for a guest blocked inside a host call, and the memory cap keeps an
+allocation loop a guest-side \texttt{MemoryError} rather than a host OOM. The interpreter
+module is pinned by digest and verified on load; a mismatch is fatal, and its absence is an
+abstention rather than a fallback to host execution.
+
+\subsection{Taint as substring}
+Each parameter $x_i$ is bound to a probe value whose text is a unique random token $t_i$,
+implemented as a \texttt{str} subclass. Taint is then a string relation rather than a wrapper
+discipline:
+\begin{equation}
+\mathrm{tainted}(v) \iff \exists i:\ t_i \sqsubseteq \mathrm{str}(v),
+\end{equation}
+so f-strings, \texttt{+}, \texttt{\%}, \texttt{.format()} and \texttt{os.path.join}
+propagate taint for free, because they propagate the characters. Composition --- the runtime
+analogue of the structural composition rule --- is
+\begin{equation}
+\mathrm{comp}(v) \iff \neg\bigl(\,|\mathcal{T}(v)|=1 \ \wedge\ \mathrm{str}(v)=t\,\bigr),\ \ \{t\}=\mathcal{T}(v),
+\end{equation}
+that is, the value is not merely the token passed through unchanged.
+
+\subsection{Observation and soundness}
+An observation $o=\langle \mathrm{sink}, j, \mathrm{comp}, \mathrm{grd}\rangle$ is recorded
+when a tokenised value occupies dangerous argument position $j$ of a catalogued sink, subject
+to that sink's own composition requirement. The run is partitioned by
+\begin{equation}
+\mathcal{O}_{\mathrm{snd}} = \{o : \neg\mathrm{grd}(o)\}, \qquad
+\mathcal{O}_{\mathrm{grd}} = \{o : \mathrm{grd}(o)\},
+\end{equation}
+where $\mathrm{grd}(o)$ holds if the token had already been passed to a call the probe could
+not evaluate. The output rule is
+\begin{equation}
+\textsc{Out} =
+\begin{cases}
+\text{\textsc{Detection} per CWE} & \mathcal{O}_{\mathrm{snd}} \neq \varnothing\\[2pt]
+\textsc{Abstention}(\texttt{guard}) & \mathcal{O}_{\mathrm{snd}}=\varnothing,\ \mathcal{O}_{\mathrm{grd}} \neq \varnothing\\[2pt]
+\textsc{Silence}(C_a) & \text{otherwise.}
+\end{cases}
+\label{eq:rtout}
+\end{equation}
+The middle case of \eqref{eq:rtout} is the substantive one. The value demonstrably reached
+the sink, but the run reached it only because the harness answered a guard it could not
+evaluate --- which may well have been the validator that makes the code safe. Reporting is a
+false positive on exactly the code that defends itself; staying silent argues, at a
+likelihood ratio below $1$, that guarded code is clean on the strength of a guard nobody
+read. Neither is honest, so the witness states that it could not tell.
+
+\subsection{Score and scope}
+An execution either happened or it did not, so there is one tier:
+\begin{equation}
+\varrho_{\mathrm{rt}} = 0.85 .
+\end{equation}
+The witness reports five CWE classes, not ten. SQL injection and cross-site scripting are
+excluded because their sinks are methods on objects the probe itself fabricated, so an
+``observation'' there would be the harness observing itself --- a weaker restatement of the
+structural witness, correlated with it. Published prose is assembled entirely from the
+project's own sink table and verbs, so no substring of it originates in the analysed code or
+the guest trace, and the CWE is re-derived host-side from that table: analysed code can
+neither invent a finding nor relabel one.
+
+\section{Evidence Aggregation and Bayesian Fusion}
+
+\subsection{Cell selection}
+Let $\Cells=\{H, M, L, S\}$ (detection-high, detection-medium, detection-low, silence).
+Detection tiers are
+\begin{equation}
+\tierop(r) = \begin{cases} H & r \ge 0.8\\ M & 0.5 \le r < 0.8\\ L & r < 0.5. \end{cases}
+\end{equation}
+For witness $W$ and finding key $\kappa$ with weakness $c$, let $D_W$ be $W$'s detections at
+$\kappa$ and $S_W$ its silences about the unit. The cell is
+\begin{equation}
+\cellop(W,\kappa) =
+\begin{cases}
+\tierop\bigl(\max_{e \in D_W} r(e)\bigr) & D_W \neq \varnothing\\[3pt]
+S & D_W=\varnothing \wedge \exists e \in S_W: c \in C_{a(e)}\\[3pt]
+\bot & \text{otherwise.}
+\end{cases}
+\label{eq:cell}
+\end{equation}
+Backends behind one witness combine by plain $\max$: two structural backends both firing high
+remain one high detection rather than compounding, and one backend's silence does not retract
+its sibling's detection. The guard $c \in C_a$ in \eqref{eq:cell} is essential --- the taint
+engine holds no CWE-862 rules whatsoever, so counting its silence there would suppress every
+authorisation finding on principle. Equation~\eqref{eq:cell} is implemented \emph{once} and
+read by both fusion and fitting; two implementations would fit one quantity and apply
+another, and both halves would pass their own tests.
+
+\subsection{Posterior}
+With prior $\pi$ and fitted tables $\LR_W: \Cells \rightarrow \mathbb{R}_{>0}$, the posterior
+odds are a product over \emph{all four} witnesses:
+\begin{equation}
+\oddsop_{\mathrm{post}}(\kappa) \;=\; \frac{\pi}{1-\pi} \prod_{W \in \Wit} \lambda_W(\kappa),
+\label{eq:fusion}
+\end{equation}
+\begin{equation}
+\lambda_W(\kappa) =
+\begin{cases}
+\clampop_{[\lambda_{\min},\lambda_{\max}]}\bigl(\LR_W[\cellop(W,\kappa)]\bigr) & \cellop \neq \bot\\[3pt]
+1 & \cellop = \bot,
+\end{cases}
+\label{eq:lambda}
+\end{equation}
+\begin{equation}
+p(\kappa)=\frac{\oddsop_{\mathrm{post}}(\kappa)}{1+\oddsop_{\mathrm{post}}(\kappa)},
+\qquad \textsc{Alert} \iff p(\kappa) \ge \theta^{*}.
+\label{eq:post}
+\end{equation}
+
+Four properties of \eqref{eq:fusion}--\eqref{eq:lambda} are deliberate, and each corrects a
+specific defect measured in an earlier implementation.
+
+\begin{enumerate}
+\item \textbf{The product ranges over $\Wit$, not over the agents that spoke.} Every detection
+tier exceeds $1$, so iterating only the agents that alerted makes the posterior monotonically
+non-decreasing in the number of agents that alerted: an agent that looked and found nothing
+could not lower the number, and an agent that could not look was indistinguishable from one
+that had.
+\item \textbf{One factor per witness, not per backend.} See $\omega$ in Section~I-D.
+\item \textbf{Abstention is exactly $1$ and has no table entry.} An unfitted constant looks
+like an oversight; it is the multiplicative identity \emph{by definition}, and a fitted number
+there would assert that the act of failing carried information about the code.
+\item \textbf{The ratios are clamped; the posterior is not.} Clamping the posterior to
+$[10^{-4},\,1-10^{-4}]$ while leaving ratios free hides an unbounded odds product behind a
+number that looks like a probability. With $\lambda \in [0.05, 20]$ and $\pi \in (0,1)$ the
+posterior lies strictly inside $(0,1)$ with no clamp at all. The bound is also a statement
+about sample size: four cells fitted from 46 cases can produce a ratio of $30$ from a cell
+observed three times, and $\lambda_{\max}$ says no witness earns that on this much data.
+\end{enumerate}
+
+A unit in which nothing was detected produces evidence rows and \emph{no} fused result; no
+synthetic ``all agents abstained'' key is minted into the key space.
+
+\begin{algorithm}[t]
+\caption{\textsc{Fuse}$(\Unit, \Ev)$}
+\label{alg:fuse}
+\begin{algorithmic}[1]
+\Require all evidence $\Ev$ for unit $\Unit$; artifact $\langle \pi, \theta^{*}, \LR \rangle$
+\Ensure one result per detected finding, most probable first
+\ForAll{$e \in \Ev$} \State $\omega(a(e))$ \Comment{an unregistered agent raises here} \EndFor
+\State $K \gets \{\,k(e) : e \in \Ev,\ \mathrm{kind}(e)=\textsc{Detection}\,\}$
+\ForAll{$\kappa \in K$}
+  \State $c \gets$ the unique CWE at $\kappa$
+  \ForAll{$W \in \Wit$}
+    \State $z_W \gets \cellop(W,\kappa)$ by \eqref{eq:cell} over \emph{all} of $\Ev$
+    \State $\lambda_W \gets$ \eqref{eq:lambda}; record $\langle W, z_W, \lambda_W, \text{agents} \rangle$
+  \EndFor
+  \State $p \gets$ \eqref{eq:post} from $\{z_W\}$, $\LR$ and $\pi$
+\EndFor
+\State \Return results sorted by $p$, descending
+\end{algorithmic}
+\end{algorithm}
+
+Algorithm~\ref{alg:fuse} passes the \emph{whole unit's} evidence to every key. A silence is a
+statement about the unit rather than about a finding and therefore carries no key; passing
+only the keyed group is precisely how silences and abstentions fall out of the arithmetic
+unnoticed.
+
+\section{Calibration}
+
+\subsection{What is estimated}
+The fitted quantity is a class-conditional likelihood ratio,
+\begin{equation}
+\LR_W(z) \;=\; \frac{P\bigl(\cellop(W)=z \mid y=1\bigr)}{P\bigl(\cellop(W)=z \mid y=0\bigr)},
+\label{eq:lr}
+\end{equation}
+with both terms conditioned on the witness having said anything at all. Abstentions are
+excluded from both denominators rather than smoothed into them: including them would make the
+ratio depend on how often a witness happened to be unavailable, which is a fact about the
+machine and not about the code.
+
+Equation~\eqref{eq:lr} is also what makes a deliberately balanced corpus legitimate. Both
+terms are conditioned on the label, so neither depends on prevalence; prevalence enters
+exactly once, through the prior. A fit that estimated $P(y=1 \mid z)$ directly would bake the
+corpus's $50\%$ into every posterior with no honest way to remove it.
+
+\subsection{Estimator}
+With Laplace smoothing $\alpha=1$ over the $|\Cells|=4$ cells, and $n_1(z), n_0(z)$ the counts
+among claims where $W$ spoke,
+\begin{equation}
+\hat{p}_y(z) = \frac{n_y(z) + \alpha}{N_y + \alpha\,|\Cells|}, \qquad y \in \{0,1\},
+\end{equation}
+\begin{equation}
+\hat{\LR}_W(z) =
+\begin{cases}
+1 & n_1(z)=n_0(z)=0\\[3pt]
+\hat{p}_1(z)\,/\,\hat{p}_0(z) & \text{otherwise,}
+\end{cases}
+\label{eq:fit}
+\end{equation}
+followed by the clamps $\LR_W(S) \le 0.999$ and $\LR_W(z) \in [0.05, 20]$, with the raw value
+recorded alongside the clamped one so that a bound which bit is visible in the artifact rather
+than absorbed into the value.
+
+The first branch of \eqref{eq:fit} is not an omission. Smoothing alone cannot express ``no
+observation'': with both counts zero the smoothed ratio reduces to the class balance of the
+witness's \emph{other} cells. Concretely, the runtime witness spoke on 9 vulnerable and 5 safe
+claims, so its two never-observed detection tiers smoothed to $0.69$ --- mild evidence of
+\emph{safety} on tiers that nothing has ever selected. No observation is no evidence, and no
+evidence is exactly $1$.
+
+The silence ceiling is likewise not cosmetic. A silence at or above $1$ would make
+looking-and-finding-nothing into evidence \emph{for} a vulnerability. A witness can
+nonetheless fit above $1$ --- which happens when it stays silent on vulnerable cases at least
+as often as on safe ones --- and that says the witness is weak, not that its silence is
+incriminating.
+
+\subsection{The prior is declared, not measured}
+The corpus is twin-paired: every vulnerable case has a safe twin sharing its finding key, so
+prevalence is $0.5$ by construction. That is a fact about how the cases were written, not
+about how often a changed function is vulnerable, and reading it as a prior would assert that
+one change in two is vulnerable. The base rate is therefore \emph{declared}, $\pi = 0.03$, and
+recorded as declared, together with the observed corpus prevalence $\pi_c$ and the rescaling
+constant
+\begin{equation}
+\Xi \;=\; \frac{\pi/(1-\pi)}{\pi_c/(1-\pi_c)},
+\end{equation}
+so a published posterior can be converted back to the balanced-corpus figure and checked.
+Because \eqref{eq:lr} is prevalence-invariant, changing $\pi$ rescales every posterior by
+$\Xi$ and refits no ratio.
+
+\subsection{Importance weighting}
+A rate measured on a balanced split describes a population that does not exist. With split
+prevalence $\pi_s$, claims are reweighted to the declared base rate by
+\begin{equation}
+w_{+} = \frac{\pi}{\pi_s}, \qquad w_{-} = \frac{1-\pi}{1-\pi_s},
+\label{eq:weights}
+\end{equation}
+and \eqref{eq:weights} is applied before any precision, ECE or Brier figure is computed.
+
+\subsection{Threshold selection}
+Candidate thresholds are the observed posteriors themselves, plus a floor of $0.01$, since
+thresholds between two adjacent posteriors are behaviourally identical. With weighted counts
+$\mathrm{TP}(\theta)=\sum_{i:\,p_i \ge \theta} w_i y_i$ and $\mathrm{FP}, \mathrm{FN}$ defined
+analogously,
+\begin{equation}
+\theta^{*} = \max\left( \arg\max_{\theta}\ \frac{2\,\mathrm{Pr}(\theta)\,\mathrm{Rc}(\theta)}{\mathrm{Pr}(\theta)+\mathrm{Rc}(\theta)} \right).
+\label{eq:theta}
+\end{equation}
+$F_1$ balances the two failure modes this project cares about in opposite directions --- a
+missed vulnerability, and an alert a developer learns to ignore --- and it needs no second
+hand-set constant of the kind a precision floor would introduce. Ties break \emph{upward}: two
+thresholds scoring identically on fourteen validation cases are not really tied, and the higher
+one alerts on strictly fewer things.
+
+\subsection{Calibration metrics}
+These are acceptance criteria, not an appendix. With $B$ equal-width bins over $[0,1]$ and
+$W_b=\sum_{i \in b} w_i$,
+\begin{equation}
+\mathrm{ECE} = \frac{1}{\sum_b W_b}\sum_{b:\,W_b>0} W_b \left| \bar{p}_b - \bar{y}_b \right|,
+\label{eq:ece}
+\end{equation}
+\begin{equation}
+\mathrm{Brier} = \frac{\sum_i w_i\,(p_i - y_i)^2}{\sum_i w_i},
+\label{eq:brier}
+\end{equation}
+where $\bar{p}_b$ and $\bar{y}_b$ are the weighted mean confidence and observed frequency in
+bin $b$. Empty bins contribute nothing rather than contributing zero error; averaging their
+absence in would report a calibration error that falls as the sample shrinks. Brier rewards
+being right and confident; ECE is the one that speaks to the thesis, since a model can score
+excellently on \eqref{eq:brier} and still say $90\%$ when it means $60\%$ --- which is
+precisely the system this project exists to criticise.
+
+\subsection{Split discipline}
+Ratios \eqref{eq:fit} are fitted on the calibration split only; the threshold \eqref{eq:theta}
+is selected on the validation split only; the test split is evaluated exactly once, at the end.
+Splits are assigned by twin-pair identifier, never by case identifier, so a twin cannot
+straddle a split. The fitting routine refuses an observation set from the wrong split, and the
+observation harness cannot produce a test-split set at all.
+
+\section{Fitted Values}
+\label{sec:fitted}
+
+Table~\ref{tab:ratios} gives the artifact fitted on the calibration split (49 claims from 46
+cases); Table~\ref{tab:sel} gives the selection and metrics on the validation split (15 claims
+from 14 cases). Every ratio ships with its per-cell counts and with the corpus and split
+hashes it was measured against, and there is no hand-set fallback anywhere in the system: a
+missing artifact raises rather than quietly producing a number nobody measured.
+
+\begin{table}[t]
+\caption{Fitted likelihood ratios per witness per cell, with observation counts
+$(n_1/n_0)$. Calibration split, $\alpha=1$.}
+\label{tab:ratios}
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+Witness & $H$ & $M$ & $L$ & $S$ \\
+\midrule
+structural & 2.22 \tiny(1/0)  & 15.56 \tiny(13/0) & 1.00 \tiny(0/0) & 0.065 \tiny(0/16) \\
+semantic   & 9.48 \tiny(16/1) & 0.56 \tiny(0/1)   & 0.74 \tiny(1/2) & 0.304 \tiny(5/21) \\
+context    & 2.00 \tiny(1/0)  & 4.00 \tiny(3/0)   & 2.00 \tiny(1/0) & 0.167 \tiny(0/5)  \\
+runtime    & 6.92 \tiny(9/0)  & 1.00 \tiny(0/0)   & 1.00 \tiny(0/0) & 0.115 \tiny(0/5)  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\caption{Prior, threshold and calibration metrics.}
+\label{tab:sel}
+\centering
+\small
+\begin{tabular}{lp{2.05in}}
+\toprule
+Quantity & Value \\
+\midrule
+Base rate $\pi$        & $0.03$, declared (corpus prevalence $0.469$) \\
+Threshold $\theta^{*}$ & $0.2267$, max weighted $F_1$ on validation \\
+Selection scores       & $F_1=0.923$, Pr $=1.000$, Rc $=0.857$; 6 of 15 claims alert \\
+Validation             & ECE $0.027$, Brier $0.013$ (weighted) \\
+Calibration, in-sample & ECE $0.009$, Brier $0.010$ (weighted) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Three entries in Table~\ref{tab:ratios} must be read with their counts rather than as four
+confident rows, and all three are recorded in the artifact rather than smoothed away.
+
+\begin{itemize}
+\item $\LR_{\mathrm{str}}(M)=15.56$ exceeds $\LR_{\mathrm{str}}(H)=2.22$. This is not a claim
+that a confident taint path is weaker evidence. Thirteen of the taint engine's fourteen true
+detections score in the medium band and exactly one scores high, so the high cell is nearly
+all smoothing prior. It is a consequence of \eqref{eq:sscore}, and it is a scoring-calibration
+question for the structural agent rather than a fusion one.
+\item The context witness fits from 10 claims and the runtime witness from 14. Both abstain on
+most units \emph{by construction} --- a repository with no relevant history, a function that
+will not run in a sandbox --- so their ratios rest on the fewest observations.
+\item Cells with no observations are exactly $1.00$, by the first branch of \eqref{eq:fit}.
+\end{itemize}
+
+\section{Threats to Validity}
+
+\textbf{One-backend structural witness.} The Semgrep backend has no build for the platform the
+observation run was performed on, so \texttt{structural.semgrep} abstained on every unit and
+the structural row of Table~\ref{tab:ratios} describes the taint engine alone. This is a
+correctly handled abstention rather than a defect --- it costs the posterior exactly $1$ ---
+but the ratios must be re-observed on a platform carrying both backends before any structural
+number is claimed as a property of the witness.
+
+\textbf{Declared prior.} $\pi=0.03$ is an assumption, stated as one. It rescales every
+posterior by $\Xi$ and refits nothing, so it can be replaced without re-running an agent.
+
+\textbf{Corpus scale.} 76 hand-written units in 38 twin pairs, split by pair. Small enough that
+$\lambda_{\max}$ binds for the reason given above; the figures in Table~\ref{tab:sel} are
+selection-time figures on the validation split, and the honest calibration figure is the sealed
+test split's.
+
+\textbf{Unmeasured operational properties.} Per-unit p95 latency and the behaviour of the fuel
+budget on large functions require dedicated hardware rather than a corpus, and are not reported
+here.
+
+\section{Conclusion}
+
+The arithmetic above is deliberately modest: an odds product with one factor per witness, four
+class-conditional ratio tables estimated with Laplace smoothing, and a threshold chosen on data
+that chose nothing else. What makes it a calibration system rather than a scoring heuristic is
+the discipline around it --- a shared finding key so that two witnesses can update one belief, a
+three-valued evidence algebra so that failing to look costs nothing, a single implementation of
+``what did this witness say'' read by both the fitting and the fusing halves, and a fitted
+artifact that is the only source of any number in the pipeline.
+
+\end{document}
