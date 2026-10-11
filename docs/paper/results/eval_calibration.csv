@@ -1,0 +1,8 @@
+system,ece,brier,precision,recall,f1,n_alerts
+CodeSheriff (full),0.0091,0.0104,1.0000,0.6957,0.8205,16
+Majority vote,0.0920,0.0679,0.1613,0.9565,0.2760,26
+Prior only (no witness),0.0000,0.0291,0.0000,0.0000,0.0000,0
+without structural,0.0070,0.0172,0.3587,0.6957,0.4734,17
+without semantic,0.0113,0.0146,1.0000,0.6087,0.7568,14
+without context,0.0072,0.0108,1.0000,0.6957,0.8205,16
+without runtime,0.0111,0.0111,1.0000,0.6957,0.8205,16

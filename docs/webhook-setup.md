@@ -54,12 +54,16 @@ with action `synchronize`.
 
 ```bash
 docker compose up -d postgres redis
-uv run alembic -c packages/storage/alembic.ini upgrade head
+uv run alembic -c backend/core/storage/alembic.ini upgrade head
 
 uv run uvicorn codesheriff_api.main:app --reload
 uv run celery -A codesheriff_worker.celery_app worker --loglevel=info --queues=audits
-npx smee-client --url https://smee.io/<channel> --path /webhooks/github --port 8000
+npx smee-client --url https://smee.io/<channel> --target http://localhost:8000/webhooks/github
 ```
+
+On Windows, add `--pool=solo` to the Celery command (its default process pool does not run there),
+and keep `--target` as a full URL: Git Bash rewrites a bare `--path /webhooks/github` into a Windows
+file path, and smee-client then refuses it as an invalid URL.
 
 `GET http://localhost:8000/` reports whether each half is configured:
 

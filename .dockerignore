@@ -1,0 +1,27 @@
+# The host venv is Windows-built; the image builds its own at /opt/venv.
+.venv/
+**/__pycache__/
+**/*.pyc
+
+# Caches — large, machine-local, and regenerated on demand.
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.import_linter_cache/
+.cache/
+.chroma_db/
+.coverage
+
+# The pinned WASI interpreter is fetched by a person and verified by digest
+# (D-074). It is mounted from the host at run time, never baked into a layer.
+.wasm-runtimes/
+
+# Frontend: not a uv workspace member and not part of a corpus run.
+apps/dashboard/node_modules/
+apps/dashboard/.next/
+
+# Secrets never enter the build context. GEMINI_API_KEY is passed at run time.
+.env
+
+.git/
+docs/paper/*.pdf

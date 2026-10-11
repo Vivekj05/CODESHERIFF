@@ -13,7 +13,7 @@ Apps → New GitHub App*).
 |---|---|---|
 | **GitHub App name** | `codesheriff-dev` (or anything free) | The slug that appears in the URL is what goes in `GITHUB_APP_SLUG` |
 | **Homepage URL** | `http://localhost:3000` | Not used by the flow |
-| **Callback URL** | `http://localhost:8000/auth/callback` | Must match `API_PUBLIC_URL` + `/auth/callback` **exactly**, or the code exchange fails with an unhelpful error |
+| **Callback URL** | `http://localhost:3000/api/auth/callback/github` | Better Auth's GitHub callback in the dashboard (D-101). Must match `BETTER_AUTH_URL` + `/api/auth/callback/github` **exactly** |
 | **Request user authorization (OAuth) during installation** | ✅ on | Lets the install flow and the sign-in flow be the same flow |
 | **Setup URL** | `http://localhost:8000/auth/install/callback` | Where GitHub returns after an installation. It grants nothing (D-037) |
 | **Redirect on update** | ✅ on | So changing the installation returns here too |
@@ -22,13 +22,17 @@ Apps → New GitHub App*).
 | **Webhook secret** | `python -c "import secrets; print(secrets.token_hex(32))"` | Goes in `GITHUB_WEBHOOK_SECRET`. Unset, the webhook answers 501 and accepts nothing — it never falls back to accepting unsigned payloads (AUDIT.md 0.1) |
 | **Where can this App be installed?** | Only on this account | Multi-tenancy is out of scope (§6) |
 
-## 2. Permissions — repository level only
+## 2. Permissions
 
 | Permission | Access |
 |---|---|
 | Metadata | Read-only |
 | Contents | Read-only |
 | Pull requests | Read and write |
+
+Plus one **account** permission: **Email addresses: Read-only.** Better Auth requires an email for
+every user and reads a private one through it (D-101); without it, sign-in fails for anyone whose
+email is private.
 
 **Nothing else.** No Checks, no Actions, no Administration, no Members, and no Contents: write.
 CodeSheriff never pushes code — patches are suggestions inside a comment (D-034). Every extra
@@ -49,8 +53,9 @@ Not `Push`. A force-push to a PR branch already arrives as `pull_request` / `syn
 From the App's settings page after creating it:
 
 - **App ID** → `GITHUB_APP_ID`
-- **Client ID** → `GITHUB_APP_CLIENT_ID`
-- **Client secret** → *Generate a new client secret* → `GITHUB_APP_CLIENT_SECRET`
+- **Client ID** → `GITHUB_APP_CLIENT_ID`, in **`frontend/.env.local`** (sign-in runs there, D-101)
+- **Client secret** → *Generate a new client secret* → `GITHUB_APP_CLIENT_SECRET`, also in
+  `frontend/.env.local`
 - **Private key** → *Generate a private key*, which downloads a `.pem` → put the file **outside this
   repository** and point `GITHUB_APP_PRIVATE_KEY_PATH` at it
 - The slug from the App's URL (`https://github.com/settings/apps/<slug>`) → `GITHUB_APP_SLUG`
@@ -95,7 +100,7 @@ and it is a real check: the list comes from the database, refreshed from GitHub 
 | Symptom | Cause |
 |---|---|
 | `501` with "GITHUB_APP_CLIENT_ID … must be set" | `.env` not loaded, or the API started from a different working directory |
-| GitHub error `redirect_uri_mismatch` | The Callback URL on the App is not byte-identical to `API_PUBLIC_URL` + `/auth/callback` |
+| GitHub error `redirect_uri_mismatch` | The Callback URL on the App is not byte-identical to `BETTER_AUTH_URL` + `/api/auth/callback/github` |
 | `400 OAuth state did not match` | The state cookie expired (ten minutes) or was blocked; start again from `/sign-in` |
 | Signed in, but no repositories | The App is installed on an account whose installation grants no repositories, or it is installed on a *different* account from the one that signed in |
-| `502 GitHub rejected the sign-in` | The client secret is wrong, or the authorisation code was already used — codes are single-use |
+| Better Auth error `email_not_found` | The App lacks the "Email addresses: Read-only" account permission |
