@@ -56,16 +56,32 @@ COPY backend/worker/pyproject.toml               backend/worker/
 # resolved a different dependency set would be measuring a different system.
 RUN uv sync --all-packages --frozen --no-install-workspace
 
-COPY . .
-
-RUN uv sync --all-packages --frozen
+# Every instruction above this line is the 1.4 GB dependency layer and what it
+# rests on. Changing any of them rebuilds that layer and re-downloads all of
+# it, so new instructions go below. (Comments do not count; Docker strips them.)
 
 # Semgrep and Bandit are external CLIs, not workspace dependencies: nothing
 # imports them, `static_agent.semgrep.runner` shells out to `semgrep --sarif`,
 # and Bandit is a Chapter 18 baseline to compare against, not a witness. They
 # are pinned because an unpinned scanner makes the structural witness a moving
 # target between the run that fits its ratios and the run that tests them.
-RUN pip install --no-cache-dir semgrep==1.176.1 bandit==1.9.4
+# Installed before the source is copied, into the system interpreter rather
+# than /opt/venv, so a source edit never re-downloads Semgrep's dependency
+# tree. The download cache is a BuildKit cache mount, never a layer: a build
+# that dies halfway on a flaky connection keeps what it fetched for the next
+# try, and the image itself carries no cache.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --retries 10 --timeout 60 semgrep==1.176.1 bandit==1.9.4
+
+# The uv cache is a mount on another filesystem, so hard links fail; copy
+# instead, and give each request longer than the 30s default.
+ENV UV_LINK_MODE=copy \
+    UV_HTTP_TIMEOUT=120
+
+COPY . .
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --all-packages --frozen
 
 # tree-sitter-language-pack downloads each grammar on first use. Fetched here,
 # checksum-verified by the library, so extraction never reaches the network at

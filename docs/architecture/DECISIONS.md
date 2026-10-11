@@ -3120,3 +3120,45 @@ deliberate re-fit.
 **Because** the posterior is only a probability if the witness that produced it is the one its
 ratios were measured on, and a backend that changed with the registry, the platform or the morning
 was never one witness.
+
+## D-105 — The build context excludes the frontend whole, and Semgrep sits after the dependency layer
+
+**Date:** 2026-10-11 · **Status:** ACTIVE · **Builds on:** D-042, D-104
+
+**Context.** Rebuilding the worker image for D-104 exposed two defects in how it was built.
+
+1. **`.dockerignore` still named `apps/dashboard/`.** When the dashboard moved to `frontend/`, its
+   two entries stopped matching anything, and `COPY . .` took `frontend/node_modules` (710 MB),
+   `frontend/.next` (1.3 GB) and `frontend/.env.local` (the dashboard's `BETTER_AUTH_SECRET` and
+   the GitHub App's OAuth client secret) into every image built since. The image is local only;
+   nothing in this repository pushes it. The App's private key and the root `.env` were correctly
+   excluded.
+2. **Semgrep was installed after `COPY . .`,** so every source edit re-downloaded its dependency
+   tree (about 370 MB installed). On 2026-10-11 the route from this network to Fastly, which serves
+   both PyPI and GitHub release downloads, ran at 7–30 KB/s while Cloudflare ran at 3.3 MB/s, and
+   three builds failed on that step.
+
+**Decision.**
+- `frontend/` is excluded **whole**, not by subfolder: the worker imports none of it, and a list of
+  subfolders is what went stale. Secrets are excluded at any depth (`**/.env`, `**/.env.*`,
+  `**/*.pem`, `**/*.key`), and `.semgrep/` is excluded so that "no rules are baked in" is true of
+  the image and not only of the Dockerfile. The build context went from 2.13 GB to 14 MB.
+- Semgrep and Bandit install **after** the workspace dependency layer and **before** the source
+  copy, with a BuildKit cache mount and per-request retries. Every instruction up to the
+  dependency layer is left byte-identical, so the 1.4 GB layer stays cached; new instructions go
+  below it.
+
+**Not yet done.** The image built before this change still holds `.env.local` in a layer, and so
+does the build cache. Both are deleted after the next successful build, which waits on a usable
+connection to PyPI. Rotating the two secrets is optional: they never left the machine.
+
+**Open, and recorded rather than hidden.** D-104 says the worker gets only its own credentials
+because it has no `env_file`. That holds for its environment, not its filesystem: the service
+bind-mounts the whole checkout at `/workspace`, so `.env` and `frontend/.env.local` are readable
+there. Analysed code cannot reach them, because the Wasmtime guest has no preopened directory
+(D-075), but a compromised worker process could, which is what D-042 exists to prevent. Narrowing
+the mount to what the worker reads (`backend/`, `.semgrep/`, `.wasm-runtimes/`) is the fix, and it
+needs its own change.
+
+**Because** an ignore list that names paths is only as current as the last move, and a secret in an
+image layer outlives the file it was copied from.
