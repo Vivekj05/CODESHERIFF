@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { Highlight } from "@/components/chai/highlight";
+import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -75,14 +77,11 @@ export default function AuditsPage() {
   }, [cursor, exhausted, loading, loadMore]);
 
   return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Audits</h1>
-        <p className="text-muted-foreground text-sm">
-          One audit per pull request head commit. A push abandons the run for the previous head
-          rather than failing it.
-        </p>
-      </div>
+    <div className="flex flex-col gap-8">
+      <PageHeader title="Audits">
+        One audit per pull request head commit. A new push <Highlight>supersedes the old run</Highlight>{" "}
+        rather than failing it.
+      </PageHeader>
 
       {error && (
         <Alert variant="destructive">

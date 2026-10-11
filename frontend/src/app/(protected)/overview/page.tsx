@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { ActivityOverviewChart } from "@/components/analytics/activity-overview-chart";
-import { ContributionGraph } from "@/components/analytics/contribution-graph";
+import { Highlight } from "@/components/chai/highlight";
+import { PageHeader } from "@/components/page-header";
 import { Stat } from "@/components/stat";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -80,14 +80,11 @@ export default function OverviewPage() {
   const validation = calibration?.artifact.metrics.validation;
 
   return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Overview</h1>
-        <p className="text-muted-foreground text-sm">
-          Every number here is a count of something that happened. There is no aggregate score:
-          the claim this project makes is about one posterior about one function.
-        </p>
-      </div>
+    <div className="flex flex-col gap-8">
+      <PageHeader title="Overview">
+        Every number here is a count of something that happened. There is no overall score, because
+        the claim is always about <Highlight>one probability for one function</Highlight>.
+      </PageHeader>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
@@ -117,11 +114,6 @@ export default function OverviewPage() {
         />
       </div>
 
-      <div className="grid gap-6">
-        <ContributionGraph />
-        <ActivityOverviewChart />
-      </div>
-
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Calibration in force</CardTitle>
@@ -148,7 +140,7 @@ export default function OverviewPage() {
                 </p>
               )}
               <Link href="/calibration" className="text-sm underline underline-offset-4">
-                What these numbers rest on →
+                See what these numbers rest on
               </Link>
             </div>
           ) : (

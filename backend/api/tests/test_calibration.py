@@ -12,21 +12,15 @@ defaulted anything would move only one.
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi.testclient import TestClient
 
 from codesheriff_engine.calibration import CalibrationError, active_artifact
 
+from .conftest import sign_in
+
 pytestmark = pytest.mark.db
-
-
-def sign_in(client: TestClient) -> None:
-    response = client.get("/auth/login", params={"next": "/calibration"})
-    state = parse_qs(urlparse(response.headers["location"]).query)["state"][0]
-    callback = client.get("/auth/callback", params={"code": "good-code", "state": state})
-    assert callback.status_code == 303, callback.text
 
 
 def test_it_serves_the_artifact_s_own_numbers(client: TestClient) -> None:

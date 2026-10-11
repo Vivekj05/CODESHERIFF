@@ -7,6 +7,11 @@ unless `CODESHERIFF_ALLOW_LIVE_CALLS` is set. CLAUDE.md requires that tests neve
 calls; a guard at the socket layer catches the ones a forgotten mock would let through, including
 inside `githubkit`.
 
+**Tokens are real, keys are local.** Sign-in runs in the dashboard under Better Auth (D-101); the
+API only verifies the JWT it hands over. The suite signs tokens with an Ed25519 key generated per
+session and gives the real `JwtVerifier` the public half, so every check (signature, algorithm,
+issuer, audience, expiry, claims) runs exactly as in production, with no JWKS fetched.
+
 **GitHub is substituted at the interface, not at the HTTP layer.** `FakeGitHubGateway` implements
 `GitHubGateway`, so the real routes run against it. A mocked HTTP response would still pass with a
 misspelled endpoint; a fake implementation of the interface would not compile against a changed
@@ -19,21 +24,25 @@ import os
 import socket
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session as DbSession
 
 from codesheriff_api.config import ApiConfig
-from codesheriff_api.deps import get_config, get_db, get_github
+from codesheriff_api.deps import get_config, get_db, get_github, get_token_verifier
 from codesheriff_api.github_gateway import (
     GitHubError,
-    GitHubIdentity,
     InstallationAccount,
     InstallationRepository,
 )
 from codesheriff_api.main import app
+from codesheriff_api.principal import JwtVerifier
 from codesheriff_api.queue import QueueError, get_queue
 from codesheriff_storage.testing import migrated_engine, rollback_session, test_database_url
 
@@ -69,17 +78,9 @@ class FakeGitHubGateway:
 
     def __init__(
         self,
-        identity: GitHubIdentity | None = None,
         repositories: dict[int, list[InstallationRepository]] | None = None,
         failing_installations: set[int] | None = None,
     ) -> None:
-        self.identity = identity or GitHubIdentity(
-            github_id=4242,
-            login="octo-dev",
-            name="Octo Dev",
-            avatar_url="https://example.invalid/avatar.png",
-            installation_ids=[9001],
-        )
         self.repositories = repositories or {
             9001: [
                 InstallationRepository(
@@ -97,15 +98,10 @@ class FakeGitHubGateway:
             ]
         }
         self.failing_installations = failing_installations or set()
-        self.codes_seen: list[str] = []
-
-    def sign_in(self, code: str) -> GitHubIdentity:
-        self.codes_seen.append(code)
-        if code == "bad-code":
-            raise GitHubError("GitHub rejected the code")
-        return self.identity
+        self.installations_read: list[int] = []
 
     def get_installation(self, installation_id: int) -> InstallationAccount:
+        self.installations_read.append(installation_id)
         if installation_id in self.failing_installations:
             raise GitHubError("installation unavailable")
         return InstallationAccount(
@@ -121,6 +117,54 @@ class FakeGitHubGateway:
 
 
 WEBHOOK_SECRET = "test-webhook-secret"
+
+ISSUER = "http://localhost:3000"
+"""What `ApiConfig(BETTER_AUTH_URL=...)` in `api_config` makes the expected issuer and audience."""
+
+SIGNING_KEY = Ed25519PrivateKey.generate()
+"""The suite's stand-in for Better Auth's JWKS key. Generated per run; never written anywhere."""
+
+DEFAULT_INSTALLATIONS = [9001]
+"""What a signed-in test user can see unless a test says otherwise."""
+
+
+def mint_token(
+    *,
+    installation_ids: list[int] | None = None,
+    login: str = "octo-dev",
+    key: Ed25519PrivateKey | None = None,
+    algorithm: str = "EdDSA",
+    issuer: str = ISSUER,
+    audience: str = ISSUER,
+    expires_in: timedelta = timedelta(minutes=15),
+    **extra: Any,
+) -> str:
+    """A token shaped exactly like the one `frontend/src/lib/auth.ts` defines."""
+    now = datetime.now(UTC)
+    claims: dict[str, Any] = {
+        "sub": "user-octo",
+        "iss": issuer,
+        "aud": audience,
+        "iat": int(now.timestamp()),
+        "exp": int((now + expires_in).timestamp()),
+        "login": login,
+        "name": "Octo Dev",
+        "avatar_url": "https://example.invalid/avatar.png",
+        "installation_ids": DEFAULT_INSTALLATIONS if installation_ids is None else installation_ids,
+        **extra,
+    }
+    return jwt.encode(claims, key or SIGNING_KEY, algorithm=algorithm)
+
+
+def sign_in(client: TestClient, installation_ids: list[int] | None = None) -> None:
+    """Attach a valid token to every later request, and let `/auth/session` sync installations.
+
+    The second half is what the dashboard does on every page load; it is also what makes a
+    token's installations exist as rows before a test lists repositories.
+    """
+    client.headers["Authorization"] = f"Bearer {mint_token(installation_ids=installation_ids)}"
+    response = client.get("/auth/session")
+    assert response.status_code == 200, response.text
 
 
 class FakeTaskQueue:
@@ -146,12 +190,11 @@ def api_config() -> ApiConfig:
     """Configuration with credentials present but never used — the gateway is faked."""
     return ApiConfig(
         GITHUB_APP_ID="123456",
-        GITHUB_APP_CLIENT_ID="Iv1.testclientid",
-        GITHUB_APP_CLIENT_SECRET="test-client-secret",
         GITHUB_APP_SLUG="codesheriff-test",
         GITHUB_WEBHOOK_SECRET=WEBHOOK_SECRET,
         API_PUBLIC_URL="http://localhost:8000",
         DASHBOARD_ORIGIN="http://localhost:3000",
+        BETTER_AUTH_URL=ISSUER,
     )
 
 
@@ -208,6 +251,9 @@ def client(
     app.dependency_overrides[get_db] = _db_override
     app.dependency_overrides[get_github] = lambda: github
     app.dependency_overrides[get_queue] = lambda: queue
+    app.dependency_overrides[get_token_verifier] = lambda: JwtVerifier(
+        issuer=ISSUER, signing_key_for=lambda _token: SIGNING_KEY.public_key()
+    )
     try:
         with TestClient(app, follow_redirects=False) as test_client:
             yield test_client

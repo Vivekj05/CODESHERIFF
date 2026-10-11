@@ -68,7 +68,7 @@ odd choice and is load-bearing:
 | Fusion iterates **all** agents, not just those that emitted | Wasteful loop | Otherwise odds can only ever increase |
 | Fusion multiplies one LR per **witness**, not per agent | Four backends, four factors seems natural | `structural.taint` and `structural.semgrep` analyse the same source text with the same technique. Two "high" hits multiplied to 8.5 x 7.0 = **59.5x** out of one witness (D-052) |
 | ABSTENTION has no entry in the ratio table | An unfitted constant looks like an oversight | It is exactly 1.0 *by definition*. A fitted number there would mean the act of failing carried information about the code |
-| An unregistered `agent_id` raises in fusion | Harsh; a warning would do | It would otherwise become a fifth witness and multiply in a factor nobody calibrated. `apps/worker` catches it at agent load, so the cost is one log line at start-up |
+| An unregistered `agent_id` raises in fusion | Harsh; a warning would do | It would otherwise become a fifth witness and multiply in a factor nobody calibrated. `backend/worker` catches it at agent load, so the cost is one log line at start-up |
 | Agents run **blind** — no anchors | Anchoring is obviously more efficient | It correlates the agents and breaks the conditional independence the fusion math assumes |
 | Debate emits its own evidence, never overwrites the posterior | Overwriting is simpler | Overwriting destroys calibration exactly on the contested cases and makes the debate step unmeasurable |
 | Oversized units **abstain**, never truncate | Truncating gets partial signal | Truncated analysis produces confident findings from half-read code, biased toward over-reporting, and silently invalidates calibration |
@@ -131,22 +131,35 @@ the implementation.
 ```
 CODESHERIFF/
 ├── pyproject.toml        # uv workspace + ruff/mypy/import-linter config
-├── packages/
-│   ├── contracts/        # THE single shared contract. Never vendored.
-│   ├── corpus/           # 76 labelled units, 38 twin pairs, committed splits (Ch 7, Ch 12)
-│   ├── agent_static/     # structural.taint (Ch 10) + structural.semgrep
-│   ├── agent_semantic/   # semantic.hosted
-│   ├── agent_context/    # context.rag (Ch 12)
-│   ├── agent_runtime/    # runtime.sfi — Wasmtime + WASI sandbox (Ch 13)
-│   ├── engine/           # ChangeUnit extraction, fusion, calibration. No DB client, no agents.
-│   ├── patch/            # patch.hosted — draft, verify, anchor a suggestion (Ch 17). Not a witness.
-│   └── storage/          # SQLAlchemy models, Alembic, pgvector store, dashboard reads (Ch 15)
-├── apps/
-│   ├── api/              # FastAPI: sign-in (Ch 5), HMAC + enqueue (Ch 6), dashboard reads (Ch 15)
+├── docker-compose.yml    # Postgres (pgvector) + Redis only
+├── backend/              # every uv workspace member lives here
+│   ├── core/
+│   │   ├── contracts/    # THE single shared contract. Never vendored.
+│   │   ├── corpus/       # 76 labelled units, 38 twin pairs, committed splits (Ch 7, Ch 12)
+│   │   ├── engine/       # ChangeUnit extraction, fusion, calibration. No DB client, no agents.
+│   │   ├── patch/        # patch.hosted — draft, verify, anchor a suggestion (Ch 17). Not a witness.
+│   │   └── storage/      # SQLAlchemy models, Alembic, pgvector store, dashboard reads (Ch 15)
+│   ├── agents/
+│   │   ├── static/       # structural.taint (Ch 10) + structural.semgrep
+│   │   ├── semantic/     # semantic.hosted
+│   │   ├── context/      # context.rag (Ch 12)
+│   │   └── runtime/      # runtime.sfi — Wasmtime + WASI sandbox (Ch 13)
+│   ├── api/              # FastAPI: JWT verification (D-101), HMAC + enqueue (Ch 6), dashboard reads (Ch 15)
 │   ├── worker/           # Celery: owns the pipeline and all agents. Runs them + fuses (Ch 9)
-│   └── dashboard/        # Next.js 16 — rendering layer only. Real audits + calibration (Ch 15)
+│   ├── calibration/      # committed observation JSONL + recorded model responses (Ch 14)
+│   ├── docker/           # corpus-run image: the Linux host where all four witnesses are live (Ch 18)
+│   └── scripts/          # init-pgvector.sql, mounted by docker-compose
+├── frontend/             # Next.js 16 dashboard + Better Auth sign-in (D-101). Not a uv member.
 └── docs/history/         # Superseded specs, kept for provenance
 ```
+
+Workspace members are declared as `backend/core/*`, `backend/agents/*`, `backend/api` and
+`backend/worker` in the root `pyproject.toml`. Directory names changed in the move; package and
+import names did not — the static agent is still `static_agent`, the engine `codesheriff_engine`.
+
+`454e4df` added `src/app/api/rag/*` route handlers, a Pinecone client and an Octokit helper to
+`frontend/`. They were removed: Pinecone is on the rejected list and nothing on the audit path read
+them. The one Next.js API route that exists is `/api/auth/*`, for Better Auth (D-101).
 
 ✅ **The pipeline runs end to end, and all four agents exist and are measured.**
 Chapter 2 froze the contract at v2.0.0 and got every gate green. Chapter 6 made the plumbing real —
@@ -181,7 +194,7 @@ per-cell counts recorded, the alert threshold from a base-rate-weighted precisio
 the validation split, and both travel in `calibration.json` with the corpus hash they were measured
 against. **The hand-set constants are deleted, not relabelled** — there is no `PROVISIONAL_RATIOS`,
 `PROVISIONAL_PRIOR`, `PROVISIONAL_ALERT_THRESHOLD` or `FALLBACK_RATIOS` anywhere, and
-`packages/engine/tests/test_no_unfitted_numbers.py` parses the source tree to keep it that way.
+`backend/core/engine/tests/test_no_unfitted_numbers.py` parses the source tree to keep it that way.
 
 Two caveats travel with those numbers. `structural.semgrep` has no Windows build and abstained on
 every unit, so the structural ratios describe a **one-backend witness** — Chapter 18 must re-observe
@@ -189,26 +202,27 @@ on Linux or CI. And the **prior is declared, not measured**: a twin-paired corpu
 of 0.5 by construction, so the base rate is a stated 3% that rescales every posterior by a recorded
 factor and refits nothing (D-083).
 
-**The webhook is `apps/api/src/codesheriff_api/webhooks.py`.** It verifies `X-Hub-Signature-256`
+**The webhook is `backend/api/src/codesheriff_api/webhooks.py`.** It verifies `X-Hub-Signature-256`
 against the raw body *before* parsing it, writes an `audits` row, publishes the id to Celery and
-answers 202. The old `packages/engine/.../github/webhook.py` is deleted, along with
+answers 202. The old `backend/core/engine/.../github/webhook.py` is deleted, along with
 `codesheriff_engine/main.py` — a second FastAPI app that mounted it — and the `serve` CLI command
 that booted them. If you find yourself adding an HTTP server or a GitHub client back into
-`packages/engine`, that is the mistake `AUDIT.md` 4.3 describes.
+`backend/core/engine`, that is the mistake `AUDIT.md` 4.3 describes.
 
-**Two processes, two credential sets** (D-042). `apps/api` holds the OAuth client secret and the
-webhook secret; `apps/worker` holds neither, and holds the LLM key that the API must never have.
+**Three processes, three credential sets** (D-042, D-101). `frontend` holds the GitHub App's OAuth
+client secret and `BETTER_AUTH_SECRET`; `backend/api` holds the webhook secret and the App's private
+key, and no user token; `backend/worker` holds the LLM key that neither of the others may have.
 The API cannot import the worker — `import-linter` puts them on the same layer — so it publishes
 the task **by name** (D-040), and the message carries an audit id and nothing else (D-041).
 
-**Persisting anything.** All database access lives in `packages/storage`, and `codesheriff_engine`
+**Persisting anything.** All database access lives in `backend/core/storage`, and `codesheriff_engine`
 is forbidden from importing `sqlalchemy`, `alembic`, `psycopg` or `codesheriff_storage` — enforced
 by `import-linter` (D-025). Fitted numbers must be reproducible from the calibration split and a
 recorded corpus hash; a fusion module that can open a session makes that unverifiable. Never write a
 row by hand: `mapping.py` is the only writer, it hashes source rather than storing it, and it drops
 fusion results whose key no agent could have produced (D-026, D-027).
 
-**Ground truth.** `packages/corpus` holds 60 hand-written units in 30 twin pairs — the same
+**Ground truth.** `backend/core/corpus` holds 60 hand-written units in 30 twin pairs — the same
 function, once vulnerable and once safe, sharing a `finding_key` so a false positive is a lookup.
 No agent may import it, enforced by a dedicated `import-linter` contract (D-047): an agent that can
 read `label` is being told the answer, and one that can read `detectable_by` can be excused by the
@@ -228,7 +242,7 @@ syntax, so a stray indent would silently analyse a fragment rather than fail.
 
 **Extracting units.** `codesheriff_engine.extraction` turns two fetched file blobs into one
 `ChangeUnit` per changed function. It holds no HTTP client, no GitHub client and no database session:
-`apps/worker` fetches and this decides what a unit is, which is what lets Chapter 14 run extraction
+`backend/worker` fetches and this decides what a unit is, which is what lets Chapter 14 run extraction
 over corpus cases with no credentials (D-051).
 
 **GitHub's `patch` is read nowhere, and there is no field for it on `PullRequestFile`** (D-048).
@@ -301,7 +315,7 @@ this witness still says nothing — escaping is not authorization. `rate_limit` 
 absent from the table rather than excluded from it, and there is no bare `access`, `check`,
 `verify`, `validate` or `require` token; corpus pairs fire both traps on both twins.
 
-**Retrieval is a Protocol the agent declares and `apps/worker` implements** (D-072). The agent holds
+**Retrieval is a Protocol the agent declares and `backend/worker` implements** (D-072). The agent holds
 no store, no session and no embedding model — `lint-imports` fails the build for an agent that
 reaches a database client, and the split is also what lets the corpus measurement run the production
 `analyze()` path with no database and no model download. Cross-repository retrieval is impossible
@@ -364,7 +378,7 @@ forget. Counts are correlated subqueries, never joins: an audit has many units, 
 many findings, and joining all three would report `units x findings` change units, which is a
 plausible wrong number.
 
-`apps/api` serves five read routes — `GET /audits`, `GET /audits/{id}`,
+`backend/api` serves five read routes — `GET /audits`, `GET /audits/{id}`,
 `GET /audits/{id}/findings/{key}`, `GET /stats/overview`, `GET /calibration` — and **none of them
 computes a probability**. Every posterior, prior, threshold and likelihood ratio is read from the
 row or the artifact that recorded it, so an audit that ran under an earlier calibration keeps
@@ -405,16 +419,16 @@ There is no debate module. It overwrote the posterior it was meant to explain, a
 was substring matching in which `"int("` — a substring of `print(` — counted as a sanitizer. It
 returns as a witness that emits its own evidence in Chapter 11 (D-053).
 
-**Running agents is `apps/worker`'s job, never the engine's** (D-054). `apps/worker/analysis.py`
+**Running agents is `backend/worker`'s job, never the engine's** (D-054). `backend/worker/src/codesheriff_worker/analysis.py`
 holds four slots, fills every one of them, and guarantees at least one statement per agent per unit:
 an agent that will not import, raises, hangs or returns `[]` becomes an abstention with a distinct
-reason. If you find yourself adding `import static_agent` to `packages/engine`, that is the
+reason. If you find yourself adding `import static_agent` to `backend/core/engine`, that is the
 undeclared dependency Chapter 9 removed — and it is what let a fusion package pull in an LLM client.
 
 **Fitting the numbers.** `codesheriff_engine.calibration` fits one likelihood ratio per witness per
 cell from labelled claims — no agent, no corpus, no session, so §6's "reproducible from the
 calibration split and a recorded corpus hash" is a property of the code. The harness that produces
-those claims is `apps/worker`'s, because running agents is `apps/worker`'s job (D-054, D-085): it
+those claims is `backend/worker`'s, because running agents is `backend/worker`'s job (D-054, D-085): it
 calls the **production** `load_agents` and `analyse_unit`, rebinding each case's retriever and
 recorded model responses rather than rebuilding the agents, and it refuses the test split by name.
 
@@ -430,12 +444,12 @@ wrong split, and `codesheriff_worker.calibration.runner` cannot produce a test-s
 
 **The audit path cannot import the corpus** (D-086), even though the worker process now can. D-047
 stops the agents; this contract stops `tasks`, `pipeline`, `analysis`, `comment` and all of
-`apps/api`. The leak would look like a convenient import in the pipeline for "just checking"
+`backend/api`. The leak would look like a convenient import in the pipeline for "just checking"
 whether a unit matches a known case.
 
 **Suggesting a repair.** `codesheriff_patch` takes one alert-worthy finding, asks a model for the
 repaired function, checks it, and hands back either an anchored suggestion or a recorded reason
-there is none. **Suggestions only: nothing commits, merges or pushes** (§2). `apps/worker/patching.py`
+there is none. **Suggestions only: nothing commits, merges or pushes** (§2). `backend/worker/src/codesheriff_worker/patching.py`
 supplies the model and the witnesses, and posts.
 
 **It is not a fifth witness and must never become one** (D-092). `patch.hosted` emits no `Evidence`
@@ -528,12 +542,16 @@ project; agents that failed the same way would add nothing to a probability esti
 - Threshold selected **only** on the validation split
 - Test split evaluated **exactly once**, at the end
 
-**Sign-in and access.** The dashboard never talks to GitHub and holds no secret; `apps/api` owns the
-OAuth flow. What a user may see is read from `GET /user/installations` at sign-in and stored on their
-session — there is no permissions table, and an empty installation list returns nothing rather than
-everything (D-035). The database holds no GitHub token and no session token, only a SHA-256 of the
-cookie (D-036). A URL parameter never widens a session: the installation callback re-derives
-everything through OAuth (D-037).
+**Sign-in and access** (D-101). Better Auth runs sign-in in the dashboard (`frontend/src/lib/auth.ts`)
+with the GitHub App's client credentials, and issues a 15-minute EdDSA JWT. The API verifies it in
+one place, `codesheriff_api.principal`: signature against `/api/auth/jwks`, EdDSA only, issuer and
+audience equal to the dashboard's origin. The API never reads Better Auth's tables and never holds a
+user token. What a user may see is still read from `GET /user/installations` at sign-in and carried
+in the token; there is no permissions table, and an empty installation list returns nothing rather
+than everything (D-035). The GitHub token **is** stored now, encrypted in `auth_accounts`, which
+reverses D-036 and is recorded as a cost. A URL parameter never widens access: the installation
+callback sends the user back through sign-in (D-037). Alembic owns Better Auth's tables
+(`0006_better_auth`); never run `npx auth migrate`.
 
 **Security.** Untrusted PR code executes only in the sandbox (deny-by-default network, ephemeral
 filesystem, resource caps) and never on a host holding database credentials. Source code lives in
@@ -562,7 +580,8 @@ Python 3.12 · `uv` workspace · FastAPI · Pydantic v2 · Celery + Redis · Pos
 - **Docker as the sandbox** — containers are OS-level isolation, not software fault isolation; the
   SFI claim requires Wasmtime
 - **Prisma / Inngest / Pinecone / Next.js API routes as backend** — the backend must be Python
-  because tree-sitter, scikit-learn and Wasmtime bindings have no viable JS equivalent
+  because tree-sitter, scikit-learn and Wasmtime bindings have no viable JS equivalent. The single
+  exception is Better Auth's `/api/auth/*` (D-101), which is sign-in, not backend
 
 **Constraints.** Zero recurring cost (free-tier LLM, local embeddings, self-hosted). No dedicated
 GPU — any fine-tuning must fit free Colab/Kaggle tiers. Webhook acknowledged in < 3s (GitHub's
@@ -580,7 +599,7 @@ multi-tenancy with billing, IDE plugins. JS/TS support is unscheduled until expl
 ```bash
 uv sync --all-packages           # install the workspace  (--all-packages, or members are skipped)
 uv run pytest                    # all packages
-uv run pytest packages/agent_static
+uv run pytest backend/agents/static
 uv run ruff check . && uv run ruff format --check . && uv run mypy .
 uv run lint-imports              # agent + storage + corpus + patcher boundaries — must stay green
 
@@ -593,14 +612,14 @@ uv run codesheriff-engine fuse evidence.json       # posterior + one row per wit
 # Suggested repairs (Ch 17). There is no CLI: patching runs inside an audit, because a repair needs
 # the finding and the witnesses that produced it. `PATCH_ENABLED=false` turns it off, and the pull
 # request comment then says a suggestion was not attempted rather than quietly omitting one.
-uv run pytest packages/patch      # the ladder, against a scripted model — no key, no network
+uv run pytest backend/core/patch      # the ladder, against a scripted model — no key, no network
 
 # Calibration (Ch 14). `observe` is the slow half and writes committed JSONL; `fit` reads it, so a
 # re-fit needs no interpreter, no API key and no Semgrep build. `record` is the only command here
 # that calls a provider, and only for cases with no recorded response.
 uv run codesheriff-worker calibrate observe --split calibration
 uv run codesheriff-worker calibrate observe --split validation
-uv run codesheriff-worker calibrate fit            # -> packages/engine/.../calibration/calibration.json
+uv run codesheriff-worker calibrate fit            # -> backend/core/engine/.../calibration/calibration.json
 uv run codesheriff-worker calibrate show           # what the active artifact says, and where it is
 
 # The runtime witness's sandbox. `doctor` says whether this machine can run it at all, and where
@@ -611,7 +630,7 @@ curl -L -o .wasm-runtimes/python-3.12.0.wasm \n  https://github.com/vmware-labs/
 # The precedent store context.rag reasons from. The ONLY writer; the audit path never ingests.
 uv run codesheriff-worker precedent backfill --repository-id 1 --repo-full-name owner/name \n    --installation-id 42 --pr 118 --head-sha <sha>
 
-uv run uvicorn codesheriff_api.main:app --reload   # /health, /auth/*, /repositories, /webhooks/github
+uv run uvicorn codesheriff_api.main:app --reload   # /health, /auth/session, /repositories, /webhooks/github
 
 # The worker. Needs Redis; without it the API answers 503 on the webhook rather than losing work.
 docker compose up -d redis
@@ -622,52 +641,59 @@ npx smee-client --url https://smee.io/<channel> --path /webhooks/github --port 8
 
 # Database (Chapter 3). Alembic owns the schema; never Base.metadata.create_all.
 docker compose up -d postgres
-uv run alembic -c packages/storage/alembic.ini upgrade head
-uv run alembic -c packages/storage/alembic.ini downgrade base
+uv run alembic -c backend/core/storage/alembic.ini upgrade head
+uv run alembic -c backend/core/storage/alembic.ini downgrade base
 
-# Tests that touch Postgres are marked `db` and SKIP unless this is set (D-029).
-export CODESHERIFF_TEST_DB=postgresql+psycopg://codesheriff:codesheriff@localhost:5432/codesheriff
-uv run pytest packages/storage -m db
+# Tests that touch Postgres are marked `db` and SKIP unless this is set (D-029). They migrate their
+# database down to empty, so it must be a separate one, never the database holding real audits:
+docker exec codesheriff-postgres psql -U codesheriff -c "create database codesheriff_test"
+export CODESHERIFF_TEST_DB=postgresql+psycopg://codesheriff:codesheriff@localhost:5432/codesheriff_test
+uv run pytest backend/core/storage -m db
 ```
 
 The dashboard is a separate npm project, not a uv workspace member (Chapter 4):
 
 ```bash
-cd apps/dashboard
-npm run dev                      # http://localhost:3000 — sign-in needs the API on :8000
+cd frontend
+npm run dev                      # http://localhost:3000 — sign-in is Better Auth here; data needs the API on :8000
 npm run lint && npm run build    # the two frontend gates — must stay green
 ```
 
 `NEXT_PUBLIC_API_BASE_URL` is inlined at **build** time, not read at runtime. Changing which API the
 dashboard talks to means rebuilding it.
 
-Signing in needs a registered GitHub App — `docs/github-app-setup.md`. Without one the API answers
-`501` naming the missing variable rather than failing at import, so `/health` works on a machine
-that has never seen a `.pem`.
+Signing in needs a registered GitHub App — `docs/github-app-setup.md` — with the callback URL
+`http://localhost:3000/api/auth/callback/github` and the "Email addresses: Read-only" account
+permission, and Better Auth's variables in `frontend/.env.local` (listed in `.env.example`). The API
+still starts without any of it, so `/health` works on a machine that has never seen a `.pem`.
 
-All five Python gates and both frontend gates are green as of Chapter 17 (1249 tests passing with
-no database, 177 skipped; the 178 database-marked tests pass against Postgres). `mypy
---strict` covers 131 source files and `lint-imports` keeps **seven** contracts — the sixth holds the
+**The `db`-marked tests downgrade their database to empty, before and after.** Point
+`CODESHERIFF_TEST_DB` at a separate database (`codesheriff_test`), never at the one holding real
+audits.
+
+All five Python gates and both frontend gates are green as of D-101 (1413 tests passing with the
+test database and the WASI interpreter present, none skipped). `mypy
+--strict` covers 135 source files and `lint-imports` keeps **seven** contracts — the sixth holds the
 audit path away from the corpus now that the calibration harness shares the worker process (D-086),
 and the seventh keeps the patcher away from every model, repository and witness it might otherwise
 construct for itself (D-092).
 
-**Measuring an agent.** `packages/agent_static/tests/test_corpus_calibration.py` runs the taint
+**Measuring an agent.** `backend/agents/static/tests/test_corpus_calibration.py` runs the taint
 engine over the corpus and asserts recall and false positives per case. It reads the **calibration
 split only**, and asserts that it does: §6 reserves validation for threshold selection and permits
 the test split to be evaluated exactly once, at the end, and a suite that runs on every commit is the
 most thorough possible way to violate that. A test may import `codesheriff_corpus`; the `static_agent`
 package may not (D-047, D-063). There is no `bench` command — it returned `precision: 1.0` (D-010).
 
-`packages/agent_semantic/tests/test_corpus_semantic.py` does the same for `semantic.hosted`, under
+`backend/agents/semantic/tests/test_corpus_semantic.py` does the same for `semantic.hosted`, under
 the same calibration-split restriction, but replays **committed cassettes** rather than calling the
 model: the criteria demand a rate measured on real model output *and* zero live API calls, and
 recording once is how both hold (D-068). Editing the prompt, the system prompt or an exemplar
 changes each cassette's recorded fingerprint and turns the suite red — deliberately. A prompt edit
 invalidates every number measured against the old prompt, so re-record with
-`tools/record_cassettes.py` rather than reaching for the fingerprint.
+`backend/agents/semantic/tools/record_cassettes.py` rather than reaching for the fingerprint.
 
-`packages/agent_runtime/tests/test_corpus_runtime.py` does the same for `runtime.sfi`, under the
+`backend/agents/runtime/tests/test_corpus_runtime.py` does the same for `runtime.sfi`, under the
 same calibration-split restriction, executing the production `analyze()` path inside the real
 sandbox — 9/9 recall on the nine calibration cases the corpus predicts for it, 0 false positives
 across 23 safe twins. It is marked `wasm` and skips without the interpreter, on the `db` precedent
@@ -676,7 +702,7 @@ vacuously against an agent whose sandbox is broken — without it, every false-p
 would pass on an agent that abstained on everything. What it does not measure is p95 latency or the
 fuel budget's behaviour on a 600-line function; both wait for Chapter 14 and CI hardware.
 
-`packages/agent_context/tests/test_corpus_context.py` does the same for `context.rag`, under the
+`backend/agents/context/tests/test_corpus_context.py` does the same for `context.rag`, under the
 same restriction, injecting a deterministic token-overlap retriever over each case's authored
 history — no database, no model download, no network, and the production `analyze()` path. What it
 does not measure is pgvector's own nearest-neighbour ordering; that waits for Chapter 14, which
@@ -691,8 +717,8 @@ a one-backend witness. `ruff` and `mypy` are
 configured **once**, in the root `pyproject.toml` — a per-package `[tool.ruff]` silently shadows it
 with a different rule set, which is how the agent packages went unlinted (D-023).
 
-**Tests must never make live API calls.** `apps/api/tests/conftest.py` and
-`apps/worker/tests/conftest.py` fail any non-loopback socket connection unless
+**Tests must never make live API calls.** `backend/api/tests/conftest.py` and
+`backend/worker/tests/conftest.py` fail any non-loopback socket connection unless
 `CODESHERIFF_ALLOW_LIVE_CALLS` is set — a guard at the socket layer, so a forgotten
 mock cannot leak a real request. GitHub is substituted at the `GitHubGateway` interface rather than
 at the HTTP layer; the real `githubkit` client is exercised separately against an httpx

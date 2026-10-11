@@ -1,33 +1,30 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 
 import { Providers } from "@/components/providers";
+import { ThemeProvider, ThemeScript } from "@/components/theme-provider";
 import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "CodeSheriff",
   description:
-    "Bayesian multi-agent security review for pull requests, with calibrated confidence.",
+    "Security review for GitHub pull requests, with a probability you can check against ground truth.",
 };
 
+/**
+ * Fonts come from @fontsource in globals.css (Manrope, Montserrat, Onest, Geist Mono), so nothing
+ * here loads a font. Dark is the default; ThemeScript sets the class before first paint, which is
+ * why <html> suppresses the hydration warning for its class list.
+ */
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
-    >
+    <html lang="en" className="dark h-full" suppressHydrationWarning>
+      <head>
+        <ThemeScript />
+      </head>
       <body className="min-h-full flex flex-col">
-        <Providers>{children}</Providers>
+        <ThemeProvider>
+          <Providers>{children}</Providers>
+        </ThemeProvider>
       </body>
     </html>
   );

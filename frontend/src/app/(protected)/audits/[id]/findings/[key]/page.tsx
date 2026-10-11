@@ -64,7 +64,7 @@ export default function FindingPage() {
         <AlertTitle>Could not load that finding</AlertTitle>
         <AlertDescription>
           {error} It may belong to an installation this account cannot see, or to a different
-          audit — a finding key is unique within one run, not across runs.
+          audit: a finding key is unique within one run, not across runs.
         </AlertDescription>
       </Alert>
     );
@@ -90,9 +90,9 @@ export default function FindingPage() {
           href={`/audits/${detail.audit_id}`}
           className="text-muted-foreground text-sm hover:underline"
         >
-          ← {detail.repository_full_name} #{detail.pr_number}
+          Back to {detail.repository_full_name} #{detail.pr_number}
         </Link>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+        <h1 className="mt-2 text-2xl font-medium sm:text-3xl">
           {finding.title || `${finding.cwe} in ${finding.qualified_symbol}`}
         </h1>
         <p className="text-muted-foreground font-mono text-xs break-all">
@@ -106,7 +106,7 @@ export default function FindingPage() {
         <CardHeader className="flex flex-row items-start justify-between gap-6">
           <div className="min-w-0">
             <CardTitle className="text-base">
-              {finding.cwe} — {CWE_TITLES[finding.cwe as Cwe] ?? "Out-of-scope weakness"}
+              {finding.cwe}: {CWE_TITLES[finding.cwe as Cwe] ?? "Out-of-scope weakness"}
             </CardTitle>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <Badge variant="secondary" className="font-mono">
@@ -131,7 +131,7 @@ export default function FindingPage() {
         <h2 className="text-lg font-semibold tracking-tight">How the odds moved</h2>
         <p className="text-muted-foreground text-sm">
           One factor per witness, always four, whatever the agents said. A witness that could not
-          look contributes exactly 1.0 — it does not get to vote the code innocent, and it does not
+          look contributes exactly 1.0. It does not get to vote the code innocent, and it does not
           get to convict it either.
         </p>
 
@@ -142,7 +142,7 @@ export default function FindingPage() {
                 <Factor
                   label="prior odds"
                   value={odds(finding.prior_probability)}
-                  hint={`A declared base rate of ${(finding.prior_probability * 100).toFixed(1)}%, not measured from the corpus — a twin-paired corpus is 50% vulnerable by construction (D-083).`}
+                  hint={`A declared base rate of ${(finding.prior_probability * 100).toFixed(1)}%, not measured from the corpus: a twin-paired corpus is 50% vulnerable by construction (D-083).`}
                 />
                 {detail.witnesses.map((item) => (
                   <span key={item.witness} className="flex items-center gap-3">
@@ -163,7 +163,7 @@ export default function FindingPage() {
               <p className="text-muted-foreground text-xs">
                 The four ratios multiply to{" "}
                 <span className="text-foreground font-mono">{combined.toFixed(3)}×</span>. Applied
-                to the prior odds above, that is the posterior shown at the top of this page — read
+                to the prior odds above, that is the posterior shown at the top of this page, read
                 from the row this run wrote, not recomputed here. A ratio is only as good as the
                 cell it came from; the{" "}
                 <Link href="/calibration" className="underline">
@@ -216,7 +216,7 @@ export default function FindingPage() {
               </div>
               <p className="text-muted-foreground text-xs">
                 The source itself is not stored. CodeSheriff keeps hashes, line metadata and what
-                the witnesses said about them — never the body of the function (§6, D-027).
+                the witnesses said about them, never the body of the function (§6, D-027).
               </p>
             </CardContent>
           </Card>
@@ -277,7 +277,7 @@ function Witness({ breakdown, recorded }: { breakdown: WitnessBreakdown; recorde
                 {breakdown.likelihood_ratio.toFixed(2)}×
               </span>
               <span className="text-muted-foreground font-mono text-[10px]">
-                {breakdown.cell ?? "no cell — 1.0 by definition"}
+                {breakdown.cell ?? "no cell, 1.0 by definition"}
               </span>
             </>
           ) : (
@@ -289,8 +289,8 @@ function Witness({ breakdown, recorded }: { breakdown: WitnessBreakdown; recorde
       <CardContent className="flex flex-col gap-4 pt-3">
         {breakdown.statements.length === 0 ? (
           <p className="text-muted-foreground text-sm">
-            This witness emitted no statement at all. That should not happen — an agent that cannot
-            run is expected to abstain under its own name — and it is shown rather than hidden.
+            This witness emitted no statement at all. That should not happen (an agent that cannot
+            run is expected to abstain under its own name), and it is shown rather than hidden.
           </p>
         ) : (
           breakdown.statements.map((statement, index) => (
@@ -331,7 +331,7 @@ function Statement({ evidence }: { evidence: EvidenceDetail }) {
               {cwe}
             </Badge>
           ))}
-          — and nothing else. A silence about CWEs this finding is not about carries no weight.
+          and nothing else. A silence about CWEs this finding is not about carries no weight.
         </p>
       )}
       {evidence.kind === "abstention" && evidence.reason && (
@@ -370,7 +370,7 @@ function ArtifactView({ artifact }: { artifact: { artifact_type: string; content
       return (
         <div className="bg-muted/40 flex flex-col gap-1 rounded-md border p-3">
           <p className="text-muted-foreground text-xs">
-            Taint path{content.sink_class ? ` to a ${content.sink_class} sink` : ""} —{" "}
+            Taint path{content.sink_class ? ` to a ${content.sink_class} sink` : ""}:{" "}
             {steps.length} step{steps.length === 1 ? "" : "s"}
           </p>
           <ol className="flex flex-col gap-1">

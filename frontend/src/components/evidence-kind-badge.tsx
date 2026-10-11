@@ -26,7 +26,7 @@ const COPY: Record<EvidenceKind, { label: string; explanation: string; className
   abstention: {
     label: "abstention",
     explanation:
-      "Could not run, or could not run soundly. Contributes nothing to the posterior — an agent that could not look does not get to vote the code innocent.",
+      "Could not run, or could not run soundly. Contributes nothing to the posterior: an agent that could not look does not get to vote the code innocent.",
     className: "border-neutral-400/50 text-muted-foreground",
   },
 };

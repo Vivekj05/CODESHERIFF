@@ -35,6 +35,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -119,78 +120,131 @@ _evidence_kind_enum = Enum(
 
 
 class User(Base):
-    """One signed-in GitHub user. Identity only.
+    """One person who has signed in. Written by Better Auth only (D-101).
 
-    §6 puts multi-tenancy with billing out of scope, and this table is where that would creep in
-    first. There are no roles, no teams, no plans and no per-repository grants: what a user may see
-    is derived from GitHub at sign-in and held in their session, never stored as an ACL here
-    (D-035). A stored ACL is a copy of GitHub's answer that starts going stale immediately.
+    Python never inserts or updates this table: sign-in runs in the dashboard, and the API learns
+    who is calling from a verified JWT rather than from a row here. The model exists so the schema
+    is declared in one place, and so `test_no_pending_schema_changes` can hold it to the migration.
+
+    `installation_ids` is the D-035 snapshot: the installations of this App the user could reach at
+    their last sign-in, from `GET /user/installations`. It is what travels in the JWT, and what
+    every API query is scoped by. There are still no roles and no stored ACL beyond it.
+
+    Column names are Better Auth's fields mapped to snake_case in `frontend/src/lib/auth.ts`. The
+    two must agree; Better Auth validates the schema when it starts.
     """
 
     __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
-    """The GitHub user id — stable across renames, which `login` is not."""
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    """Better Auth's own id. The GitHub id is `github_id`."""
+
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    """The primary GitHub email, or GitHub's no-reply address when it is private."""
+
+    email_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    image: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+
+    github_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
+    """Stable across renames, which `login` is not."""
 
     login: Mapped[str] = mapped_column(String(255), nullable=False)
-    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    avatar_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(), onupdate=func.now(), nullable=False
+    installation_ids: Mapped[list[int]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
     last_login_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
-    sessions: Mapped[list[Session]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
-    )
+    __table_args__ = (Index("users_email_uidx", "email", unique=True),)
 
 
-class Session(Base):
-    """One signed-in browser session.
+class AuthSession(Base):
+    """A signed-in browser. Written by Better Auth only (D-101).
 
-    Two deliberate absences.
-
-    **No GitHub token is stored.** The OAuth access token is used once, at sign-in, to read the
-    user's identity and the installations they can see, and is then discarded. Nothing here can be
-    replayed against GitHub if this database leaks (D-036).
-
-    **The session token itself is not stored either** — only `token_sha256`. The cookie holds the
-    secret; the database holds a hash of it, so a database read does not hand over live sessions.
+    Replaces Chapter 5's `sessions` table. The API never reads it: a request carries a JWT, and the
+    JWT is verified against `auth_jwks`'s public key. Better Auth stores the session token itself
+    here, in the clear, unlike the hash Chapter 5 kept; that is the cost D-101 records.
     """
 
-    __tablename__ = "sessions"
+    __tablename__ = "auth_sessions"
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-
-    token_sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
-    """SHA-256 of the opaque cookie value. Never the value itself."""
-
-    visible_installation_ids: Mapped[list[int]] = mapped_column(
-        ARRAY(BigInteger), nullable=False, default=list
-    )
-    """Installations this user could see at sign-in, from `GET /user/installations`.
-
-    A snapshot, and knowingly so: access granted or revoked on GitHub is reflected at the user's
-    next sign-in rather than immediately (D-035). The alternative — storing a GitHub credential to
-    re-ask on every request — trades a bounded staleness window for a permanent secret at rest.
-    """
-
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
     expires_at: Mapped[datetime] = mapped_column(nullable=False)
-    revoked_at: Mapped[datetime | None] = mapped_column(nullable=True)
-    last_seen_at: Mapped[datetime | None] = mapped_column(nullable=True)
-
-    user: Mapped[User] = relationship(back_populates="sessions")
-
-    __table_args__ = (
-        Index("ix_sessions_expires_at", "expires_at"),
-        CheckConstraint("length(token_sha256) = 64", name="ck_sessions_token_hash_length"),
-        CheckConstraint("expires_at > created_at", name="ck_sessions_expiry_after_creation"),
+    token: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(nullable=False)
+    ip_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
+
+    __table_args__ = (Index("auth_sessions_user_id_idx", "user_id"),)
+
+
+class AuthAccount(Base):
+    """The link between a user and GitHub. Written by Better Auth only (D-101).
+
+    Holds the GitHub user token, **encrypted** (`account.encryptOAuthTokens`), which D-036 had
+    forbidden storing at all. Better Auth needs it to refresh an expiring GitHub App user token.
+    """
+
+    __tablename__ = "auth_accounts"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    account_id: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_id: Mapped[str] = mapped_column(Text, nullable=False)
+    user_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    id_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    access_token_expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    refresh_token_expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    password: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(nullable=False)
+
+    __table_args__ = (Index("auth_accounts_user_id_idx", "user_id"),)
+
+
+class AuthVerification(Base):
+    """Short-lived values Better Auth needs mid-flow, such as OAuth state. Better Auth only."""
+
+    __tablename__ = "auth_verifications"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    identifier: Mapped[str] = mapped_column(Text, nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+
+    __table_args__ = (Index("auth_verifications_identifier_idx", "identifier"),)
+
+
+class AuthJwk(Base):
+    """The key pairs the dashboard signs API tokens with. Better Auth only (D-101).
+
+    The private key is encrypted with `BETTER_AUTH_SECRET`. The API reads neither column: it fetches
+    the public half from `/api/auth/jwks`.
+    """
+
+    __tablename__ = "auth_jwks"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    private_key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    alg: Mapped[str | None] = mapped_column(Text, nullable=True)
+    crv: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Installation(Base):

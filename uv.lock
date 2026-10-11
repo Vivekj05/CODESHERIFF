@@ -369,7 +369,7 @@ dev = [
 [[package]]
 name = "codesheriff-agent-context"
 version = "0.2.0"
-source = { editable = "packages/agent_context" }
+source = { editable = "backend/agents/context" }
 dependencies = [
     { name = "codesheriff-contracts" },
     { name = "pydantic" },
@@ -389,7 +389,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "codesheriff-contracts", editable = "packages/contracts" },
+    { name = "codesheriff-contracts", editable = "backend/core/contracts" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
     { name = "pydantic", specifier = ">=2.7.0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
@@ -405,7 +405,7 @@ provides-extras = ["dev"]
 [[package]]
 name = "codesheriff-agent-runtime"
 version = "0.2.0"
-source = { editable = "packages/agent_runtime" }
+source = { editable = "backend/agents/runtime" }
 dependencies = [
     { name = "codesheriff-contracts" },
     { name = "pydantic" },
@@ -416,7 +416,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "codesheriff-contracts", editable = "packages/contracts" },
+    { name = "codesheriff-contracts", editable = "backend/core/contracts" },
     { name = "pydantic", specifier = ">=2.7.0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
     { name = "typer", specifier = ">=0.12.0" },
@@ -426,7 +426,7 @@ requires-dist = [
 [[package]]
 name = "codesheriff-agent-semantic"
 version = "0.1.0"
-source = { editable = "packages/agent_semantic" }
+source = { editable = "backend/agents/semantic" }
 dependencies = [
     { name = "codesheriff-contracts" },
     { name = "httpx" },
@@ -446,7 +446,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "codesheriff-contracts", editable = "packages/contracts" },
+    { name = "codesheriff-contracts", editable = "backend/core/contracts" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "jinja2", specifier = ">=3.1.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
@@ -462,7 +462,7 @@ provides-extras = ["dev"]
 [[package]]
 name = "codesheriff-agent-static"
 version = "0.1.0"
-source = { editable = "packages/agent_static" }
+source = { editable = "backend/agents/static" }
 dependencies = [
     { name = "codesheriff-contracts" },
     { name = "networkx" },
@@ -486,7 +486,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "codesheriff-contracts", editable = "packages/contracts" },
+    { name = "codesheriff-contracts", editable = "backend/core/contracts" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.98.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
     { name = "networkx", specifier = ">=3.2.1" },
@@ -506,7 +506,7 @@ provides-extras = ["dev"]
 [[package]]
 name = "codesheriff-api"
 version = "0.1.0"
-source = { editable = "apps/api" }
+source = { editable = "backend/api" }
 dependencies = [
     { name = "celery" },
     { name = "codesheriff-contracts" },
@@ -517,6 +517,7 @@ dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "python-dotenv" },
     { name = "redis" },
     { name = "uvicorn", extra = ["standard"] },
@@ -525,14 +526,15 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "celery", specifier = ">=5.4.0" },
-    { name = "codesheriff-contracts", editable = "packages/contracts" },
-    { name = "codesheriff-engine", editable = "packages/engine" },
-    { name = "codesheriff-storage", editable = "packages/storage" },
+    { name = "codesheriff-contracts", editable = "backend/core/contracts" },
+    { name = "codesheriff-engine", editable = "backend/core/engine" },
+    { name = "codesheriff-storage", editable = "backend/core/storage" },
     { name = "fastapi", specifier = ">=0.110.0" },
     { name = "githubkit", extras = ["auth-app"], specifier = ">=0.12.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "pydantic", specifier = ">=2.7.0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "redis", specifier = ">=5.0.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.28.0" },
@@ -541,7 +543,7 @@ requires-dist = [
 [[package]]
 name = "codesheriff-contracts"
 version = "0.1.0"
-source = { editable = "packages/contracts" }
+source = { editable = "backend/core/contracts" }
 dependencies = [
     { name = "pydantic" },
 ]
@@ -552,7 +554,7 @@ requires-dist = [{ name = "pydantic", specifier = ">=2.7.0" }]
 [[package]]
 name = "codesheriff-corpus"
 version = "0.1.0"
-source = { editable = "packages/corpus" }
+source = { editable = "backend/core/corpus" }
 dependencies = [
     { name = "codesheriff-contracts" },
     { name = "pydantic" },
@@ -562,7 +564,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "codesheriff-contracts", editable = "packages/contracts" },
+    { name = "codesheriff-contracts", editable = "backend/core/contracts" },
     { name = "pydantic", specifier = ">=2.7.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "typer", specifier = ">=0.12.0" },
@@ -571,7 +573,7 @@ requires-dist = [
 [[package]]
 name = "codesheriff-engine"
 version = "0.1.0"
-source = { editable = "packages/engine" }
+source = { editable = "backend/core/engine" }
 dependencies = [
     { name = "codesheriff-contracts" },
     { name = "jinja2" },
@@ -592,7 +594,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "codesheriff-contracts", editable = "packages/contracts" },
+    { name = "codesheriff-contracts", editable = "backend/core/contracts" },
     { name = "jinja2", specifier = ">=3.1.0" },
     { name = "pydantic", specifier = ">=2.7.0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
@@ -609,7 +611,7 @@ provides-extras = ["dev"]
 [[package]]
 name = "codesheriff-patch"
 version = "0.1.0"
-source = { editable = "packages/patch" }
+source = { editable = "backend/core/patch" }
 dependencies = [
     { name = "codesheriff-contracts" },
     { name = "jinja2" },
@@ -618,7 +620,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "codesheriff-contracts", editable = "packages/contracts" },
+    { name = "codesheriff-contracts", editable = "backend/core/contracts" },
     { name = "jinja2", specifier = ">=3.1.0" },
     { name = "pydantic", specifier = ">=2.7.0" },
 ]
@@ -626,7 +628,7 @@ requires-dist = [
 [[package]]
 name = "codesheriff-storage"
 version = "0.1.0"
-source = { editable = "packages/storage" }
+source = { editable = "backend/core/storage" }
 dependencies = [
     { name = "alembic" },
     { name = "codesheriff-contracts" },
@@ -642,9 +644,9 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.13.0" },
-    { name = "codesheriff-contracts", editable = "packages/contracts" },
-    { name = "codesheriff-engine", editable = "packages/engine" },
-    { name = "codesheriff-patch", editable = "packages/patch" },
+    { name = "codesheriff-contracts", editable = "backend/core/contracts" },
+    { name = "codesheriff-engine", editable = "backend/core/engine" },
+    { name = "codesheriff-patch", editable = "backend/core/patch" },
     { name = "pgvector", specifier = ">=0.2.5" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1.18" },
     { name = "pydantic", specifier = ">=2.7.0" },
@@ -655,7 +657,7 @@ requires-dist = [
 [[package]]
 name = "codesheriff-worker"
 version = "0.1.0"
-source = { editable = "apps/worker" }
+source = { editable = "backend/worker" }
 dependencies = [
     { name = "celery" },
     { name = "codesheriff-agent-context" },
@@ -679,14 +681,14 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "celery", specifier = ">=5.4.0" },
-    { name = "codesheriff-agent-context", editable = "packages/agent_context" },
-    { name = "codesheriff-agent-runtime", editable = "packages/agent_runtime" },
-    { name = "codesheriff-agent-semantic", editable = "packages/agent_semantic" },
-    { name = "codesheriff-agent-static", editable = "packages/agent_static" },
-    { name = "codesheriff-contracts", editable = "packages/contracts" },
-    { name = "codesheriff-engine", editable = "packages/engine" },
-    { name = "codesheriff-patch", editable = "packages/patch" },
-    { name = "codesheriff-storage", editable = "packages/storage" },
+    { name = "codesheriff-agent-context", editable = "backend/agents/context" },
+    { name = "codesheriff-agent-runtime", editable = "backend/agents/runtime" },
+    { name = "codesheriff-agent-semantic", editable = "backend/agents/semantic" },
+    { name = "codesheriff-agent-static", editable = "backend/agents/static" },
+    { name = "codesheriff-contracts", editable = "backend/core/contracts" },
+    { name = "codesheriff-engine", editable = "backend/core/engine" },
+    { name = "codesheriff-patch", editable = "backend/core/patch" },
+    { name = "codesheriff-storage", editable = "backend/core/storage" },
     { name = "githubkit", extras = ["auth-app"], specifier = ">=0.12.0" },
     { name = "pydantic", specifier = ">=2.7.0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },

@@ -1,7 +1,8 @@
 """API configuration.
 
-Secrets are read from the environment only (§6): the App private key, the OAuth client secret and
-the webhook secret never appear in a file this repository tracks.
+Secrets are read from the environment only (§6): the App private key and the webhook secret never
+appear in a file this repository tracks. The OAuth client secret is no longer the API's: sign-in
+runs in the dashboard under Better Auth (D-101), and this process only verifies the tokens it signs.
 
 Nothing here raises at import time. `/health` has to answer on a machine with no GitHub App
 registered — otherwise the first thing a new contributor sees is a stack trace about a `.pem` they
@@ -13,8 +14,8 @@ variable.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,14 +23,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class MissingCredentialError(RuntimeError):
     """A GitHub credential the requested operation needs is not configured."""
-
-
-@dataclass(frozen=True)
-class OAuthApp:
-    """The client credentials for the user-facing OAuth web flow."""
-
-    client_id: str
-    client_secret: str
 
 
 @dataclass(frozen=True)
@@ -50,8 +43,6 @@ class ApiConfig(BaseSettings):
     )
 
     github_app_id: str | None = Field(default=None, alias="GITHUB_APP_ID")
-    github_app_client_id: str | None = Field(default=None, alias="GITHUB_APP_CLIENT_ID")
-    github_app_client_secret: str | None = Field(default=None, alias="GITHUB_APP_CLIENT_SECRET")
     github_app_private_key_path: str | None = Field(
         default=None, alias="GITHUB_APP_PRIVATE_KEY_PATH"
     )
@@ -78,28 +69,28 @@ class ApiConfig(BaseSettings):
     github_web_base: str = "https://github.com"
 
     api_public_url: str = Field(default="http://localhost:8000", alias="API_PUBLIC_URL")
-    """Where GitHub sends the user back. Must match the App's callback URL exactly."""
+    """This API's own public address."""
 
     dashboard_origin: str = Field(default="http://localhost:3000", alias="DASHBOARD_ORIGIN")
-    """The single browser origin allowed to call this API with credentials."""
+    """The single browser origin allowed to call this API."""
 
-    session_ttl_hours: int = 8
-    """Fixed at creation and never extended. Access is a snapshot taken at sign-in (D-035), so a
-    long session is a long-lived stale answer."""
+    better_auth_url: str = Field(default="http://localhost:3000", alias="BETTER_AUTH_URL")
+    """Where Better Auth runs (the dashboard). Its JWKS is fetched from here, and its origin is the
+    issuer and audience every token must carry (D-101)."""
 
-    session_cookie_name: str = "codesheriff_session"
-
-    session_cookie_secure: bool = Field(default=False, alias="SESSION_COOKIE_SECURE")
-    """False for `http://localhost` development. **Must be true in any deployment** — a session
-    cookie sent over plain HTTP is a session anybody on the path can take."""
+    jwks_cache_seconds: int = 300
+    """How long fetched signing keys are reused. A token signed by a key not in the cache triggers
+    one refetch, so a rotated key is picked up without waiting for this to lapse."""
 
     @property
-    def session_ttl(self) -> timedelta:
-        return timedelta(hours=self.session_ttl_hours)
+    def jwks_url(self) -> str:
+        return f"{self.better_auth_url.rstrip('/')}/api/auth/jwks"
 
     @property
-    def oauth_redirect_uri(self) -> str:
-        return f"{self.api_public_url.rstrip('/')}/auth/callback"
+    def token_issuer(self) -> str:
+        """Better Auth's default `iss` and `aud`: the origin of its base URL."""
+        parts = urlsplit(self.better_auth_url)
+        return f"{parts.scheme}://{parts.netloc}"
 
     @property
     def install_url(self) -> str | None:
@@ -121,18 +112,6 @@ class ApiConfig(BaseSettings):
                 "in the GitHub App's webhook settings; see .env.example."
             )
         return self.github_webhook_secret
-
-    def require_oauth_app(self) -> OAuthApp:
-        """The OAuth client credentials, or a clear failure naming what is missing."""
-        if not self.github_app_client_id or not self.github_app_client_secret:
-            raise MissingCredentialError(
-                "GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET must be set to sign in. "
-                "Both come from the GitHub App's settings page; see .env.example."
-            )
-        return OAuthApp(
-            client_id=self.github_app_client_id,
-            client_secret=self.github_app_client_secret,
-        )
 
     def require_github_app(self) -> GitHubApp:
         """The App id and private key, or a clear failure naming what is missing.

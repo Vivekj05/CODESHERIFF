@@ -32,16 +32,15 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# Exactly one origin, with credentials. `allow_origins=["*"]` cannot carry cookies at all, and a
-# wildcard that did would let any page on the internet make authenticated calls with the user's
-# session. The dashboard and the API must share a registrable domain in a deployment, or the
-# session cookie is cross-site and needs SameSite=None.
+# Exactly one origin. The caller is identified by a Better Auth JWT in the `Authorization` header
+# (D-101), not by a cookie, so no credentials mode is needed; the header must be allowed, though,
+# or every preflight fails before the token is ever read.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[config.dashboard_origin],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 app.include_router(auth.router)
@@ -62,6 +61,6 @@ async def root() -> dict[str, object]:
     return {
         "service": "CodeSheriff",
         "status": "online",
-        "auth": "ready" if config.github_app_client_id else "unconfigured — see .env.example",
+        "auth": f"Better Auth tokens from {config.token_issuer}",
         "webhook": "ready" if config.github_webhook_secret else "unconfigured — see .env.example",
     }

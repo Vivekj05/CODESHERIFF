@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { Highlight } from "@/components/chai/highlight";
+import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -47,13 +49,11 @@ export default function SettingsPage() {
   }, []);
 
   return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="text-muted-foreground text-sm">
-          What this deployment analyses, and what it decides with. Most of it is fixed on purpose.
-        </p>
-      </div>
+    <div className="flex flex-col gap-8">
+      <PageHeader title="Settings">
+        What this deployment analyses, and what it decides with. Most of it is{" "}
+        <Highlight>fixed on purpose</Highlight>.
+      </PageHeader>
 
       <Card>
         <CardHeader>
@@ -143,7 +143,7 @@ export default function SettingsPage() {
           <p className="text-muted-foreground text-sm">
             Every fitted number was measured against exactly this set, and the database enforces it
             as a constraint generated from the same contract. Widening it invalidates the fit,
-            which is the right amount of friction for that decision — and narrowing it per
+            which is the right amount of friction for that decision, and narrowing it per
             repository would quietly change what the recall figures mean.
           </p>
         </CardContent>
@@ -160,7 +160,7 @@ export default function SettingsPage() {
             <Link href="/repositories" className="underline underline-offset-4">
               repositories page
             </Link>
-            . Removing its access entirely is done on GitHub, by uninstalling the App — an API that
+            . Removing its access entirely is done on GitHub, by uninstalling the App: an API that
             could uninstall itself would need a permission this App deliberately does not request.
           </p>
         </CardContent>

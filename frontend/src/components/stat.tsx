@@ -22,11 +22,11 @@ export function Stat({
   return (
     <Card>
       <CardContent className="flex flex-col gap-1 py-4">
-        <span className="text-muted-foreground text-xs uppercase tracking-wide">{label}</span>
+        <span className="text-sm text-muted-foreground">{label}</span>
         <span
           className={cn(
-            "font-mono text-2xl font-semibold tabular-nums",
-            emphasis && "text-destructive",
+            "font-montserrat text-3xl font-semibold tracking-tight tabular-nums",
+            emphasis && "text-red-700 dark:text-red-400",
           )}
         >
           {value}

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import uuid
 from typing import Any
-from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,6 +24,8 @@ from codesheriff_storage.identity import upsert_installation, upsert_repository
 from codesheriff_storage.mapping import to_change_unit_row, to_evidence_row
 from codesheriff_storage.models import Audit, CalibrationRun, Finding
 
+from .conftest import sign_in
+
 pytestmark = pytest.mark.db
 
 # What `FakeGitHubGateway` grants the signed-in user.
@@ -32,14 +33,6 @@ OUR_REPO = 5001
 # An installation the fake identity does not include, so nothing under it is ever visible.
 OTHER_INSTALLATION = 9999
 OTHER_REPO = 5999
-
-
-def sign_in(client: TestClient) -> None:
-    """Complete a whole OAuth sign-in, leaving the session cookie on the client."""
-    response = client.get("/auth/login", params={"next": "/audits"})
-    state = parse_qs(urlparse(response.headers["location"]).query)["state"][0]
-    callback = client.get("/auth/callback", params={"code": "good-code", "state": state})
-    assert callback.status_code == 303, callback.text
 
 
 @pytest.fixture

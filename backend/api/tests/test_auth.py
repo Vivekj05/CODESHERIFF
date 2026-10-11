@@ -1,124 +1,86 @@
-"""Sign-in, session scoping and the repository list, against a real database and a fake GitHub.
+"""Token verification, session scoping and the repository list (D-101).
 
 `pytest -m db` with `CODESHERIFF_TEST_DB` set; skipped otherwise (D-029).
 
-The interesting assertions are the refusals: what a forged state does, what an unknown cookie does,
-and what a session can see that belongs to an installation it was never granted.
+Sign-in runs in the dashboard under Better Auth; the API only verifies the JWT it is handed. So the
+interesting assertions are the refusals: a token signed by the wrong key, with `alg: none`, from
+another issuer, expired, or claiming installations in the wrong shape; and what a valid token can
+see that belongs to an installation it was never granted.
 """
 
 from __future__ import annotations
 
-from urllib.parse import parse_qs, urlparse
+from datetime import timedelta
 
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
-from sqlalchemy import select
-from sqlalchemy.orm import Session as DbSession
 
-from codesheriff_api.auth import NEXT_COOKIE, STATE_COOKIE
-from codesheriff_api.github_gateway import GitHubIdentity, InstallationRepository
-from codesheriff_storage import hash_session_token
-from codesheriff_storage.models import Session as SessionRow
-from codesheriff_storage.models import User
+from codesheriff_api.github_gateway import InstallationRepository
 
-from .conftest import FakeGitHubGateway
+from .conftest import FakeGitHubGateway, mint_token, sign_in
 
 pytestmark = pytest.mark.db
 
 
-def stored_next_path(client: TestClient) -> str:
-    """The `next` cookie as the server will read it back.
-
-    A path contains `/`, which `http.cookies` quotes on the way out and unquotes on the way in. The
-    cookie jar hands back the wire value, so the quotes are stripped here rather than pretended
-    away — the state cookie is the one that must stay raw, and it does.
-    """
-    return client.cookies[NEXT_COOKIE].strip('"')
+def bearer(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
 
 
-def start_login(client: TestClient, next_path: str = "/repositories") -> tuple[str, str]:
-    """Drive `/auth/login` and return (state, the next path the server stored)."""
-    response = client.get("/auth/login", params={"next": next_path})
-    assert response.status_code == 307
-    state = parse_qs(urlparse(response.headers["location"]).query)["state"][0]
-    return state, stored_next_path(client)
+def test_a_valid_token_is_a_session(client: TestClient) -> None:
+    response = client.get("/auth/session", headers=bearer(mint_token()))
+    assert response.status_code == 200
+    body = response.json()
+    assert body["login"] == "octo-dev"
+    assert body["installation_count"] == 1
+    assert body["install_url"] == "https://github.com/apps/codesheriff-test/installations/new"
 
 
-def sign_in(client: TestClient, code: str = "good-code") -> None:
-    """Complete a whole sign-in, leaving the session cookie on the client."""
-    state, _ = start_login(client)
-    response = client.get("/auth/callback", params={"code": code, "state": state})
-    assert response.status_code == 303, response.text
+def test_every_protected_route_needs_a_token(client: TestClient) -> None:
+    for path in ("/auth/session", "/repositories", "/audits", "/stats/overview", "/calibration"):
+        response = client.get(path)
+        assert response.status_code == 401, f"{path} answered {response.status_code}"
+        assert response.headers["www-authenticate"] == "Bearer"
 
 
-def test_login_redirects_to_github_with_state_and_callback(client: TestClient) -> None:
-    response = client.get("/auth/login")
-    assert response.status_code == 307
-
-    target = urlparse(response.headers["location"])
-    query = parse_qs(target.query)
-    assert target.netloc == "github.com"
-    assert query["client_id"] == ["Iv1.testclientid"]
-    assert query["redirect_uri"] == ["http://localhost:8000/auth/callback"]
-    assert len(query["state"][0]) >= 20
-
-    assert client.cookies[STATE_COOKIE] == query["state"][0]
-    assert all("httponly" in header.lower() for header in response.headers.get_list("set-cookie"))
-
-
-def test_login_does_not_reflect_an_offsite_next_path(client: TestClient) -> None:
-    client.get("/auth/login", params={"next": "//evil.example/steal"})
-    assert stored_next_path(client) == "/repositories"
+@pytest.mark.parametrize(
+    "token",
+    [
+        pytest.param(mint_token(key=Ed25519PrivateKey.generate()), id="signed-by-another-key"),
+        pytest.param(mint_token(issuer="https://evil.example"), id="wrong-issuer"),
+        pytest.param(mint_token(audience="https://evil.example"), id="wrong-audience"),
+        pytest.param(mint_token(expires_in=timedelta(seconds=-5)), id="expired"),
+        pytest.param(mint_token(installation_ids="9001"), id="installations-not-a-list"),  # type: ignore[arg-type]
+        pytest.param(mint_token(installation_ids=["9001"]), id="installations-as-strings"),  # type: ignore[list-item]
+        pytest.param(mint_token(login=""), id="no-login"),
+        pytest.param("not-a-jwt", id="garbage"),
+    ],
+)
+def test_a_bad_token_is_not_a_session(client: TestClient, token: str) -> None:
+    assert client.get("/auth/session", headers=bearer(token)).status_code == 401
 
 
-def test_callback_completes_and_sets_an_httponly_session_cookie(
-    client: TestClient, db: DbSession
-) -> None:
-    state, _ = start_login(client, next_path="/audits")
-    response = client.get("/auth/callback", params={"code": "good-code", "state": state})
-
-    assert response.status_code == 303
-    assert response.headers["location"] == "http://localhost:3000/audits"
-
-    set_cookie = response.headers["set-cookie"].lower()
-    assert "httponly" in set_cookie
-    assert "samesite=lax" in set_cookie
-
-    user = db.execute(select(User)).scalar_one()
-    assert (user.login, user.id) == ("octo-dev", 4242)
-    assert user.last_login_at is not None
+def test_an_unsigned_token_is_refused(client: TestClient) -> None:
+    """`alg: none` must never be accepted, whatever the header claims."""
+    token = jwt.encode(
+        {"sub": "x", "login": "x", "installation_ids": [9001]}, key=None, algorithm="none"
+    )
+    assert client.get("/auth/session", headers=bearer(token)).status_code == 401
 
 
-def test_the_session_token_is_never_stored(client: TestClient, db: DbSession) -> None:
-    """The cookie holds the secret; the database holds only a hash of it (D-036)."""
-    sign_in(client)
-    token = client.cookies["codesheriff_session"]
-
-    row = db.execute(select(SessionRow)).scalar_one()
-    assert row.token_sha256 == hash_session_token(token)
-    assert token not in str(row.token_sha256)
+def test_a_token_with_another_algorithm_is_refused(client: TestClient) -> None:
+    """Only EdDSA is accepted; a token cannot choose a symmetric algorithm for itself."""
+    token = mint_token(key="a-shared-secret-long-enough-for-hs256!", algorithm="HS256")  # type: ignore[arg-type]
+    assert client.get("/auth/session", headers=bearer(token)).status_code == 401
 
 
-def test_forged_state_is_rejected(client: TestClient) -> None:
-    start_login(client)
-    response = client.get("/auth/callback", params={"code": "good-code", "state": "not-the-state"})
-    assert response.status_code == 400
-    assert "codesheriff_session" not in response.cookies
+def test_a_cookie_is_not_a_session_any_more(client: TestClient) -> None:
+    client.cookies.set("codesheriff_session", "anything")
+    assert client.get("/auth/session").status_code == 401
 
 
-def test_callback_without_a_prior_login_is_rejected(client: TestClient) -> None:
-    """No state cookie means this browser never started a flow — CSRF on login."""
-    response = client.get("/auth/callback", params={"code": "good-code", "state": "anything"})
-    assert response.status_code == 400
-
-
-def test_github_refusing_the_code_is_a_bad_gateway_not_a_crash(client: TestClient) -> None:
-    state, _ = start_login(client)
-    response = client.get("/auth/callback", params={"code": "bad-code", "state": state})
-    assert response.status_code == 502
-
-
-def test_sign_in_syncs_installations_and_repositories(client: TestClient) -> None:
+def test_the_session_syncs_installations_and_repositories(client: TestClient) -> None:
     sign_in(client)
     body = client.get("/repositories").json()
     assert [item["full_name"] for item in body["items"]] == [
@@ -127,92 +89,53 @@ def test_sign_in_syncs_installations_and_repositories(client: TestClient) -> Non
     ]
 
 
-def test_one_broken_installation_does_not_fail_sign_in(
+def test_known_installations_are_not_read_again(
+    client: TestClient, github: FakeGitHubGateway
+) -> None:
+    """The webhooks keep known installations current; re-reading them would spend rate limit."""
+    sign_in(client)
+    sign_in(client)
+    assert github.installations_read == [9001]
+
+
+def test_one_broken_installation_does_not_fail_the_session(
     client: TestClient, github: FakeGitHubGateway
 ) -> None:
     """A suspended or just-uninstalled installation is a normal state, not an auth failure."""
-    github.identity = GitHubIdentity(
-        github_id=4242,
-        login="octo-dev",
-        name="Octo Dev",
-        avatar_url=None,
-        installation_ids=[9001, 9999],
-    )
     github.failing_installations = {9999}
-
-    sign_in(client)
-
-    body = client.get("/repositories").json()
-    assert len(body["items"]) == 2
+    sign_in(client, installation_ids=[9001, 9999])
+    assert len(client.get("/repositories").json()["items"]) == 2
 
 
-def test_session_endpoint_reports_the_signed_in_user(client: TestClient) -> None:
-    sign_in(client)
-    body = client.get("/auth/session").json()
-    assert body["login"] == "octo-dev"
-    assert body["installation_count"] == 1
-    assert body["install_url"] == "https://github.com/apps/codesheriff-test/installations/new"
+def test_an_empty_installation_list_sees_nothing(client: TestClient) -> None:
+    sign_in(client, installation_ids=[9001])
+    sign_in(client, installation_ids=[])
+    assert client.get("/repositories").json()["items"] == []
 
 
-def test_every_protected_route_needs_a_session(client: TestClient) -> None:
-    for method, path in (("GET", "/auth/session"), ("GET", "/repositories")):
-        response = client.request(method, path)
-        assert response.status_code == 401, f"{method} {path} answered {response.status_code}"
-
-
-def test_an_unknown_cookie_is_not_a_session(client: TestClient) -> None:
-    client.cookies.set("codesheriff_session", "definitely-not-a-real-token")
-    assert client.get("/auth/session").status_code == 401
-
-
-def test_logout_revokes_server_side(client: TestClient, db: DbSession) -> None:
-    """Clearing a cookie only asks the browser to forget; a copy taken first must stop working."""
-    sign_in(client)
-    stolen = client.cookies["codesheriff_session"]
-
-    assert client.post("/auth/logout").status_code == 204
-
-    row = db.execute(select(SessionRow)).scalar_one()
-    assert row.revoked_at is not None
-
-    client.cookies.set("codesheriff_session", stolen)
-    assert client.get("/auth/session").status_code == 401
-
-
-def test_repositories_are_scoped_to_the_sessions_installations(
-    client: TestClient, github: FakeGitHubGateway, db: DbSession
+def test_repositories_are_scoped_to_the_tokens_installations(
+    client: TestClient, github: FakeGitHubGateway
 ) -> None:
-    """The core access check: rows exist, the session was never granted them, the API omits them."""
+    """The core access check: rows exist, this token was never granted them, the API omits them."""
     github.repositories[9002] = [
         InstallationRepository(
-            repo_id=7001,
-            full_name="someone-else/secrets",
-            default_branch="main",
-            is_private=True,
+            repo_id=7001, full_name="someone-else/secrets", default_branch="main", is_private=True
         )
     ]
-    # Sign in once as a user who CAN see 9002, so the rows land in the database.
-    github.identity = GitHubIdentity(
-        github_id=1, login="other", name=None, avatar_url=None, installation_ids=[9002]
-    )
-    sign_in(client)
+    # Somebody who CAN see 9002 signs in, so its rows land in the database.
+    sign_in(client, installation_ids=[9002])
     assert [i["full_name"] for i in client.get("/repositories").json()["items"]] == [
         "someone-else/secrets"
     ]
 
-    # Now sign in as a user who cannot.
-    client.cookies.clear()
-    github.identity = GitHubIdentity(
-        github_id=4242, login="octo-dev", name=None, avatar_url=None, installation_ids=[9001]
-    )
-    sign_in(client)
-
+    # Now a token that cannot.
+    sign_in(client, installation_ids=[9001])
     names = [i["full_name"] for i in client.get("/repositories").json()["items"]]
     assert "someone-else/secrets" not in names
     assert names == ["acme/internal-tools", "acme/payments-api"]
 
 
-def test_toggling_a_repository_outside_the_session_is_a_404(
+def test_toggling_a_repository_outside_the_token_is_a_404(
     client: TestClient, github: FakeGitHubGateway
 ) -> None:
     github.repositories[9002] = [
@@ -220,16 +143,8 @@ def test_toggling_a_repository_outside_the_session_is_a_404(
             repo_id=7001, full_name="someone-else/secrets", default_branch="main", is_private=True
         )
     ]
-    github.identity = GitHubIdentity(
-        github_id=1, login="other", name=None, avatar_url=None, installation_ids=[9002]
-    )
-    sign_in(client)
-    client.cookies.clear()
-
-    github.identity = GitHubIdentity(
-        github_id=4242, login="octo-dev", name=None, avatar_url=None, installation_ids=[9001]
-    )
-    sign_in(client)
+    sign_in(client, installation_ids=[9002])
+    sign_in(client, installation_ids=[9001])
 
     response = client.patch("/repositories/7001", json={"analysis_enabled": False})
     assert response.status_code == 404
@@ -250,12 +165,10 @@ def test_toggling_analysis_persists(client: TestClient) -> None:
     assert listed["acme/payments-api"] is False
 
 
-def test_a_resync_does_not_re_enable_analysis_somebody_turned_off(client: TestClient) -> None:
-    """A routine sync from GitHub must not undo a user's choice."""
+def test_signing_in_again_does_not_re_enable_analysis(client: TestClient) -> None:
+    """A routine sign-in must not undo a user's choice."""
     sign_in(client)
     client.patch("/repositories/5001", json={"analysis_enabled": False})
-
-    client.cookies.clear()
     sign_in(client)
 
     listed = {
@@ -289,7 +202,7 @@ def test_listing_pages_by_keyset_cursor(client: TestClient, github: FakeGitHubGa
 
 
 def test_install_callback_grants_nothing_and_re_derives(client: TestClient) -> None:
-    """`installation_id` arrives in a URL the user controls, so it must not widen a session."""
+    """`installation_id` arrives in a URL the user controls, so it must not widen what is seen."""
     sign_in(client)
     before = client.get("/auth/session").json()["installation_count"]
 
@@ -298,5 +211,5 @@ def test_install_callback_grants_nothing_and_re_derives(client: TestClient) -> N
     )
 
     assert response.status_code == 303
-    assert response.headers["location"].endswith("/auth/login?next=/repositories")
+    assert response.headers["location"] == "http://localhost:3000/sign-in?next=/repositories"
     assert client.get("/auth/session").json()["installation_count"] == before

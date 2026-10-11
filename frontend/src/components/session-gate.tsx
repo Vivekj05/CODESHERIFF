@@ -9,14 +9,12 @@ import { ApiError, getSession, type SessionInfo } from "@/lib/api";
 /**
  * Reads the session from the API and renders the shell around it.
  *
- * Client-side rather than in a server component, deliberately. The session cookie belongs to the
- * API's origin. In development that happens to be the same host as the dashboard — cookies ignore
- * ports — so a server component could read and forward it, and would then break the day the API
- * moves to its own subdomain. Fetching from the browser behaves the same in both.
+ * `getSession()` asks the API, with the Better Auth token attached (D-101). That one call both
+ * proves the token verifies and lets the API record any installation it has not seen yet, so the
+ * pages that follow can list their repositories.
  *
- * This is not a security boundary either: it decides what to *render*. Every answer that matters
- * comes from the API, which re-checks the cookie on every request and does not care what the UI
- * believes.
+ * This is not a security boundary: it decides what to *render*. Every answer that matters comes
+ * from the API, which verifies the token on every request and does not care what the UI believes.
  */
 export type SessionState =
   | { status: "loading" }
@@ -39,7 +37,8 @@ export function useSession(): SessionState {
         if (cancelled) return;
         if (error instanceof ApiError && error.status === 401) {
           setState({ status: "signed-out" });
-          router.replace("/sign-in");
+          // Back to where they were going, once signed in.
+          router.replace(`/sign-in?next=${encodeURIComponent(window.location.pathname)}`);
           return;
         }
         // 501 means the deployment has no GitHub App configured. Telling the user to sign in again

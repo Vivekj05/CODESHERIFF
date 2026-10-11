@@ -2894,3 +2894,53 @@ wheels were never going to execute; they were several gigabytes of download on e
 one image the fitted numbers come from. It went unnoticed for so long because the Windows default
 wheel is already CPU-only — the cost is invisible on the machine the project is developed on, and
 appears only on the machine the measurements are made on.
+
+---
+
+## D-101 — Sign-in moves to the dashboard under Better Auth; the API verifies its JWTs
+
+**Date:** 2026-10-11 · **Status:** ACTIVE · **Reverses:** D-033 (dashboard holds no secret), the
+"no Next.js API routes" rule, D-036 (no GitHub token stored) · **Keeps:** D-035
+
+**Context.** The project owner chose Better Auth with GitHub sign-in for the dashboard, after the
+conflict with the decisions above was laid out and discussed (PROJECT_CONTEXT.md §8). The wanted
+flow is Home → a dedicated `/sign-in` page → GitHub → the dashboard, with connecting the GitHub App
+as a separate, later step.
+
+**Decision.**
+- Better Auth runs in Next.js (`frontend/src/lib/auth.ts`), with the GitHub provider configured
+  with the **GitHub App's** client id and secret, which now live in `frontend/.env.local`. Its
+  routes are mounted at `/api/auth/*`, the one Next.js API route in the project. Everything else the
+  dashboard reads still comes from the Python API.
+- At every sign-in the user's token reads `GET /user/installations`, and the ids are written to
+  `users.installation_ids`. Better Auth's JWT plugin signs a 15-minute EdDSA token carrying the
+  login, name, avatar and those ids, and never the email or a GitHub token.
+- FastAPI verifies that token (`codesheriff_api.principal`): signature against Better Auth's JWKS,
+  EdDSA only, issuer and audience equal to the dashboard's origin, `exp`, `iat` and `sub` required,
+  `installation_ids` a list of integers. It never reads Better Auth's tables. `/auth/login`,
+  `/auth/callback`, `/auth/logout`, the session cookie and the `sessions` table are gone.
+- `GET /auth/session` creates rows for any installation in the token the database has not seen,
+  read as the App, so a first sign-in has repositories to list. Known installations are left to the
+  webhooks.
+- Alembic owns the schema (`0006_better_auth`): `users` (Better Auth's, with `github_id`, `login`,
+  `installation_ids`, `last_login_at`), `auth_sessions`, `auth_accounts`, `auth_verifications`,
+  `auth_jwks`. Better Auth's own migrator is not used.
+
+**What it costs, recorded rather than hidden.**
+- **The GitHub token is stored**, in `auth_accounts`, encrypted with `BETTER_AUTH_SECRET`
+  (`account.encryptOAuthTokens`). D-036 had kept no GitHub credential at rest.
+- **Session tokens are stored in the clear** in `auth_sessions.token`, where Chapter 5 stored a
+  SHA-256. That is Better Auth's design.
+- **Email addresses are now stored.** A private primary email falls back to GitHub's no-reply
+  address, stored unverified, rather than failing the sign-in. The GitHub App needs the "Email
+  addresses: Read-only" account permission.
+- **Revocation is no longer instant at the API.** A signed-out user's last JWT stays valid for at
+  most 15 minutes, against Chapter 5's server-side revocation on the next request.
+
+**What is kept.** D-035 in full: what a user sees is the list of installations GitHub reported at
+sign-in, every query is scoped by it in SQL, and an empty list sees nothing. The install callback
+still grants nothing from its URL and sends the user back through sign-in.
+
+**Because** a standard auth layer in the dashboard is what the project wants to build on, and the
+JWT boundary keeps the Python side as strict as before: one verifier, fail-closed, with no access to
+the auth tables and no user token in the API process.

@@ -5,8 +5,9 @@ Automated security review for GitHub pull requests, with **calibrated** confiden
 Four specialist agents analyse each changed function independently, and a Bayesian inference engine
 fuses their evidence into a posterior probability that the change introduces a vulnerability.
 
-> 🚧 **Under active reconstruction.** The architecture below is the design; much of it is not yet
-> built, and some committed code does not implement it. See **Project status**.
+> 🔨 **In evaluation.** All four agents are built and measured, and every likelihood ratio and the
+> alert threshold are fitted from a labelled corpus. What remains is the held-out evaluation the
+> research paper reports. See **Project status**.
 
 ---
 
@@ -87,14 +88,14 @@ Zero recurring cost: free-tier LLM, local embeddings, self-hosted everything.
 ## Layout
 
 ```
-backend/
-  api/           FastAPI: verify HMAC, enqueue, 202. No analysis.
-  worker/        Celery: owns the pipeline and all agents
+backend/         Every uv workspace member lives here
+  api/           FastAPI: GitHub sign-in, verify HMAC + enqueue + 202, dashboard reads. No analysis.
+  worker/        Celery: owns the pipeline and all agents, runs them, fuses, posts to GitHub
   core/
-    contracts/   Shared Pydantic data schemas
-    engine/      Bayesian fusion & inference engine
-    storage/     Database repositories (pgvector, redis)
-    patch/       Patch proposal and sandbox verification
+    contracts/   The single shared contract (ChangeUnit, Evidence). Never vendored.
+    engine/      ChangeUnit extraction, Bayesian fusion, calibration fitting. No DB, no agents.
+    storage/     SQLAlchemy models, Alembic migrations, pgvector store, dashboard queries
+    patch/       Draft a repair, check it on a fixed ladder, anchor it as a suggestion
     corpus/      Labelled cases + committed immutable splits
   agents/        The 4 specialist analysis agents
     static/      Semgrep & Taint static analysis agent
@@ -105,7 +106,7 @@ backend/
   docker/        Corpus evaluation Dockerfiles
   scripts/       Database init scripts (init-pgvector.sql)
 
-frontend/        Next.js 16 + React 19 web dashboard & SaaS platform
+frontend/        Next.js 16 + React 19 web dashboard & SaaS platform (separate npm project)
   src/app/       Marketing landing page, dashboard routes, RAG API routes
   src/components/ Analytics (Recharts, heatmap), Mermaid viewer, Base UI
   src/lib/       Pinecone RAG, Gemini review generator, Octokit client, FastAPI edge
@@ -136,7 +137,7 @@ codesheriff.bat eval
 ```bash
 cp .env.example .env          # then fill it in
 docker compose up -d          # Postgres + pgvector, Redis
-uv sync                       # install the workspace
+uv sync --all-packages        # install the workspace (without the flag, members are skipped)
 uv run pytest
 uv run lint-imports           # agent boundary enforcement
 ```
@@ -146,31 +147,58 @@ agent importing a sibling, the engine, or infrastructure fails CI.
 
 ## Project status
 
-A full conformance audit found that the committed code did not implement the design above: three
-of four analysis components were shells and no corpus existed. **No number the system produces is
-calibrated yet**, and it says so on every pull request it comments on — the likelihood ratios, the
-prior and the alert threshold are still hand-set, and Chapter 14 is where they are fitted.
+Chapters 1–17 of the 18-chapter roadmap are done; Chapter 18, the evaluation, is in progress.
 
-The seam around the analysis is real as of Chapter 6: a signature-verified webhook becomes a queued
-audit becomes one comment posted by the worker. The unauthenticated endpoint the audit found was
-deleted rather than patched. Chapter 7 built the ground truth — 60 hand-written units in 30
-vulnerable/safe twin pairs, with committed splits. Chapter 8 made the pipeline hand over one
-`ChangeUnit` per changed function, and Chapter 9 made fusion multiply one likelihood ratio per
-witness over a fixed roster, so a posterior can go down as well as up.
+**The pipeline runs end to end.** A signature-verified webhook becomes a queued audit. The worker
+cuts one `ChangeUnit` per changed function from the real base and head files, runs the four agents
+blind, fuses what they said into one posterior per finding, and posts a single summary comment
+that is edited in place on later pushes.
 
-Two of the four agents now do the work their names claim, each measured against the corpus on the
-calibration split. `structural.taint` (Chapter 10) propagates over a def-use graph it consumes:
-13/13 recall on the cases the corpus predicts for it, 0 false positives across 18 safe twins.
-`semantic.hosted` (Chapter 11) reads its exemplars and bounds untrusted code with a sentinel the
-code author cannot forge: 0% injection subversion, a 94% safe-twin pass rate, zero hallucinated
-sinks reaching output.
+**All four agents are built and measured** on the calibration split of a corpus of 76 hand-written
+units in 38 vulnerable/safe twin pairs:
 
-What is still missing is the RAG reasoning, the runtime sandbox, and the calibration itself. Both
-missing agents abstain under their own names at a likelihood ratio of exactly 1.0, per unit, on the
-record — so a witness that is not built costs the posterior nothing and hides from nobody.
+| Agent | Recall on the cases it should catch | False positives |
+|---|---|---|
+| `structural.taint` | 13/13 | 0 across 23 safe twins |
+| `semantic.hosted` | — | 94% safe-twin pass rate, 0% injection subversion, 0 hallucinated sinks |
+| `context.rag` | 5/5 | 0 across 11 twins and negative controls |
+| `runtime.sfi` | 9/9 | 0 across 23 safe twins |
 
-The audit is in **[`docs/architecture/AUDIT.md`](docs/architecture/AUDIT.md)**, with a `file:line` citation for every claim. It is the
-baseline the rebuild is measured against.
+An agent that cannot run, such as the runtime witness on a machine without the pinned WASI
+interpreter, abstains under its own name at a likelihood ratio of exactly 1.0. It costs the
+posterior nothing and is visible on the record.
+
+**The numbers are fitted, not hand-set.** Likelihood ratios come from the calibration split, the
+alert threshold from a precision–recall sweep on the validation split, and both ship in
+`calibration.json` with the corpus hash they were measured against. Weighted ECE is 0.027 and Brier
+0.013 at selection time. No hand-set fallback exists: a missing artifact is an error. The prior is
+a declared 3%, because a twin-paired corpus has a prevalence of 0.5 by construction.
+
+**Findings are explainable.** The dashboard shows every audit, every witness's statement per
+function, and each finding's odds product factor by factor, as stored at the time of the run.
+The calibration page shows the reliability bins, per-cell observation counts and the full threshold
+sweep.
+
+**An alert-worthy finding can carry a repair.** A drafted patch is checked on a fixed six-step
+ladder and, if it passes, posted as a GitHub suggested change inside the diff. CodeSheriff never
+commits, merges, or runs the repository's own test suite.
+
+**Still to do (Chapter 18):**
+
+- Re-observe the calibration and validation splits on the Linux corpus image, where Semgrep runs,
+  and re-fit. The committed ratios describe a structural witness with only the taint backend live,
+  because Semgrep has no Windows build.
+- Finish the comparisons against majority voting, leave-one-witness-out ablations, and the Semgrep,
+  Bandit and single-LLM baselines (`examples/paper_eval.py`, `examples/baseline_eval.py`).
+- Evaluate the held-out test split, exactly once, last.
+
+Separately, Chapter 5 needs one person-only step: confirming sign-in and the repository list
+against the registered GitHub App ([`docs/github-app-setup.md`](docs/github-app-setup.md)).
+
+The conformance audit that started the rebuild is in
+**[`docs/architecture/AUDIT.md`](docs/architecture/AUDIT.md)**, with a `file:line` citation for
+every claim. Its findings are left as audited; the "Closure status" at its top records which
+chapter closed each one.
 
 | Doc | What it's for |
 |---|---|

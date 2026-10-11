@@ -1,14 +1,13 @@
 /**
- * The only place the dashboard talks to the backend.
+ * The only place the dashboard talks to the Python API.
  *
- * §6 makes this a rendering layer: no client secret lives here, no code is exchanged here, and
- * nothing here calls GitHub. Sign-in is a browser navigation to the FastAPI edge, which owns the
- * OAuth secret and sets an HttpOnly session cookie the JavaScript on this page cannot read.
- *
- * `credentials: "include"` on every call is what sends that cookie. The API allows exactly one
- * origin, so a page on another site cannot make these calls with the user's session.
+ * Sign-in runs in this app under Better Auth (D-101); every call here carries the short-lived JWT
+ * it issues, in the `Authorization` header. The API verifies it against Better Auth's published
+ * key and scopes every answer by the installations it names. No cookie crosses to the API, and
+ * nothing here calls GitHub.
  */
 
+import { authClient } from "@/lib/auth-client";
 import type { Calibration } from "@/lib/types";
 
 export const API_BASE_URL =
@@ -47,16 +46,59 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+/**
+ * The Better Auth JWT the API accepts (D-101), cached until a minute before it expires.
+ *
+ * `token()` answers from the dashboard's own session cookie. No session, no token: that is
+ * reported as a 401 so every caller treats it exactly like the API refusing a request.
+ */
+let cachedToken: { value: string; expiresAt: number } | null = null;
+
+function expiryOf(token: string): number {
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    return typeof payload.exp === "number" ? payload.exp * 1000 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function apiToken(): Promise<string> {
+  if (cachedToken && cachedToken.expiresAt - 60_000 > Date.now()) return cachedToken.value;
+  const { data } = await authClient.token();
+  if (!data?.token) {
+    cachedToken = null;
+    throw new ApiError(401, "Not signed in.");
+  }
+  cachedToken = { value: data.token, expiresAt: expiryOf(data.token) };
+  return data.token;
+}
+
+export function clearApiToken(): void {
+  cachedToken = null;
+}
+
+async function request<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
+  const token = await apiToken();
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      ...(init.headers ?? {}),
+    },
   });
 
+  // A token the API refuses may simply be one the dashboard cached past a key rotation: fetch a
+  // fresh one once before reporting the caller as signed out.
+  if (response.status === 401 && !retried) {
+    clearApiToken();
+    return request<T>(path, init, true);
+  }
+
   if (!response.ok) {
-    // The API answers 501 when no GitHub App is configured. Surfacing that distinctly is the
-    // difference between "you are signed out" and "this deployment was never finished".
+    // The API answers 503 when it cannot fetch the dashboard's signing keys. Surfacing that
+    // distinctly is the difference between "you are signed out" and "this deployment is broken".
     let detail = response.statusText;
     try {
       const body = (await response.json()) as { detail?: string };
@@ -71,16 +113,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await response.json()) as T;
 }
 
-export function signInUrl(nextPath = "/repositories"): string {
-  return `${API_BASE_URL}/auth/login?next=${encodeURIComponent(nextPath)}`;
-}
-
 export function getSession(): Promise<SessionInfo> {
   return request<SessionInfo>("/auth/session");
 }
 
-export function logout(): Promise<void> {
-  return request<void>("/auth/logout", { method: "POST" });
+/** Ends the Better Auth session. The API holds no session of its own to revoke. */
+export async function logout(): Promise<void> {
+  clearApiToken();
+  await authClient.signOut();
 }
 
 export function listRepositories(cursor?: string | null, limit = 30): Promise<RepositoryPage> {

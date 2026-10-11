@@ -1,7 +1,7 @@
 """The real `githubkit` gateway, driven against an httpx `MockTransport`.
 
 `FakeGitHubGateway` keeps the route tests honest about *our* logic, but it cannot catch a wrong
-endpoint, a missing `redirect_uri`, or a response shape we read incorrectly — the three things most
+endpoint, a missing parameter, or a response shape we read incorrectly — the three things most
 likely to be wrong the first time this meets GitHub. These tests exercise `GitHubKitGateway` itself
 and assert on the requests it actually emits, with no socket involved.
 
@@ -13,16 +13,14 @@ No database, so these run in every suite, not only under `-m db`.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from urllib.parse import parse_qs
 
 import httpx
 import pytest
-from githubkit_schemas.latest.models import Installation, PrivateUser, Repository, SimpleUser
+from githubkit_schemas.latest.models import Installation, Repository, SimpleUser
 
 from codesheriff_api.config import ApiConfig
-from codesheriff_api.github_gateway import GitHubError, GitHubKitGateway
+from codesheriff_api.github_gateway import GitHubKitGateway
 
 from .payloads import payload_for
 
@@ -32,27 +30,7 @@ def config() -> ApiConfig:
     return ApiConfig(
         _env_file=None,  # type: ignore[call-arg]
         GITHUB_APP_ID="123456",
-        GITHUB_APP_CLIENT_ID="Iv1.testclientid",
-        GITHUB_APP_CLIENT_SECRET="test-client-secret",
         API_PUBLIC_URL="http://localhost:8000",
-    )
-
-
-def exchange_body(request: httpx.Request) -> dict[str, str]:
-    """The token-exchange parameters, however githubkit chose to encode them.
-
-    It sends JSON today and the endpoint also accepts form encoding; the assertions are about the
-    parameters, not the wire format.
-    """
-    raw = request.content.decode()
-    if request.headers.get("content-type", "").startswith("application/json"):
-        return {str(k): str(v) for k, v in json.loads(raw).items()}
-    return {key: values[0] for key, values in parse_qs(raw).items()}
-
-
-def user_payload(user_id: int = 4242, login: str = "octo-dev") -> dict[str, object]:
-    return payload_for(
-        PrivateUser, id=user_id, login=login, name="Octo Dev", avatar_url="https://a/"
     )
 
 
@@ -70,71 +48,6 @@ def repository_payload(
     return payload_for(
         Repository, id=repo_id, full_name=full_name, default_branch=branch, private=private
     )
-
-
-def test_sign_in_exchanges_the_code_then_reads_identity_and_installations(
-    config: ApiConfig,
-) -> None:
-    seen: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        path = request.url.path
-
-        if path == "/login/oauth/access_token":
-            return httpx.Response(
-                200,
-                json={"access_token": "gho_exchanged", "token_type": "bearer", "scope": ""},
-            )
-        if path == "/user":
-            return httpx.Response(200, json=user_payload())
-        if path == "/user/installations":
-            return httpx.Response(
-                200,
-                json={
-                    "total_count": 2,
-                    "installations": [installation_payload(9001), installation_payload(9002)],
-                },
-            )
-        raise AssertionError(f"unexpected request to {request.url}")
-
-    gateway = GitHubKitGateway(config, transport=httpx.MockTransport(handler))
-    identity = gateway.sign_in("the-code")
-
-    assert identity.github_id == 4242
-    assert identity.login == "octo-dev"
-    assert identity.installation_ids == [9001, 9002]
-
-    exchange = next(r for r in seen if r.url.path == "/login/oauth/access_token")
-    body = exchange_body(exchange)
-    assert body["client_id"] == "Iv1.testclientid"
-    assert body["client_secret"] == "test-client-secret"
-    assert body["code"] == "the-code"
-    # The redirect_uri must match the App's registered callback exactly, or GitHub rejects the
-    # exchange with an error that says nothing useful.
-    assert body["redirect_uri"] == "http://localhost:8000/auth/callback"
-
-    # The token from the exchange is what the subsequent reads authenticate with, and it never
-    # leaves the gateway.
-    user_request = next(r for r in seen if r.url.path == "/user")
-    assert "gho_exchanged" in user_request.headers["authorization"]
-
-
-def test_a_rejected_code_raises_github_error_without_leaking_the_body(config: ApiConfig) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            401, json={"error": "bad_verification_code", "client_secret": "test-client-secret"}
-        )
-
-    gateway = GitHubKitGateway(config, transport=httpx.MockTransport(handler))
-
-    with pytest.raises(GitHubError) as caught:
-        gateway.sign_in("stale-code")
-
-    # The message names the failure class only. GitHub echoes request parameters in some error
-    # bodies, and an exception string ends up in logs.
-    assert "test-client-secret" not in str(caught.value)
-    assert "sign-in failed" in str(caught.value)
 
 
 def test_installation_repositories_follow_pagination(config: ApiConfig, tmp_path: Path) -> None:

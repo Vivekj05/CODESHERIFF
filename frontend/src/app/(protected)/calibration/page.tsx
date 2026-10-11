@@ -15,6 +15,8 @@ import {
   ZAxis,
 } from "recharts";
 
+import { Highlight } from "@/components/chai/highlight";
+import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -100,14 +102,11 @@ export default function CalibrationPage() {
   const sweep = artifact.threshold.sweep;
 
   return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Calibration</h1>
-        <p className="text-muted-foreground text-sm">
-          A stated 87% should mean being right about 87% of the time. This page is the evidence for
-          that correspondence — or for its absence.
-        </p>
-      </div>
+    <div className="flex flex-col gap-8">
+      <PageHeader title="Calibration">
+        A stated 87% should mean being right about 87% of the time. This page is{" "}
+        <Highlight>the evidence for that claim</Highlight>, or for its absence.
+      </PageHeader>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Fact
@@ -122,12 +121,12 @@ export default function CalibrationPage() {
         />
         <Fact
           label="Weighted ECE"
-          value={validation ? validation.ece.toFixed(3) : "—"}
+          value={validation ? validation.ece.toFixed(3) : "n/a"}
           note={validation ? `${validation.n_claims} validation claims` : "not recorded"}
         />
         <Fact
           label="Brier"
-          value={validation ? validation.brier.toFixed(3) : "—"}
+          value={validation ? validation.brier.toFixed(3) : "n/a"}
           note={
             calibrationSplit
               ? `${calibrationSplit.brier.toFixed(3)} in-sample on calibration`
@@ -141,7 +140,7 @@ export default function CalibrationPage() {
         <AlertDescription>
           The ratios were fitted on the calibration split and the threshold selected on the
           validation split. The honest figures are the test split&rsquo;s, and it stays sealed
-          until the final evaluation — it may be read exactly once.
+          until the final evaluation, and may be read exactly once.
         </AlertDescription>
       </Alert>
 
@@ -150,7 +149,7 @@ export default function CalibrationPage() {
           <CardTitle className="text-base">Reliability</CardTitle>
           <CardDescription>
             Each point is a bin of validation claims: stated confidence across, observed frequency
-            up, point size the number of claims in it. The dashed line is perfect calibration —
+            up, point size the number of claims in it. The dashed line is perfect calibration:
             below it the system is overconfident, above it under.
           </CardDescription>
         </CardHeader>
@@ -241,15 +240,16 @@ export default function CalibrationPage() {
                   strokeDasharray="4 4"
                   label={{ value: "selected", fontSize: 11, position: "top" }}
                 />
-                <Line type="monotone" dataKey="precision" dot={false} strokeWidth={2} />
+                <Line type="monotone" dataKey="precision" dot={false} strokeWidth={2} stroke="var(--foreground)" />
                 <Line
                   type="monotone"
                   dataKey="recall"
                   dot={false}
                   strokeWidth={2}
+                  stroke="var(--foreground)"
                   strokeDasharray="6 3"
                 />
-                <Line type="monotone" dataKey="f1" dot={false} strokeWidth={1} opacity={0.6} />
+                <Line type="monotone" dataKey="f1" dot={false} strokeWidth={1} stroke="var(--muted-foreground)" />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -265,7 +265,7 @@ export default function CalibrationPage() {
           <CardDescription>
             One row per cell. A ratio fitted from few observations is mostly the smoothing prior,
             and the counts are how you tell. A cell nobody selected contributes exactly 1.0 rather
-            than a smoothed value — otherwise a never-observed tier would argue mildly for safety.
+            than a smoothed value; otherwise a never-observed tier would argue mildly for safety.
           </CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
@@ -312,7 +312,7 @@ export default function CalibrationPage() {
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs">
                       {values.n_vulnerable + values.n_safe === 0
-                        ? "never observed — contributes nothing"
+                        ? "never observed, contributes nothing"
                         : values.clamped
                           ? `clamped (raw ${values.raw_ratio.toFixed(2)})`
                           : ""}
@@ -330,7 +330,7 @@ export default function CalibrationPage() {
           <CardTitle className="text-base">Provenance</CardTitle>
           <CardDescription>
             Which machine produced the observations, and which backends were actually running. A
-            structural ratio fitted with no Semgrep build describes a one-backend witness — that is
+            structural ratio fitted with no Semgrep build describes a one-backend witness, and that is
             a property of the number, not a footnote about the machine.
           </CardDescription>
         </CardHeader>
@@ -363,7 +363,7 @@ export default function CalibrationPage() {
                       {AGENT_LABELS[agent as AgentId] ?? agent}
                     </Badge>
                   ))}
-                  — the ratios for its witness describe the backends that did run.
+                  : the ratios for its witness describe the backends that did run.
                 </span>
               )}
               {run.semantic_source && (
@@ -390,7 +390,7 @@ function Fact({ label, value, note }: { label: string; value: string; note: stri
   return (
     <Card>
       <CardContent className="flex flex-col gap-1 py-4">
-        <span className="text-muted-foreground text-xs uppercase tracking-wide">{label}</span>
+        <span className="text-sm text-muted-foreground">{label}</span>
         <span className="font-mono text-2xl font-semibold tabular-nums">{value}</span>
         <span className="text-muted-foreground text-xs">{note}</span>
       </CardContent>

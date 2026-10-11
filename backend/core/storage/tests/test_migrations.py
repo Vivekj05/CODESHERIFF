@@ -30,7 +30,10 @@ EXPECTED_TABLES = {
     "pr_precedents",
     "precedent_chunks",
     "repositories",
-    "sessions",
+    "auth_accounts",
+    "auth_jwks",
+    "auth_sessions",
+    "auth_verifications",
     "users",
 }
 
