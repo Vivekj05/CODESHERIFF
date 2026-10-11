@@ -1,144 +1,119 @@
-# CodeSheriff Web Dashboard & SaaS Platform
+# CodeSheriff dashboard
 
-Modern, full-stack Next.js 16 (App Router) web dashboard and SaaS platform for CodeSheriff. Built with React 19, TypeScript, Tailwind CSS v4, and Base UI / shadcn/ui.
+The Next.js 16 front end for CodeSheriff: the public home page, GitHub sign-in, and the dashboard
+that shows what every audit found and how each probability was reached. It is a separate npm
+project, not a member of the Python `uv` workspace.
 
-This application provides the public product landing page, interactive audit workbench, codebase RAG indexing, rich PR review generation with sequence diagrams, and engineering activity analytics, layered over CodeSheriff's calibrated Bayesian 4-agent security engine.
-
----
-
-## Key Features & Architecture
-
-### 1. Public Marketing & Product Landing Page (`/`)
-* **Interactive Hero**: Features a live simulated PR review card (#148 with calibrated 94.8% Bayesian posterior) demonstrating multi-agent consensus.
-* **4-Agent Architecture Showcase**: Clear breakdown of the four specialist witnesses: Structural Taint, Semantic Reasoning, Context Precedent, and Runtime Sandbox.
-* **Feature Comparison Matrix**: Benchmarking CodeSheriff against standard LLM code reviewers (hallucination-prone, 80%+ FDR) and traditional static SAST tools (noisy, rule-bound).
-* **Call-to-Action**: Direct routing into GitHub OAuth onboarding and dashboard exploration.
-
-### 2. Modern App Shell & Navigation (`(protected)/...`)
-* **Responsive `AppSidebar`**: Active route highlighting, repository quota indicators (e.g. 5/10 repos used), and user session profile footer.
-* **Unified `AppShell`**: Consistent dark-mode aesthetic with collapsible sidebar and sticky breadcrumb header.
-* **Providers**: Integrated TanStack Query (React Query v5) for client cache invalidation, Sonner toast notifications, and `@base-ui/react` TooltipProvider.
-
-### 3. Engineering Analytics & Overview (`/overview`)
-* **Contribution Calendar Heatmap** (`ContributionGraph`): 26-week activity heatmap visualizing PR reviews and security audit volume.
-* **Activity Overview Trend** (`ActivityOverviewChart`): 6-month interactive gradient area chart built with Recharts, tracking audits, findings, and fixed vulnerabilities over time.
-* **Key Metric Cards**: High-level counters for connected repositories, total audits, flagged findings, and calibrated accuracy rate.
-
-### 4. Repository Management & RAG Indexing (`/repositories`)
-* **Real-time Filtering**: Search repositories by name or description, and filter by status tabs (*All*, *Active*, *Private*, *Public*).
-* **Quota & State Tracking**: Live repository quota counter and toggle for automated PR analysis.
-* **One-Click RAG Indexing**: "Index RAG" action triggering semantic codebase chunking and vector store upsert with instant Sonner toast feedback.
-
-### 5. Full-Codebase Semantic RAG System
-* **Intelligent AST/Block Chunker** (`src/lib/chunker.ts`): Overlapping semantic chunker with customizable exclusion filters (skips `node_modules`, `.git`, lockfiles, minified bundles, test fixtures).
-* **Pinecone & Gemini Embeddings** (`src/lib/pinecone.ts`): Generates 768-dimensional embeddings using Google's `text-embedding-004`. Upserts and queries isolated namespace vectors, with an automatic zero-config in-memory fallback for local offline development.
-* **RAG API Routes**:
-  * `POST /api/rag/index`: Ingests and vectorizes repository source files.
-  * `POST /api/rag/search`: Performs semantic similarity search returning top-K code snippets with metadata.
-
-### 6. Rich Multi-Dimensional AI PR Reviews (`src/lib/gemini-review.ts`)
-Synthesizes comprehensive, actionable code reviews using Google Gemini:
-* **Executive Summary**: Contextual impact analysis and high-level risk assessment.
-* **File-by-File Walkthrough**: Detailed walkthrough of changed modules, functions, and invariants.
-* **Interactive Sequence Diagrams**: Dynamic Mermaid.js sequence diagrams rendered in dark-mode SVG with one-click clipboard export (`MermaidViewer`).
-* **Key Strengths**: Constructive engineering feedback highlighting well-tested or clean patterns.
-* **Actionable Suggestions & Repairs**: Syntax-highlighted diffs proposing verified fixes.
-* *(Strictly no fluff, filler, or poems — professional, signal-dense output only).*
-
-### 7. Audit Detail Workbench (`/audits/[id]`)
-Four-tab interactive audit inspection interface:
-1. **Architecture & Flow**: Mermaid sequence diagram visualizing the change's execution and data flow.
-2. **Walkthrough & Summary**: Executive summary and changed file descriptions.
-3. **Calibrated Findings**: Bayesian posterior probability, likelihood ratio breakdown across the 4 specialist agents, and evidence breakdown (Detections, Silences, Abstentions).
-4. **Suggestions & Repairs**: Code patches with copyable diffs and sandbox verification status.
-* Includes direct link to the associated GitHub pull request.
+The analysis, the data and every number on screen come from the Python API (`backend/api`). This
+app renders them, and runs sign-in. It computes no probability and calls GitHub only to sign a
+user in.
 
 ---
 
-## Core Invariants & Rules Encoded
+## Pages
 
-1. **No probability reaches the screen bare**:
-   Every posterior renders through `<Posterior>`, which reads `calibration.isProvisional` and marks the probability as an uncalibrated estimate while true. A confident number without empirical backing is the failure this project attacks; the UI does not reproduce it.
-2. **Silences and abstentions are distinguished, not collapsed**:
-   An agent that ran and found nothing is evidence (SILENCE, LR < 1.0); an agent that could not run is neutral (ABSTENTION, LR = 1.0). Collapsing them into a single "clean" chip would introduce systematic bias.
-3. **Session security**:
-   The Python FastAPI backend owns OAuth client secrets, exchanges authorization codes, and issues HttpOnly session cookies. Next.js API routes are dedicated to frontend RAG orchestration and dev utilities.
+| Route | What it is |
+|---|---|
+| `/` | Public home page. Only measured numbers; the example finding multiplies the real fitted ratios. |
+| `/sign-in` | One card, "Continue with GitHub". `?next=` returns the user where they were going; `?refresh=1` re-runs sign-in after an App install to pick up new installations. |
+| `/overview` | Counts of what happened, the GitHub App's state, the calibration in force, and what each witness has said. Prompts to connect the App until one is connected. |
+| `/repositories` | Repositories the App can read, with search, filters and a per-repository analysis switch. |
+| `/github-app` | Connect, manage or disconnect the GitHub App. Every action is a link to GitHub's own pages. |
+| `/audits`, `/audits/[id]` | Audit history; one audit's findings and every witness's statement per function. |
+| `/audits/[id]/findings/[key]` | One finding's odds product, factor by factor, as the run stored it. |
+| `/calibration` | Reliability bins, per-cell observation counts and the whole threshold sweep. |
+| `/settings` | Profile (from the GitHub sign-in, read-only) and Analysis (the fixed threshold, witnesses and CWE scope). |
+
+Everything under `(protected)` renders inside the signed-in shell; a visitor without a session is
+sent to `/sign-in?next=<where they were going>`.
 
 ---
 
-## Directory Layout
+## Sign-in (D-101)
+
+Better Auth runs in this app (`src/lib/auth.ts`), with the **GitHub App's** client id and secret,
+mounted at `/api/auth/*`, the only Next.js API route in the project.
+
+- At every sign-in the user's GitHub token reads `GET /user/installations`. The ids are written to
+  `users.installation_ids` by server-side database hooks, never taken from the browser, so a user
+  cannot widen what they see.
+- Better Auth's JWT plugin issues a 15-minute EdDSA token carrying the login, name, avatar and
+  installation ids (never the email or a GitHub token). `src/lib/api.ts` attaches it to every API
+  call; the API verifies it against `/api/auth/jwks`.
+- The GitHub token is stored in `auth_accounts`, encrypted with `BETTER_AUTH_SECRET`.
+- Alembic owns Better Auth's tables (migration `0006_better_auth`). **Do not run `npx auth migrate`.**
+
+## Design
+
+Built with [ChaiUI](https://ui.chaicode.com): its components are installed under
+`src/components/chai` so the existing Base UI components in `src/components/ui` are untouched. The
+logo is CodeSheriff's own (`brand-logo.tsx`), not ChaiCode's. Dark is the default theme.
+
+Rules the code keeps, from the project's invariants:
+
+1. **No probability reaches the screen bare.** Every posterior renders through `<Posterior>`, with
+   the calibration it ran under.
+2. **Silence and abstention stay distinct.** An agent that ran and found nothing and an agent that
+   could not run are different statements, and are shown as such.
+3. **No invented content.** No template reviews, generated diffs or placeholder charts: if the
+   backend did not record it, the page does not show it.
+
+---
+
+## Layout
 
 ```
-frontend/
-├── src/
-│   ├── app/
-│   │   ├── (protected)/          # Authenticated routes
-│   │   │   ├── overview/         # Dashboard with contribution graph & Recharts
-│   │   │   ├── repositories/     # Search, filters, RAG indexing
-│   │   │   ├── audits/           # Audit list & tabbed detail workbench ([id])
-│   │   │   ├── findings/         # Findings drilldown & evidence breakdown
-│   │   │   ├── calibration/      # Reliability diagrams, ECE curves, LR tables
-│   │   │   └── settings/         # System settings (read-only calibrated thresholds)
-│   │   ├── api/
-│   │   │   └── rag/              # Codebase RAG endpoints (index, search)
-│   │   ├── sign-in/              # GitHub OAuth sign-in flow
-│   │   ├── layout.tsx            # Root layout (dark theme, providers, inter font)
-│   │   └── page.tsx              # Public marketing landing page
-│   ├── components/
-│   │   ├── analytics/            # ContributionGraph & ActivityOverviewChart
-│   │   ├── reviews/              # MermaidViewer sequence diagram renderer
-│   │   ├── ui/                   # Base UI / shadcn design system primitives
-│   │   ├── app-shell.tsx         # Sidebar + Header wrapper
-│   │   ├── app-sidebar.tsx       # Collapsible navigation sidebar
-│   │   ├── posterior.tsx         # Calibrated posterior badge with provisional flag
-│   │   └── providers.tsx         # React Query, Tooltip, Sonner Toaster
-│   └── lib/
-│       ├── api.ts                # FastAPI edge client
-│       ├── chunker.ts            # Semantic code chunking utility
-│       ├── gemini-review.ts      # Multi-dimensional Gemini PR review generator
-│       ├── github.ts             # Octokit API client & mock contribution data
-│       ├── pinecone.ts           # Pinecone + Google text-embedding-004 client
-│       └── types.ts              # Contract v2.0.0 TypeScript definitions
-├── package.json
-└── README.md
+src/
+├── app/
+│   ├── (protected)/              # signed-in pages (see the table above)
+│   ├── api/auth/[...all]/        # Better Auth: sign-in, callback, sign-out, token, JWKS
+│   ├── sign-in/                  # the sign-in card
+│   ├── layout.tsx                # theme script, providers
+│   └── page.tsx                  # home page
+├── components/
+│   ├── chai/                     # ChaiUI primitives (button, card, chip, tabs, ...)
+│   ├── ui/                       # Base UI / shadcn primitives, restyled
+│   ├── landing/                  # home page pieces (example finding, reveal)
+│   ├── app-shell.tsx, app-sidebar.tsx, session-gate.tsx
+│   ├── posterior.tsx, evidence-kind-badge.tsx, page-header.tsx, github-mark.tsx
+│   └── navbar.tsx, hero.tsx, footer.tsx, ...   # ChaiUI blocks
+└── lib/
+    ├── auth.ts                   # Better Auth server config (server-only)
+    ├── auth-client.ts            # Better Auth in the browser
+    ├── api.ts                    # the only caller of the Python API
+    └── types.ts                  # contract v2.0.0 types
 ```
 
 ---
 
-## Running Locally
+## Running locally
 
-### Prerequisites
-* Node.js 20+
-* npm or pnpm
-* Backend running on `http://localhost:8000` (optional for landing page and RAG mock)
+Needs Node 20+, the Python API on `http://localhost:8000`, and Postgres (Better Auth stores users
+there). From the repository root, `codesheriff.bat dev` starts everything; or here:
 
-### Commands
 ```bash
-# Install dependencies
 npm install
-
-# Run development server (http://localhost:3000)
-npm run dev
-
-# Run TypeScript check and production build (strictly enforced gate)
-npm run build
-
-# Run ESLint check
-npm run lint
+npm run dev        # http://localhost:3000
+npm run lint       # gate
+npm run build      # gate: type-check and production build
 ```
 
-### Environment Variables (`.env.local`)
+### `.env.local`
+
 ```ini
-# FastAPI Backend URL (default: http://localhost:8000)
+# The Python API. Inlined at BUILD time: changing it means rebuilding.
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 
-# Google Gemini AI (for RAG embeddings and review generation)
-GEMINI_API_KEY=your-gemini-api-key
-
-# Pinecone Vector Database (optional; uses in-memory store if unset)
-PINECONE_API_KEY=your-pinecone-api-key
-PINECONE_INDEX=codesheriff-codebase
-
-# GitHub Personal Access Token (optional; for higher API rate limits)
-GITHUB_TOKEN=your-github-token
+# Better Auth
+BETTER_AUTH_URL=http://localhost:3000
+BETTER_AUTH_SECRET=<32+ random bytes>
+DATABASE_URL=postgresql://codesheriff:codesheriff@localhost:5432/codesheriff
+GITHUB_APP_CLIENT_ID=<the GitHub App's client id>
+GITHUB_APP_CLIENT_SECRET=<the GitHub App's client secret>
 ```
+
+The GitHub App needs the callback URL `http://localhost:3000/api/auth/callback/github` and the
+"Email addresses: Read-only" account permission; see `docs/github-app-setup.md`.
+
+This version of Next.js differs from older ones in places (see `AGENTS.md`); its own docs in
+`node_modules/next/dist/docs/` are the reference.

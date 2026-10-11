@@ -55,7 +55,7 @@ agent = ContextAgent(retriever=my_retriever)   # no retriever -> abstains on eve
 evidence = agent.analyze(unit)
 ```
 
-`apps/worker` injects the pgvector-backed retriever, scoped to one repository at construction.
+`backend/worker` injects the pgvector-backed retriever, scoped to one repository at construction.
 
 ```bash
 context-agent run unit.json --precedent history.json

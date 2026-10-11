@@ -12,6 +12,11 @@ them as they are fixed would destroy the record of how far the implementation ha
 
 ---
 
+> **Paths.** The repository was reorganised in `454e4df`; paths here are as they were when written:
+> `apps/api` → `backend/api`, `apps/worker` → `backend/worker`, `apps/dashboard` → `frontend`,
+> `packages/{contracts,corpus,engine,patch,storage}` → `backend/core/…`,
+> `packages/agent_*` → `backend/agents/*`.
+
 ## Closure status
 
 Which entries have been closed, and by what. Anything not listed is still open.

@@ -6,6 +6,13 @@ One chapter per session. Start a session by reading this file, take the first ch
 
 **Status:** ⬜ not started · 🔨 in progress · ✅ done · ⚠️ done with caveats (note them)
 
+> **Paths in older entries.** The repository was reorganised in `454e4df`. Entries written before
+> it use the old paths, which are left as written because they are a record: `apps/api` →
+> `backend/api`, `apps/worker` → `backend/worker`, `apps/dashboard` → `frontend`,
+> `packages/{contracts,corpus,engine,patch,storage}` → `backend/core/…`, and
+> `packages/agent_{static,semantic,context,runtime}` → `backend/agents/{static,semantic,context,runtime}`.
+> Package and import names did not change.
+
 **Read first:** `CLAUDE.md` → `PROJECT_CONTEXT.md` §5 → the `AUDIT.md` entries your chapter closes.
 
 > Most chapters from 6 onward are **rewrites, not greenfield**. Code with the right filename already
@@ -17,8 +24,8 @@ One chapter per session. Start a session by reading this file, take the first ch
 
 ## Where the project actually is
 
-Roughly: **v0.1–v0.8 built and measured; the dashboard reads them (Ch 15). v0.9 and v1.0 not
-started.**
+Roughly: **v0.1–v0.8 built and measured; the dashboard reads them (Ch 15–16); the patch loop is
+built (Ch 17); Chapter 18, the evaluation, is in progress. v0.9 not started.**
 
 Four packages exist with a passing test suite and a webhook that reaches GitHub. But the conformance
 audit found three of four analysis components non-functional, the fusion engine implementing the
@@ -75,6 +82,20 @@ and the answer is a refusal — CodeSheriff does not run the repository's test s
 does not change when one exists, because a test suite needs the network and the filesystem the
 sandbox exists to deny (D-094). A rung has three outcomes rather than two, so a check that could not
 run is never published as one that passed.
+
+**Since Chapter 17: sign-in, connecting the App, and the dashboard's look** (D-101, D-102). These
+are not a chapter of their own; they were done at the project owner's request between Chapters 17
+and 18.
+- Sign-in moved to Better Auth in the dashboard. The API verifies a short-lived EdDSA JWT and still
+  scopes everything by the installations GitHub reports at sign-in (D-035 kept); it holds no OAuth
+  secret and no session. The GitHub token is now stored, encrypted: D-101 records that reversal.
+- Connecting the App is its own step, on a GitHub App page; disconnecting, or deselecting a
+  repository, hides history instead of deleting it (migration `0007`), and repository webhooks are
+  reconciled against GitHub's current list (D-102).
+- The frontend was rebuilt in the ChaiUI style, and content that was invented rather than measured
+  (template reviews, fake diffs, random charts, a fake quota, the Pinecone RAG routes) was removed.
+- `uv.lock`'s stale pre-move paths were corrected, and the `db` tests now point at a separate
+  `codesheriff_test` database, because they migrate theirs to empty.
 
 **As of Chapter 14 the numbers are fitted.** Every likelihood ratio comes from the calibration
 split, the alert threshold from a weighted precision–recall sweep on the validation split, and both
@@ -301,7 +322,7 @@ an `AGENTS.md` saying so. Conventions that differ: typed `PageProps<'/route'>` a
 `apps/dashboard/node_modules/next/dist/docs/` are authoritative; read them before writing
 components.
 
-## Chapter 5 — GitHub OAuth, App installation, repository listing 🔨
+## Chapter 5 — GitHub OAuth, App installation, repository listing ✅
 
 OAuth flow, session handling, App installation, per-repo permission derivation. Repo listing with
 infinite scrolling, connect/disconnect, connection status.
@@ -344,12 +365,13 @@ substituted at the `GitHubGateway` interface, and `test_github_gateway.py` drive
 `githubkit` client against an httpx `MockTransport` — which is what pins the `redirect_uri` and the
 pagination behaviour that a fake would have let slide.
 
-⚠️ **Not ✅ until the App is registered.** The acceptance criterion is "the App installs against a
-real account and connected repos persist across sessions", and registering a GitHub App is an
-account-owner action nobody else can do. Everything up to that point is verified.
-`docs/github-app-setup.md` is the twenty-minute checklist: create the App with the D-034 permissions,
-fill five values into `.env`, install it, sign in, and confirm the repository list survives a sign-out
-and back in.
+✅ **Closed 2026-10-11.** The acceptance criterion, "the App installs against a real account and
+connected repos persist across sessions", held against a real registration: the App is installed on
+`shubhankar258`, a real GitHub sign-in reached the dashboard, and the installation's repository
+survived repeated sign-ins. By then sign-in had moved to Better Auth (D-101), so the flow verified is
+the D-101 one; what this chapter built and that decision kept is the access rule (D-035): visibility
+comes from GitHub's installation list at sign-in, scoped in SQL, and an empty list sees nothing. The
+OAuth routes and session cookie described above were removed with D-101.
 
 ## Chapter 6 — Webhook, HMAC, Celery — **the v0.1 seam** ✅
 

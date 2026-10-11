@@ -11,6 +11,13 @@ consequences, and status.
 §5, identify the conflict and discuss it before changing anything. Several §5 entries reverse
 earlier drafts and exist to fix specific bugs; reverting one silently reintroduces its bug.
 
+> **Paths in older entries.** The repository was reorganised in `454e4df`. Entries written before
+> it use the old paths, which are left as written because they are a record: `apps/api` →
+> `backend/api`, `apps/worker` → `backend/worker`, `apps/dashboard` → `frontend`,
+> `packages/{contracts,corpus,engine,patch,storage}` → `backend/core/…`, and
+> `packages/agent_{static,semantic,context,runtime}` → `backend/agents/{static,semantic,context,runtime}`.
+> Package and import names did not change.
+
 **Status values:** `ACTIVE` · `SUPERSEDED by D-nnn` · `PROPOSED` (agreed in principle, not yet
 implemented).
 
