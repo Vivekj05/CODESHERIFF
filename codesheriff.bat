@@ -22,6 +22,7 @@ echo [*] Starting Backend API...
 start "CodeSheriff API" cmd /k ".venv\Scripts\python.exe -m uvicorn codesheriff_api.main:app --reload --port 8000"
 echo [*] Starting Backend Worker...
 start "CodeSheriff Worker" cmd /k ".venv\Scripts\python.exe -m celery -A codesheriff_worker.celery_app worker --pool=solo --loglevel=info --queues=audits"
+call :start_smee
 echo [*] Starting Frontend Dashboard...
 cd frontend && npm run dev
 goto end
@@ -35,7 +36,27 @@ goto end
 echo [*] Starting Backend API and Worker...
 start "CodeSheriff API" cmd /k ".venv\Scripts\python.exe -m uvicorn codesheriff_api.main:app --reload --port 8000"
 start "CodeSheriff Worker" cmd /k ".venv\Scripts\python.exe -m celery -A codesheriff_worker.celery_app worker --pool=solo --loglevel=info --queues=audits"
+call :start_smee
 goto end
+
+:start_smee
+rem Forwards GitHub's webhooks from the smee.io channel to the local API (D-043). The channel is
+rem read from SMEE_URL in .env so it never lands in a committed file. Without this window open,
+rem webhooks are lost: smee does not store events for a client that is not listening.
+set "SMEE_URL="
+if exist .env (
+    for /f "usebackq tokens=1,* delims==" %%A in (".env") do (
+        if "%%A"=="SMEE_URL" set "SMEE_URL=%%B"
+    )
+)
+if "!SMEE_URL!"=="" (
+    echo [x] SMEE_URL is not set in .env, so GitHub webhooks will not reach this machine.
+    echo     Add your channel, e.g. SMEE_URL=https://smee.io/yourchannel, and run this again.
+    exit /b 0
+)
+echo [*] Starting webhook forwarder (smee) from !SMEE_URL!...
+start "CodeSheriff Webhooks (smee)" cmd /k "npx -y smee-client --url !SMEE_URL! --target http://localhost:8000/webhooks/github"
+exit /b 0
 
 :frontend
 echo [*] Starting Frontend Web Dashboard...
@@ -66,9 +87,9 @@ goto end
 echo Usage: codesheriff.bat [command]
 echo.
 echo Available Commands:
-echo   dev       - Start Docker infra + Backend services + Frontend Dashboard
+echo   dev       - Start Docker infra + API + Worker + webhook forwarder (smee) + Dashboard
 echo   infra     - Start Postgres (pgvector) and Redis containers
-echo   backend   - Start only FastAPI and Worker processes
+echo   backend   - Start FastAPI, the Worker and the webhook forwarder (smee)
 echo   frontend  - Start only Next.js web dashboard
 echo   test      - Run test suite with pytest
 echo   eval      - Run benchmark evaluation script
