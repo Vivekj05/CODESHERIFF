@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { FolderGit2, Globe, Lock, Search } from "lucide-react";
 import { toast } from "sonner";
 
@@ -19,7 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { getSession, listRepositories, setAnalysisEnabled, type RepositoryOut } from "@/lib/api";
+import { listRepositories, setAnalysisEnabled, type RepositoryOut } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type FilterMode = "all" | "active" | "private" | "public";
@@ -32,7 +33,6 @@ export default function RepositoriesPage() {
   const [loadedOnce, setLoadedOnce] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<Set<number>>(new Set());
-  const [installUrl, setInstallUrl] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
   const sentinel = useRef<HTMLDivElement | null>(null);
@@ -55,12 +55,6 @@ export default function RepositoriesPage() {
       setLoading(false);
       setLoadedOnce(true);
     }
-  }, []);
-
-  useEffect(() => {
-    getSession()
-      .then((session) => setInstallUrl(session.install_url))
-      .catch(() => setInstallUrl(null));
   }, []);
 
   useEffect(() => {
@@ -130,11 +124,9 @@ export default function RepositoriesPage() {
       <PageHeader
         title="Repositories"
         action={
-          installUrl ? (
-            <a href={installUrl} target="_blank" rel="noreferrer" className={buttonVariants({ variant: "solid" })}>
-              Add a repository
-            </a>
-          ) : null
+          <Link href="/github-app" className={buttonVariants({ variant: "outline" })}>
+            Manage on the GitHub App page
+          </Link>
         }
       >
         Where the GitHub App is installed. Turn analysis on and{" "}
@@ -184,17 +176,15 @@ export default function RepositoriesPage() {
 
       {items.length === 0 && loadedOnce && !loading && !error && (
         <Alert>
-          <AlertTitle>No repositories yet</AlertTitle>
+          <AlertTitle>Connect the GitHub App first</AlertTitle>
           <AlertDescription className="flex flex-col items-start gap-3">
             <span>
-              This account has no installation of the App, or the installation grants access to no
-              repositories.
+              Repositories appear here once the GitHub App is installed and granted access to
+              them.
             </span>
-            {installUrl && (
-              <a href={installUrl} className={buttonVariants({ variant: "soft", size: "sm" })}>
-                Install on a repository
-              </a>
-            )}
+            <Link href="/github-app" className={buttonVariants({ variant: "soft", size: "sm" })}>
+              Go to the GitHub App page
+            </Link>
           </AlertDescription>
         </Alert>
       )}
@@ -206,16 +196,17 @@ export default function RepositoriesPage() {
               <TableRow>
                 <TableHead>Repository</TableHead>
                 <TableHead className="hidden sm:table-cell">Default branch</TableHead>
-                <TableHead className="text-right">Analysis</TableHead>
+                <TableHead className="pr-4 text-right">Analysis</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredItems.map((repo) => (
                 <TableRow key={repo.id}>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
+                  {/* Wraps on a phone: a long owner/name plus its chip would otherwise scroll the table. */}
+                  <TableCell className="whitespace-normal">
+                    <div className="flex flex-wrap items-center gap-2">
                       <FolderGit2 className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                      <span className="font-medium">{repo.full_name}</span>
+                      <span className="font-medium break-all">{repo.full_name}</span>
                       <Chip>
                         {repo.is_private ? <Lock className="size-2.5" aria-hidden="true" /> : <Globe className="size-2.5" aria-hidden="true" />}
                         {repo.is_private ? "private" : "public"}
@@ -225,7 +216,8 @@ export default function RepositoriesPage() {
                   <TableCell className="hidden font-mono text-xs text-muted-foreground sm:table-cell">
                     {repo.default_branch}
                   </TableCell>
-                  <TableCell className="text-right">
+                  {/* pr-4 contains the switch's enlarged tap area, which reaches 12px past its edge. */}
+                  <TableCell className="pr-4 text-right">
                     <div className="flex items-center justify-end gap-3">
                       <span className={cn("text-xs", repo.analysis_enabled ? "text-green-700 dark:text-green-400" : "text-muted-foreground")}>
                         {repo.analysis_enabled ? "On" : "Off"}

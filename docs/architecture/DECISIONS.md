@@ -2900,7 +2900,9 @@ appears only on the machine the measurements are made on.
 ## D-101 — Sign-in moves to the dashboard under Better Auth; the API verifies its JWTs
 
 **Date:** 2026-10-11 · **Status:** ACTIVE · **Reverses:** D-033 (dashboard holds no secret), the
-"no Next.js API routes" rule, D-036 (no GitHub token stored) · **Keeps:** D-035
+"no Next.js API routes" rule, D-036 (no GitHub token stored), and PROJECT_CONTEXT.md §6's "Next.js
+is a rendering layer only: no database access" for authentication alone (Better Auth's Postgres
+connection; no business, detection or audit data is read from Next.js) · **Keeps:** D-035
 
 **Context.** The project owner chose Better Auth with GitHub sign-in for the dashboard, after the
 conflict with the decisions above was laid out and discussed (PROJECT_CONTEXT.md §8). The wanted
@@ -2944,3 +2946,53 @@ still grants nothing from its URL and sends the user back through sign-in.
 **Because** a standard auth layer in the dashboard is what the project wants to build on, and the
 JWT boundary keeps the Python side as strict as before: one verifier, fail-closed, with no access to
 the auth tables and no user token in the API process.
+
+---
+
+## D-102 — Connecting the App is its own step, and uninstalling hides history instead of deleting it
+
+**Date:** 2026-10-11 · **Status:** ACTIVE · **Reverses:** the delete-on-uninstall behaviour of
+Chapter 6's `installation` and `installation_repositories` handlers
+
+**Context.** After D-101, signing in proves who someone is and grants no repository access; access
+comes from installing the GitHub App. The project owner wanted that second step to have its own
+home: a GitHub App page reached from a "Connect GitHub" prompt on the Overview, with install,
+manage and disconnect, and Settings showing the signed-in profile.
+
+Until now an uninstall webhook deleted the installation, and the foreign keys cascaded through
+repositories, audits, change units, evidence, findings and patch proposals. Deselecting one
+repository did the same to that repository. `delete_installation`'s docstring justified this as
+"§6 keeps no data whose owner has withdrawn the grant"; §6 says no such thing (it forbids storing
+source code, which is never stored either way), so the reason it gave was not a finalized decision.
+
+**Decision.**
+- **Hide, never delete.** Migration `0007` adds `installations.uninstalled_at` and
+  `repositories.removed_at`. An uninstall marks the installation and all its repositories; a
+  deselection marks those repositories. Every dashboard query filters `removed_at IS NULL` in SQL,
+  beside the D-035 installation scope, so hidden rows are visible to no one.
+- **Reconnecting restores history.** GitHub keeps repository ids stable. When an installation
+  event reports a repository again, under the same installation or a reinstall's new id, its row is
+  un-marked and moved, and its audits are visible again. `ensure_repository` therefore updates on
+  conflict (installation, name, visibility, `removed_at`) instead of doing nothing; it still never
+  overwrites `default_branch` with a guess.
+- **`GET /installations`** lists the caller's connected installations from the database, with a
+  repository count and a link to GitHub's settings page for each. It calls nothing on GitHub; the
+  webhooks keep the rows current.
+- **Every GitHub action on the GitHub App page is a link to GitHub.** Install opens the App's
+  install screen; Manage and Disconnect open the installation's settings, where GitHub decides who
+  may change or remove it (an organisation member cannot uninstall for everyone from here).
+- **After an install,** the callback sends the user to `/sign-in?next=/github-app&refresh=1`, which
+  re-runs sign-in even for a signed-in user. That re-reads the installation list from GitHub; GitHub
+  skips its consent screen for someone already authorised, so it is a redirect, not a second
+  sign-in. The callback's `installation_id` still grants nothing (D-037).
+- **Settings → Profile** shows the Better Auth session's name, email, avatar and join date,
+  read-only. Better Auth's update-user endpoint stays unused, so the server-only fields of D-101
+  are never reachable from the browser. There is no subscription tab; billing is out of scope (§6).
+
+**What it costs.** Disconnecting no longer erases anything: findings, statements and hashes for a
+disconnected installation stay in the database, hidden. Someone who wants their data gone needs an
+explicit, confirmed delete, which does not exist yet.
+
+**Because** the product of this system is a history of checkable results, and an uninstall is often
+temporary, accidental, or a change of repository selection. Deleting on it destroyed exactly the
+record the project exists to keep, and did so permanently, from a webhook, with no confirmation.

@@ -21,7 +21,15 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from codesheriff_api import audits, auth, calibration, repositories, stats, webhooks
+from codesheriff_api import (
+    audits,
+    auth,
+    calibration,
+    installations,
+    repositories,
+    stats,
+    webhooks,
+)
 from codesheriff_api.config import ApiConfig
 
 config = ApiConfig.load()
@@ -44,6 +52,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(installations.router)
 app.include_router(repositories.router)
 app.include_router(audits.router)
 app.include_router(stats.router)

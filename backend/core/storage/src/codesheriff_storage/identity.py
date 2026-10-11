@@ -7,9 +7,10 @@ owns them in the dashboard (D-101), and the API learns who is calling from a ver
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session as DbSession
 
@@ -38,6 +39,7 @@ def upsert_installation(
                 "account_login": account_login,
                 "account_type": account_type,
                 "suspended_at": suspended_at,
+                "uninstalled_at": None,
                 "updated_at": datetime.now(UTC),
             },
         )
@@ -76,6 +78,8 @@ def upsert_repository(
                 "full_name": full_name,
                 "default_branch": default_branch,
                 "is_private": is_private,
+                # GitHub reported it, so it is present again; its audits become visible (D-102).
+                "removed_at": None,
                 "updated_at": datetime.now(UTC),
             },
         )
@@ -103,7 +107,7 @@ def list_repositories(
         return []
     stmt = (
         select(Repository)
-        .where(Repository.installation_id.in_(installation_ids))
+        .where(Repository.installation_id.in_(installation_ids), Repository.removed_at.is_(None))
         .order_by(Repository.full_name)
         .limit(limit)
     )
@@ -129,6 +133,7 @@ def set_analysis_enabled(
     stmt = select(Repository).where(
         Repository.id == repo_id,
         Repository.installation_id.in_(installation_ids),
+        Repository.removed_at.is_(None),
     )
     repo = db.execute(stmt).scalar_one_or_none()
     if repo is None:
@@ -138,40 +143,51 @@ def set_analysis_enabled(
     return repo
 
 
-def delete_installation(db: DbSession, installation_id: int) -> bool:
-    """Remove an installation and, by cascade, its repositories. Returns whether one existed.
+def mark_installation_uninstalled(db: DbSession, installation_id: int) -> bool:
+    """The App was uninstalled: hide the installation and its repositories. Returns whether it
+    existed.
 
-    The App was uninstalled. Keeping the rows would mean the dashboard lists repositories the App
-    can no longer read and a webhook for which no token can be minted — and D-035 makes GitHub the
-    authority on access, so a stale local copy of a revoked grant is exactly the thing that
-    decision exists to prevent.
-
-    Audits cascade with the repository. That is deliberate: an audit records findings about a
-    repository this installation no longer grants any access to, and §6 keeps no data whose owner
-    has withdrawn the grant.
+    Nothing is deleted (D-102). Until migration 0007 this removed the installation and cascaded
+    through every audit under it, so a temporary or accidental uninstall erased the account's whole
+    history. Now the installation stops being listed as connected and its repositories drop out of
+    every dashboard query; if GitHub reports a repository again, under this installation or a fresh
+    one, `upsert_repository` brings it and its audits back. No one sees hidden rows meanwhile: they
+    are filtered in SQL, the same way an installation a user cannot reach is (D-035).
     """
+    now = datetime.now(UTC)
     result = db.execute(
-        delete(Installation).where(Installation.id == installation_id),
-        execution_options={"synchronize_session": "fetch"},
+        update(Installation)
+        .where(Installation.id == installation_id)
+        .values(uninstalled_at=now, updated_at=now)
+    )
+    db.execute(
+        update(Repository)
+        .where(Repository.installation_id == installation_id, Repository.removed_at.is_(None))
+        .values(removed_at=now, updated_at=now)
     )
     return bool(getattr(result, "rowcount", 0) or 0)
 
 
-def delete_repositories(db: DbSession, installation_id: int, repo_ids: list[int]) -> int:
-    """Remove repositories dropped from an installation. Returns how many went.
+def mark_repositories_removed(db: DbSession, installation_id: int, repo_ids: list[int]) -> int:
+    """Hide repositories dropped from an installation's selection. Returns how many were hidden.
+
+    Kept rather than deleted, for the reason `mark_installation_uninstalled` gives (D-102).
 
     Scoped by `installation_id` as well as by id. The caller is a webhook handler acting on a
-    payload, and a delete that trusted only the ids in that payload would be one verification bug
-    away from removing another installation's rows.
+    payload, and an update that trusted only the ids in that payload would be one verification bug
+    away from hiding another installation's rows.
     """
     if not repo_ids:
         return 0
+    now = datetime.now(UTC)
     result = db.execute(
-        delete(Repository).where(
+        update(Repository)
+        .where(
             Repository.installation_id == installation_id,
             Repository.id.in_(repo_ids),
-        ),
-        execution_options={"synchronize_session": "fetch"},
+            Repository.removed_at.is_(None),
+        )
+        .values(removed_at=now, updated_at=now)
     )
     return int(getattr(result, "rowcount", 0) or 0)
 
@@ -215,12 +231,19 @@ def ensure_repository(
     full_name: str,
     is_private: bool,
 ) -> None:
-    """Record a repository if it is not already known. Never overwrites an existing row.
+    """Record a repository an installation event reports as selected.
 
-    For the installation events, whose repository objects carry no `default_branch` — so a new row
-    takes the column default and a later sign-in sync corrects it. Writing a guessed branch over a
-    known one would be worse than leaving the placeholder where it can be seen.
+    For the installation events, whose repository objects carry no `default_branch`, so a new row
+    takes the column default and a later sync corrects it. Writing a guessed branch over a known
+    one would be worse than leaving the placeholder where it can be seen, so `default_branch` is
+    never in the update.
+
+    Everything else is: these events are GitHub's word on which repositories are selected, so a
+    repository reported here is present, under this installation (D-102). That is what brings a
+    re-selected repository, or one under a reinstalled App's new installation id, back into view
+    with its audits.
     """
+    now = datetime.now(UTC)
     db.execute(
         pg_insert(Repository)
         .values(
@@ -229,5 +252,58 @@ def ensure_repository(
             full_name=full_name,
             is_private=is_private,
         )
-        .on_conflict_do_nothing(index_elements=[Repository.id])
+        .on_conflict_do_update(
+            index_elements=[Repository.id],
+            set_={
+                "installation_id": installation_id,
+                "full_name": full_name,
+                "is_private": is_private,
+                "removed_at": None,
+                "updated_at": now,
+            },
+        )
     )
+
+
+@dataclass(frozen=True)
+class InstallationSummary:
+    """One connected installation, as the GitHub App page shows it."""
+
+    id: int
+    account_login: str
+    account_type: str
+    suspended: bool
+    repository_count: int
+    connected_at: datetime
+
+
+def list_installations(db: DbSession, installation_ids: list[int]) -> list[InstallationSummary]:
+    """The caller's connected installations, oldest first, each with its visible repository count.
+
+    Scoped like every dashboard read: an empty list returns nothing (D-035). Uninstalled ones are
+    left out (D-102); their history is kept, but they are not connected.
+    """
+    if not installation_ids:
+        return []
+    repo_count = (
+        select(func.count(Repository.id))
+        .where(Repository.installation_id == Installation.id, Repository.removed_at.is_(None))
+        .correlate(Installation)
+        .scalar_subquery()
+    )
+    rows = db.execute(
+        select(Installation, repo_count)
+        .where(Installation.id.in_(installation_ids), Installation.uninstalled_at.is_(None))
+        .order_by(Installation.created_at, Installation.id)
+    ).all()
+    return [
+        InstallationSummary(
+            id=installation.id,
+            account_login=installation.account_login,
+            account_type=installation.account_type,
+            suspended=installation.suspended_at is not None,
+            repository_count=int(count or 0),
+            connected_at=installation.created_at,
+        )
+        for installation, count in rows
+    ]

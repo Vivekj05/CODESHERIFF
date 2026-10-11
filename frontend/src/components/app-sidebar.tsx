@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { FolderGit2, Gauge, LayoutDashboard, ListChecks, LogOut, Settings, User } from "lucide-react";
 
 import { BrandLogo } from "@/components/brand-logo";
+import { GitHubMark } from "@/components/github-mark";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import type { SessionInfo } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -13,6 +14,7 @@ import { cn } from "@/lib/utils";
 export const NAV_ITEMS = [
   { href: "/overview", label: "Overview", icon: LayoutDashboard },
   { href: "/repositories", label: "Repositories", icon: FolderGit2 },
+  { href: "/github-app", label: "GitHub App", icon: GitHubMark },
   { href: "/audits", label: "Audits", icon: ListChecks },
   { href: "/calibration", label: "Calibration", icon: Gauge },
   { href: "/settings", label: "Settings", icon: Settings },

@@ -553,6 +553,13 @@ reverses D-036 and is recorded as a cost. A URL parameter never widens access: t
 callback sends the user back through sign-in (D-037). Alembic owns Better Auth's tables
 (`0006_better_auth`); never run `npx auth migrate`.
 
+**Connecting the App** (D-102) is a separate step after sign-in: the GitHub App page
+(`/github-app`) reads `GET /installations` and links to GitHub for install, manage and disconnect;
+no dashboard code calls GitHub. **Uninstalling or deselecting hides, never deletes:**
+`installations.uninstalled_at` and `repositories.removed_at` are set, every dashboard query filters
+`removed_at IS NULL`, and a repository reported again is un-marked with its audits. A new scoped query
+that forgets the `removed_at` filter shows disconnected data; add it beside `installation_id.in_`.
+
 **Security.** Untrusted PR code executes only in the sandbox (deny-by-default network, ephemeral
 filesystem, resource caps) and never on a host holding database credentials. Source code lives in
 memory and ephemeral storage only; persisted records hold findings, evidence and hashes — never

@@ -211,5 +211,7 @@ def test_install_callback_grants_nothing_and_re_derives(client: TestClient) -> N
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "http://localhost:3000/sign-in?next=/repositories"
+    assert (
+        response.headers["location"] == "http://localhost:3000/sign-in?next=/github-app&refresh=1"
+    )
     assert client.get("/auth/session").json()["installation_count"] == before

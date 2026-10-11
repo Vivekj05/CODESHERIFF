@@ -16,7 +16,10 @@ import { GitHubButton } from "./github-button";
  * before it is used: a redirect target taken from a query string is an open redirect otherwise,
  * and `//evil.example` is the form that passes a naive `startsWith("/")`.
  *
- * Someone already signed in skips the card.
+ * Someone already signed in skips the card, unless `refresh=1`: the App's install callback sends
+ * users here with it, and signing in again is what re-reads the installation list from GitHub
+ * (D-102). It starts by itself, and GitHub skips its consent screen for someone who already
+ * authorised, so the user sees a redirect rather than a second sign-in.
  */
 function safeNext(candidate: string | string[] | undefined): string {
   const value = Array.isArray(candidate) ? candidate[0] : candidate;
@@ -27,10 +30,12 @@ function safeNext(candidate: string | string[] | undefined): string {
 }
 
 export default async function SignInPage({ searchParams }: PageProps<"/sign-in">) {
-  const next = safeNext((await searchParams).next);
+  const params = await searchParams;
+  const next = safeNext(params.next);
+  const refresh = params.refresh === "1";
 
   const session = await auth.api.getSession({ headers: await headers() });
-  if (session) redirect(next);
+  if (session && !refresh) redirect(next);
 
   return (
     <div className="relative isolate flex min-h-full flex-1 flex-col overflow-clip">
@@ -49,14 +54,16 @@ export default async function SignInPage({ searchParams }: PageProps<"/sign-in">
           <BrandLogo wordmark={false} className="scale-125" />
           <div className="flex flex-col gap-2">
             <h1 id="sign-in-h" className="text-2xl font-medium">
-              Welcome back
+              {refresh ? "Updating your access" : "Welcome back"}
             </h1>
             <p className="text-sm text-muted-foreground">
-              Sign in with GitHub to see the audits CodeSheriff has run on your pull requests.
+              {refresh
+                ? "Checking with GitHub which installations you can now see."
+                : "Sign in with GitHub to see the audits CodeSheriff has run on your pull requests."}
             </p>
           </div>
 
-          <GitHubButton callbackURL={next} />
+          <GitHubButton callbackURL={next} autoStart={refresh} />
 
           <p className="text-xs leading-relaxed text-muted-foreground">
             Signing in reads your GitHub profile, email and which installations of the CodeSheriff

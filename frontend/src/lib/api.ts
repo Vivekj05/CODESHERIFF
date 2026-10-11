@@ -123,6 +123,27 @@ export async function logout(): Promise<void> {
   await authClient.signOut();
 }
 
+/** One connected installation of the App, for the GitHub App page (D-102). */
+export interface InstallationOut {
+  id: number;
+  account_login: string;
+  account_type: string;
+  suspended: boolean;
+  repository_count: number;
+  connected_at: string;
+  /** GitHub's own settings page for it: change repositories, or uninstall. */
+  manage_url: string;
+}
+
+export interface InstallationList {
+  items: InstallationOut[];
+  install_url: string | null;
+}
+
+export function listInstallations(): Promise<InstallationList> {
+  return request<InstallationList>("/installations");
+}
+
 export function listRepositories(cursor?: string | null, limit = 30): Promise<RepositoryPage> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (cursor) params.set("cursor", cursor);

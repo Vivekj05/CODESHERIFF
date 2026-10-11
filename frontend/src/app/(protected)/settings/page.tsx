@@ -1,15 +1,21 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { LogOut } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { buttonVariants } from "@/components/chai/button";
 import { Highlight } from "@/components/chai/highlight";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/chai/tabs";
+import { GitHubMark } from "@/components/github-mark";
 import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getCalibration, type CalibrationResponse } from "@/lib/api";
+import { getCalibration, logout, type CalibrationResponse } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
 import { AGENT_LABELS, CWE_TITLES, IN_SCOPE_CWES, type AgentId } from "@/lib/types";
 
 /**
@@ -30,7 +36,7 @@ import { AGENT_LABELS, CWE_TITLES, IN_SCOPE_CWES, type AgentId } from "@/lib/typ
  * The one setting that is genuinely a preference — whether CodeSheriff analyses a repository at
  * all — lives on the repositories page, where it already works.
  */
-export default function SettingsPage() {
+function AnalysisSettings() {
   const [data, setData] = useState<CalibrationResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,11 +55,11 @@ export default function SettingsPage() {
   }, []);
 
   return (
-    <div className="flex flex-col gap-8">
-      <PageHeader title="Settings">
+    <div className="flex flex-col gap-6">
+      <p className="text-sm text-muted-foreground">
         What this deployment analyses, and what it decides with. Most of it is{" "}
         <Highlight>fixed on purpose</Highlight>.
-      </PageHeader>
+      </p>
 
       <Card>
         <CardHeader>
@@ -165,6 +171,131 @@ export default function SettingsPage() {
           </p>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/**
+ * Settings: who you are (from your GitHub sign-in) and what this deployment decides with.
+ *
+ * The profile is read from the dashboard's Better Auth session and is read-only on purpose: GitHub
+ * is its source, and leaving Better Auth's update-user endpoint unused keeps the server-only fields
+ * (D-101) out of reach of the browser. There is no subscription tab; billing is out of scope (§6).
+ */
+export default function SettingsPage() {
+  return (
+    <div className="flex flex-col gap-8">
+      <PageHeader title="Settings">
+        Your profile, and the parts of the analysis that are <Highlight>fixed on purpose</Highlight>.
+      </PageHeader>
+      <Tabs defaultValue="profile" className="flex flex-col gap-6">
+        <TabsList variant="segmented" className="w-fit">
+          <TabsTrigger value="profile">Profile</TabsTrigger>
+          <TabsTrigger value="analysis">Analysis</TabsTrigger>
+        </TabsList>
+        <TabsContent value="profile">
+          <ProfileSettings />
+        </TabsContent>
+        <TabsContent value="analysis">
+          <AnalysisSettings />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+function ProfileSettings() {
+  const { data, isPending } = authClient.useSession();
+  const router = useRouter();
+
+  if (isPending) return <Skeleton className="h-64 w-full" />;
+  if (!data) return null;
+
+  const user = data.user as typeof data.user & { login?: string };
+  const since = new Date(user.createdAt).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+
+  async function signOut() {
+    try {
+      await logout();
+    } finally {
+      router.replace("/");
+    }
+  }
+
+  return (
+    <section aria-labelledby="profile-h" className="card-chai flex flex-col">
+      <div className="flex flex-col gap-6 p-6">
+        <div>
+          <h2 id="profile-h" className="font-montserrat text-base font-semibold">
+            Profile
+          </h2>
+          <p className="text-sm text-muted-foreground">Account information from your GitHub sign-in.</p>
+        </div>
+
+        <div className="flex items-center gap-4">
+          {user.image ? (
+            // A GitHub avatar URL; next/image would need GitHub's host allow-listed for no gain here.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={user.image} alt="" className="size-14 rounded-full border border-card-edge" />
+          ) : (
+            <span className="flex size-14 items-center justify-center rounded-full border border-card-edge">
+              <GitHubMark className="size-6" />
+            </span>
+          )}
+          <div className="min-w-0">
+            <p className="font-medium">{user.name}</p>
+            <p className="truncate text-sm text-muted-foreground">{user.email}</p>
+            <p className="text-xs text-muted-foreground">Member since {since}</p>
+          </div>
+        </div>
+
+        <ReadOnlyField label="Display name" value={user.name} />
+        <ReadOnlyField label="Email" value={user.email} />
+        {user.login && (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium">GitHub</span>
+            <a
+              href={`https://github.com/${user.login}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex w-fit items-center gap-2 text-sm underline-offset-4 hover:text-brand hover:underline"
+            >
+              <GitHubMark />@{user.login}
+            </a>
+          </div>
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-card-edge p-4">
+        <p className="text-xs text-muted-foreground">
+          Profile details are managed by GitHub. Update them in your GitHub account settings.
+        </p>
+        <button type="button" onClick={() => void signOut()} className={buttonVariants({ variant: "ghost", size: "sm" })}>
+          <LogOut aria-hidden="true" />
+          Sign out
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function ReadOnlyField({ label, value }: { label: string; value: string }) {
+  const id = `field-${label.toLowerCase().replace(/\s+/g, "-")}`;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor={id} className="text-sm font-medium">
+        {label}
+      </label>
+      <input
+        id={id}
+        value={value}
+        readOnly
+        className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      />
     </div>
   );
 }

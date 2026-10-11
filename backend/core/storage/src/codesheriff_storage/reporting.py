@@ -182,7 +182,7 @@ def _visible_audit_ids(installation_ids: list[int]) -> Select[tuple[uuid.UUID]]:
     return (
         select(Audit.id)
         .join(Repository, Repository.id == Audit.repository_id)
-        .where(Repository.installation_id.in_(installation_ids))
+        .where(Repository.installation_id.in_(installation_ids), Repository.removed_at.is_(None))
     )
 
 
@@ -234,7 +234,7 @@ def list_audit_summaries(
     stmt = (
         select(Audit, Repository.full_name, units, findings, alerts, top)
         .join(Repository, Repository.id == Audit.repository_id)
-        .where(Repository.installation_id.in_(installation_ids))
+        .where(Repository.installation_id.in_(installation_ids), Repository.removed_at.is_(None))
         .order_by(Audit.created_at.desc(), Audit.id.desc())
         .limit(limit)
     )
@@ -285,7 +285,11 @@ def audit_detail(
     stmt = (
         select(Audit, Repository.full_name)
         .join(Repository, Repository.id == Audit.repository_id)
-        .where(Audit.id == audit_id, Repository.installation_id.in_(installation_ids))
+        .where(
+            Audit.id == audit_id,
+            Repository.installation_id.in_(installation_ids),
+            Repository.removed_at.is_(None),
+        )
         .options(selectinload(Audit.calibration_run))
     )
     row = db.execute(stmt).first()
@@ -352,6 +356,7 @@ def finding_detail(
             Finding.audit_id == audit_id,
             Finding.finding_key == finding_key,
             Repository.installation_id.in_(installation_ids),
+            Repository.removed_at.is_(None),
         )
         .options(selectinload(Audit.calibration_run))
     )
@@ -424,7 +429,7 @@ def overview_stats(db: DbSession, *, installation_ids: list[int]) -> OverviewSta
         select(
             func.count(Repository.id),
             func.count(Repository.id).filter(Repository.analysis_enabled.is_(True)),
-        ).where(Repository.installation_id.in_(installation_ids))
+        ).where(Repository.installation_id.in_(installation_ids), Repository.removed_at.is_(None))
     ).one()
 
     visible = select(_visible_audit_ids(installation_ids).subquery().c.id)

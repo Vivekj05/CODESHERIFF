@@ -43,10 +43,10 @@ from codesheriff_engine.calibration import active_artifact
 from codesheriff_storage import (
     audit_for_delivery,
     calibration_run_for,
-    delete_installation,
-    delete_repositories,
     ensure_installation,
     ensure_repository,
+    mark_installation_uninstalled,
+    mark_repositories_removed,
     open_audit,
     repository_by_id,
     supersede_open_audits,
@@ -299,9 +299,10 @@ def _handle_installation(db: DbSession, payload: dict[str, Any]) -> JSONResponse
         raise _bad_request("installation payload is missing installation.id.") from exc
 
     if action == "deleted":
-        removed = delete_installation(db, installation_id)
+        # Hidden, not deleted: the audits stay, and come back if the App is installed again (D-102).
+        known = mark_installation_uninstalled(db, installation_id)
         db.commit()
-        logger.info("Installation %s deleted (existed=%s)", installation_id, removed)
+        logger.info("Installation %s uninstalled (known=%s); history kept", installation_id, known)
         return _acknowledge("installation_deleted", installation_id=installation_id)
 
     account = installation.get("account") or {}
@@ -337,10 +338,10 @@ def _handle_installation_repositories(db: DbSession, payload: dict[str, Any]) ->
             removed_ids.append(int(repo["id"]))
         except (KeyError, TypeError, ValueError):
             logger.warning("Skipping a removed repository with no usable id")
-    removed = delete_repositories(db, installation_id, removed_ids)
+    removed = mark_repositories_removed(db, installation_id, removed_ids)
     db.commit()
 
-    logger.info("Installation %s: repository set changed, %d removed", installation_id, removed)
+    logger.info("Installation %s: repository set changed, %d hidden", installation_id, removed)
     return _acknowledge("repositories_synced", installation_id=installation_id, removed=removed)
 
 

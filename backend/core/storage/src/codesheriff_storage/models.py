@@ -262,6 +262,11 @@ class Installation(Base):
     account_login: Mapped[str] = mapped_column(String(255), nullable=False)
     account_type: Mapped[str] = mapped_column(String(32), nullable=False, default="User")
     suspended_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    uninstalled_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    """Set when GitHub reports the App uninstalled (D-102). The row and everything under it are
+    kept, hidden: the dashboard lists only installations where this is NULL, and every repository
+    under it is marked `removed_at` at the same moment."""
+
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), onupdate=func.now(), nullable=False
@@ -287,6 +292,11 @@ class Repository(Base):
     default_branch: Mapped[str] = mapped_column(String(255), nullable=False, default="main")
     is_private: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     analysis_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    removed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    """Set when the repository leaves its installation's selection, or the App is uninstalled
+    (D-102). Every dashboard query skips such a row; its audits are kept, and come back when
+    GitHub reports the repository again, under this installation or a new one."""
+
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), onupdate=func.now(), nullable=False

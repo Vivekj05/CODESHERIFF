@@ -126,14 +126,18 @@ def install_callback(
 
     `installation_id` arrives in a URL the user controls, so it is logged and otherwise ignored.
     Sending the user back through sign-in makes GitHub the authority on which installations they
-    can see, which is the only source an address bar cannot forge.
+    can see, which is the only source an address bar cannot forge. They land on the GitHub App
+    page, which then shows the new installation as connected.
     """
     logger.info(
         "Installation callback: installation_id=%s setup_action=%s (re-deriving via sign-in)",
         installation_id,
         setup_action,
     )
+    # `refresh=1` makes the sign-in page re-run sign-in even for a signed-in user: that is what
+    # re-reads the installation list from GitHub, and GitHub skips its consent screen for someone
+    # who has already authorised, so the user sees a redirect, not a second sign-in.
     return RedirectResponse(
-        url=_dashboard_url(config, "/sign-in?next=/repositories"),
+        url=_dashboard_url(config, "/sign-in?next=/github-app&refresh=1"),
         status_code=status.HTTP_303_SEE_OTHER,
     )

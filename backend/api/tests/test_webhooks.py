@@ -516,20 +516,41 @@ def test_an_unsuspension_clears_it(
     assert installation is not None and installation.suspended_at is None
 
 
-def test_uninstalling_removes_the_installation_and_its_repositories(
+def test_uninstalling_hides_the_installation_and_keeps_its_history(
     client: TestClient, db: DbSession, known_repo: Repository
 ) -> None:
-    """The grant is gone. Keeping the rows would leave the dashboard listing repositories the App
-    can no longer read, which D-035 exists to prevent."""
+    """Hidden, not deleted (D-102). An accidental uninstall used to erase every audit by cascade."""
     response = deliver(client, installation_payload(action="deleted"), event="installation")
 
-    # The repository row goes by ON DELETE CASCADE in Postgres, which the session's identity map
-    # knows nothing about — without expiring it, `get` answers from memory and the cascade is
-    # invisible.
     db.expire_all()
     assert response.status_code == 200
-    assert db.get(Installation, INSTALLATION_ID) is None
-    assert db.get(Repository, REPO_ID) is None
+    installation = db.get(Installation, INSTALLATION_ID)
+    repository = db.get(Repository, REPO_ID)
+    assert installation is not None and installation.uninstalled_at is not None
+    assert repository is not None and repository.removed_at is not None
+
+
+def test_reinstalling_under_a_new_id_brings_the_repository_back(
+    client: TestClient, db: DbSession, known_repo: Repository
+) -> None:
+    """GitHub issues a new installation id; the repository id is stable, so its audits return."""
+    deliver(client, installation_payload(action="deleted"), event="installation")
+    response = deliver(
+        client,
+        {
+            "action": "created",
+            "installation": {"id": 9002, "account": {"login": "acme", "type": "Organization"}},
+            "repositories": [{"id": REPO_ID, "full_name": REPO_FULL_NAME, "private": True}],
+        },
+        event="installation",
+    )
+
+    db.expire_all()
+    assert response.status_code == 200
+    repository = db.get(Repository, REPO_ID)
+    assert repository is not None
+    assert repository.removed_at is None
+    assert repository.installation_id == 9002
 
 
 def test_repositories_added_to_an_installation_are_recorded(
@@ -550,7 +571,7 @@ def test_repositories_added_to_an_installation_are_recorded(
     assert db.get(Repository, 6001) is not None
 
 
-def test_repositories_removed_from_an_installation_are_dropped(
+def test_repositories_removed_from_an_installation_are_hidden(
     client: TestClient, db: DbSession, known_repo: Repository
 ) -> None:
     response = deliver(
@@ -566,14 +587,41 @@ def test_repositories_removed_from_an_installation_are_dropped(
 
     db.expire_all()
     assert response.json()["removed"] == 1
-    assert db.get(Repository, REPO_ID) is None
+    repository = db.get(Repository, REPO_ID)
+    assert repository is not None and repository.removed_at is not None
+
+
+def test_a_reselected_repository_is_visible_again(
+    client: TestClient, db: DbSession, known_repo: Repository
+) -> None:
+    removal = {
+        "action": "removed",
+        "installation": {"id": INSTALLATION_ID},
+        "repositories_added": [],
+        "repositories_removed": [{"id": REPO_ID, "full_name": REPO_FULL_NAME}],
+    }
+    deliver(client, removal, event="installation_repositories")
+    deliver(
+        client,
+        {
+            "action": "added",
+            "installation": {"id": INSTALLATION_ID},
+            "repositories_added": [{"id": REPO_ID, "full_name": REPO_FULL_NAME, "private": True}],
+            "repositories_removed": [],
+        },
+        event="installation_repositories",
+    )
+
+    db.expire_all()
+    repository = db.get(Repository, REPO_ID)
+    assert repository is not None and repository.removed_at is None
 
 
 def test_a_removal_cannot_reach_another_installations_repository(
     client: TestClient, db: DbSession, known_repo: Repository
 ) -> None:
-    """The delete is scoped by installation as well as by id — one verification bug away from
-    otherwise being able to remove somebody else's rows."""
+    """The hide is scoped by installation as well as by id: otherwise one verification bug would
+    let a payload hide somebody else's rows."""
     upsert_installation(
         db, installation_id=9999, account_login="other", account_type="Organization"
     )
@@ -590,7 +638,8 @@ def test_a_removal_cannot_reach_another_installations_repository(
     )
 
     assert response.json()["removed"] == 0
-    assert db.get(Repository, REPO_ID) is not None
+    repository = db.get(Repository, REPO_ID)
+    assert repository is not None and repository.removed_at is None
 
 
 # ---------------------------------------------------------------------------

@@ -1,9 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { ArrowUpRight } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { buttonVariants } from "@/components/chai/button";
 import { Highlight } from "@/components/chai/highlight";
+import { GitHubMark } from "@/components/github-mark";
 import { PageHeader } from "@/components/page-header";
 import { Stat } from "@/components/stat";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -18,7 +21,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { getCalibration, getOverview, type CalibrationResponse, type Overview } from "@/lib/api";
+import {
+  getCalibration,
+  getOverview,
+  listInstallations,
+  type CalibrationResponse,
+  type InstallationList,
+  type Overview,
+} from "@/lib/api";
 import { AGENT_LABELS, CWE_TITLES, type AgentId, type Cwe } from "@/lib/types";
 
 /**
@@ -37,6 +47,7 @@ import { AGENT_LABELS, CWE_TITLES, type AgentId, type Cwe } from "@/lib/types";
 export default function OverviewPage() {
   const [stats, setStats] = useState<Overview | null>(null);
   const [calibration, setCalibration] = useState<CalibrationResponse | null>(null);
+  const [installations, setInstallations] = useState<InstallationList | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -53,6 +64,10 @@ export default function OverviewPage() {
     getCalibration()
       .then((data) => !cancelled && setCalibration(data))
       .catch(() => !cancelled && setCalibration(null));
+    // Also allowed to fail on its own: the counts below stand without it.
+    listInstallations()
+      .then((data) => !cancelled && setInstallations(data))
+      .catch(() => !cancelled && setInstallations(null));
     return () => {
       cancelled = true;
     };
@@ -78,6 +93,8 @@ export default function OverviewPage() {
   }
 
   const validation = calibration?.artifact.metrics.validation;
+  const connected = installations?.items ?? [];
+  const notConnected = installations !== null && connected.length === 0;
 
   return (
     <div className="flex flex-col gap-8">
@@ -86,7 +103,7 @@ export default function OverviewPage() {
         the claim is always about <Highlight>one probability for one function</Highlight>.
       </PageHeader>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <Stat
           label="Repositories"
           value={stats.repositories}
@@ -112,7 +129,28 @@ export default function OverviewPage() {
           emphasis={stats.alerts > 0}
           note={`of ${stats.findings} finding${stats.findings === 1 ? "" : "s"} above threshold`}
         />
+        <GitHubAppCard connected={connected.length} loaded={installations !== null} />
       </div>
+
+      {notConnected && (
+        <section
+          aria-labelledby="connect-h"
+          className="card-chai flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div>
+            <h2 id="connect-h" className="font-montserrat text-base font-semibold">
+              Connect GitHub to get started
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Install the GitHub App to list your repositories and run security reviews on pull
+              requests.
+            </p>
+          </div>
+          <Link href="/github-app" className={buttonVariants({ variant: "solid" })}>
+            Connect GitHub
+          </Link>
+        </section>
+      )}
 
       <Card>
         <CardHeader>
@@ -229,5 +267,29 @@ export default function OverviewPage() {
         </Card>
       )}
     </div>
+  );
+}
+
+/** The GitHub App's state, as one of the overview's cards. */
+function GitHubAppCard({ connected, loaded }: { connected: number; loaded: boolean }) {
+  return (
+    <Link
+      href="/github-app"
+      className="card-chai group flex flex-col gap-1 p-4 sm:opacity-90 sm:hover:opacity-100"
+    >
+      <span className="flex items-center justify-between text-sm text-muted-foreground">
+        GitHub App
+        <GitHubMark className="size-4" />
+      </span>
+      <span className="font-montserrat text-2xl font-semibold tracking-tight">
+        {!loaded ? "…" : connected > 0 ? "Connected" : "Not connected"}
+      </span>
+      <span className="flex items-center gap-1 text-xs text-muted-foreground group-hover:text-brand">
+        {connected > 0
+          ? `${connected} installation${connected === 1 ? "" : "s"}`
+          : "Install the GitHub App to start"}
+        <ArrowUpRight className="size-3" aria-hidden="true" />
+      </span>
+    </Link>
   );
 }
