@@ -40,7 +40,7 @@ is derived from the id rather than declared, so a rename cannot orphan a twin.
    **before** running any agent, and never widened afterwards. It decides whose miss is forgiven.
 5. `uv run codesheriff-corpus validate`, then `uv run codesheriff-corpus assign --seed <n>`. Assign
    places new pairs and **refuses to move** ones that already have a split.
-6. `uv run pytest packages/corpus`.
+6. `uv run pytest backend/core/corpus`.
 
 Case sources are deliberately vulnerable and are excluded from `ruff` and `mypy` (D-046) — linting
 them would pressure you into fixing the very thing the case exists to contain. A test compiles every

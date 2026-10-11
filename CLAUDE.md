@@ -574,7 +574,7 @@ Python 3.12 · `uv` workspace · FastAPI · Pydantic v2 · Celery + Redis · Pos
 `semgrep` CLI (`--sarif`) · `networkx` · `scikit-learn` · `sentence-transformers`
 (`BAAI/bge-small-en-v1.5`, 384-dim, local) · Gemini Flash free tier · **Wasmtime + WASI** ·
 `typer` · `pytest` + `pytest-cov` + `syrupy` + `hypothesis` · `ruff` + `mypy --strict` ·
-`import-linter` · Next.js + TypeScript + Tailwind + shadcn/ui + Recharts · Docker Compose
+`import-linter` · Next.js + TypeScript + Tailwind + ChaiUI (on shadcn/ui) + Better Auth (D-101) + Recharts · Docker Compose
 
 **Explicitly rejected** — do not reintroduce:
 

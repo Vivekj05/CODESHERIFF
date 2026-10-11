@@ -59,13 +59,22 @@ Static  Semantic  Context  Runtime      ← blind, parallel, no shared state
               ▼
    Bayesian fusion → posterior per finding
               ▼
-   PR Comment & Dashboard Artifacts:
-   - Calibrated posterior with per-agent evidence breakdown (Detections, Silences, Abstentions)
-   - Dynamic Mermaid.js sequence diagrams for change execution flow
-   - Structured file-by-file walkthrough & engineering summary
-   - Verified patch suggestions anchored in diff
-   - Interactive web dashboard with RAG search and engineering analytics
+   One summary comment on the PR, plus the dashboard:
+   - a calibrated posterior per finding, with what each agent said (detection, silence, abstention)
+   - the odds product factor by factor, and the calibration it ran under
+   - a checked repair, posted as a GitHub suggested change inside the diff, when one survives
 ```
+
+### Using it
+
+1. **Sign in** from the home page (`/sign-in`, GitHub). Signing in grants no repository access.
+2. **Connect the GitHub App** from the dashboard's GitHub App page, choosing all or selected
+   repositories on GitHub. Overview prompts for this until it is done.
+3. **Open a pull request** on a connected repository. The audit runs and comments on the PR, and the
+   dashboard shows how every number was reached.
+
+Disconnecting the App, or deselecting a repository, hides its audits rather than deleting them;
+reconnecting brings them back (D-102).
 
 Evidence comes in three kinds. **Detection** raises the odds. **Silence** — an agent ran and found
 nothing — lowers them, but only within the CWEs that agent actually covers. **Abstention** — an
@@ -81,7 +90,7 @@ Patches are **suggestions only** — the system never commits or merges.
 ## Stack
 
 * **Backend**: Python 3.12 · uv workspace · FastAPI · Celery + Redis · PostgreSQL 16 + pgvector · SQLAlchemy + Alembic · tree-sitter · Semgrep · scikit-learn · sentence-transformers (`bge-small-en-v1.5`, local) · Gemini Flash free tier · Wasmtime + WASI
-* **Frontend & SaaS**: Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS 4 · Base UI / shadcn/ui · Pinecone (vector DB) & Google `text-embedding-004` · Octokit GitHub API · TanStack Query v5 · Recharts · Mermaid.js
+* **Frontend**: Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS 4 · ChaiUI (on shadcn/ui) and Base UI · Better Auth (GitHub sign-in, JWT for the API) · TanStack Query v5 · Recharts
 
 Zero recurring cost: free-tier LLM, local embeddings, self-hosted everything.
 
@@ -89,7 +98,7 @@ Zero recurring cost: free-tier LLM, local embeddings, self-hosted everything.
 
 ```
 backend/         Every uv workspace member lives here
-  api/           FastAPI: GitHub sign-in, verify HMAC + enqueue + 202, dashboard reads. No analysis.
+  api/           FastAPI: verifies the dashboard's JWT, webhooks (HMAC + enqueue + 202), dashboard reads
   worker/        Celery: owns the pipeline and all agents, runs them, fuses, posts to GitHub
   core/
     contracts/   The single shared contract (ChangeUnit, Evidence). Never vendored.
@@ -106,10 +115,10 @@ backend/         Every uv workspace member lives here
   docker/        Corpus evaluation Dockerfiles
   scripts/       Database init scripts (init-pgvector.sql)
 
-frontend/        Next.js 16 + React 19 web dashboard & SaaS platform (separate npm project)
-  src/app/       Marketing landing page, dashboard routes, RAG API routes
-  src/components/ Analytics (Recharts, heatmap), Mermaid viewer, Base UI
-  src/lib/       Pinecone RAG, Gemini review generator, Octokit client, FastAPI edge
+frontend/        Next.js 16 dashboard (separate npm project, not a uv member)
+  src/app/       Home page, /sign-in, the dashboard pages, and /api/auth (Better Auth, the only API route)
+  src/components/ ChaiUI pieces (components/chai), the shell, sidebar and shared widgets
+  src/lib/       auth.ts (Better Auth server), auth-client.ts, api.ts (the only caller of the Python API)
 
 examples/        Evaluation benchmarks (baseline_eval, paper_eval) and sample PRs
 
@@ -123,7 +132,7 @@ Requires Docker, Node 20+, and Python 3.12 with `uv`.
 ### Quick Start (Windows)
 Use the one-click batch runner:
 ```cmd
-# Start full development stack (Docker infra + API + Worker + Web Dashboard)
+# Docker infra + API + Worker + webhook forwarder (smee) + Dashboard, each in its own window
 codesheriff.bat dev
 
 # Run full test suite
@@ -135,11 +144,36 @@ codesheriff.bat eval
 
 ### Manual Setup
 ```bash
-cp .env.example .env          # then fill it in
-docker compose up -d          # Postgres + pgvector, Redis
+cp .env.example .env          # then fill it in; it also lists what frontend/.env.local needs
+docker compose up -d postgres redis
 uv sync --all-packages        # install the workspace (without the flag, members are skipped)
-uv run pytest
+uv run alembic -c backend/core/storage/alembic.ini upgrade head
 uv run lint-imports           # agent boundary enforcement
+```
+
+Then, each in its own terminal:
+
+```bash
+uv run uvicorn codesheriff_api.main:app --reload --port 8000
+uv run celery -A codesheriff_worker.celery_app worker --loglevel=info --queues=audits --pool=solo
+npx smee-client --url "$SMEE_URL" --target http://localhost:8000/webhooks/github
+npm --prefix frontend run dev
+```
+
+`--pool=solo` is for Windows. Without the smee forwarder, GitHub's webhooks never reach a local API,
+and smee keeps nothing for a client that was not listening.
+
+**The GitHub App** needs, in its settings: the callback URL
+`http://localhost:3000/api/auth/callback/github`, the "Email addresses: Read-only" account
+permission, and the Setup URL `http://localhost:8000/auth/install/callback` with "Redirect on
+update". [`docs/github-app-setup.md`](docs/github-app-setup.md) walks through registering one.
+
+**Tests that touch Postgres** migrate their database to empty and back, so point them at a separate
+database, never the one holding real audits:
+
+```bash
+export CODESHERIFF_TEST_DB=postgresql+psycopg://codesheriff:codesheriff@localhost:5432/codesheriff_test
+uv run pytest
 ```
 
 `import-linter` is the guardrail that matters: agents may import `contracts` and nothing else. An
@@ -178,6 +212,11 @@ a declared 3%, because a twin-paired corpus has a prevalence of 0.5 by construct
 function, and each finding's odds product factor by factor, as stored at the time of the run.
 The calibration page shows the reliability bins, per-cell observation counts and the full threshold
 sweep.
+
+**Sign-in and connecting are separate steps.** Better Auth signs users in with GitHub in the
+dashboard and hands the Python API a short-lived signed token; the API verifies it and still shows
+each user only the installations GitHub says they can reach (D-101). The GitHub App page installs,
+manages and disconnects the App, and disconnecting keeps the history (D-102).
 
 **An alert-worthy finding can carry a repair.** A drafted patch is checked on a fixed six-step
 ladder and, if it passes, posted as a GitHub suggested change inside the diff. CodeSheriff never

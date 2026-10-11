@@ -11,7 +11,7 @@ responses/<case_id>.json         the semantic witness's recorded model output, v
 ```
 
 **The output does not live here.** The fitted artifact is
-`packages/engine/src/codesheriff_engine/calibration/calibration.json`, inside the package, so that
+`backend/core/engine/src/codesheriff_engine/calibration/calibration.json`, inside the package, so that
 an installed wheel carries the numbers it fuses with.
 
 ## Why the observations are committed rather than re-derived
@@ -38,8 +38,8 @@ uv run codesheriff-worker calibrate fit
 
 `record` is the only command that calls a provider. The calibration split's model responses are
 **not** here — they are the semantic agent's cassettes in
-`packages/agent_semantic/tests/cassettes/`, shared with that agent's own corpus measurement, and
-recorded by `packages/agent_semantic/tools/record_cassettes.py`. Two recordings of the same case
+`backend/agents/semantic/tests/cassettes/`, shared with that agent's own corpus measurement, and
+recorded by `backend/agents/semantic/tools/record_cassettes.py`. Two recordings of the same case
 against the same prompt would be two answers to one question, and the first time they disagreed
 nobody would know which one had been fitted on.
 

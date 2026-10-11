@@ -40,7 +40,7 @@ and a non-deterministic rung would make the same draft publishable on one run an
 ## What this package holds
 
 Nothing that talks to anything. The model arrives through the `PatchModel` protocol and the
-witnesses through `Rechecker`, both implemented by `apps/worker` (D-072) — `lint-imports` fails the
+witnesses through `Rechecker`, both implemented by `backend/worker` (D-072) — `lint-imports` fails the
 build for a patcher that reaches `httpx`, `githubkit`, a database client or an agent package. The
 practical consequence is that the whole draft-verify-retry loop runs against a scripted model with
 no key, no quota and no interpreter, which is what its tests do.
