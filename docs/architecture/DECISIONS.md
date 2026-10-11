@@ -3148,9 +3148,12 @@ was never one witness.
   dependency layer is left byte-identical, so the 1.4 GB layer stays cached; new instructions go
   below it.
 
-**Not yet done.** The image built before this change still holds `.env.local` in a layer, and so
-does the build cache. Both are deleted after the next successful build, which waits on a usable
-connection to PyPI. Rotating the two secrets is optional: they never left the machine.
+**Cleaned up 2026-10-12.** The image was rebuilt (5.86 GB → 2.68 GB, no `.env*` but the
+templates, no `frontend/`) and the worker moved onto it; Docker dropped the old image once nothing
+used it. The build cache still held the pre-fix copies of the checkout, so the 8 entries holding
+repository source and the 11 layers built on them were deleted by id, leaves first. The dependency
+and Semgrep layers were kept, and a rebuild afterwards ran all 20 steps from cache. Rotating the two
+secrets is optional: they never left the machine.
 
 **Open, and recorded rather than hidden.** D-104 says the worker gets only its own credentials
 because it has no `env_file`. That holds for its environment, not its filesystem: the service
