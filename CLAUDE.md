@@ -147,7 +147,7 @@ CODESHERIFF/
 │   ├── api/              # FastAPI: JWT verification (D-101), HMAC + enqueue (Ch 6), dashboard reads (Ch 15)
 │   ├── worker/           # Celery: owns the pipeline and all agents. Runs them + fuses (Ch 9)
 │   ├── calibration/      # committed observation JSONL + recorded model responses (Ch 14)
-│   ├── docker/           # corpus-run image: the Linux host where all four witnesses are live (Ch 18)
+│   ├── docker/           # Linux image where all four witnesses are live: corpus runs + the worker (D-104)
 │   └── scripts/          # init-pgvector.sql, mounted by docker-compose
 ├── frontend/             # Next.js 16 dashboard + Better Auth sign-in (D-101). Not a uv member.
 └── docs/history/         # Superseded specs, kept for provenance
@@ -196,9 +196,10 @@ against. **The hand-set constants are deleted, not relabelled** — there is no 
 `PROVISIONAL_PRIOR`, `PROVISIONAL_ALERT_THRESHOLD` or `FALLBACK_RATIOS` anywhere, and
 `backend/core/engine/tests/test_no_unfitted_numbers.py` parses the source tree to keep it that way.
 
-Two caveats travel with those numbers. `structural.semgrep` has no Windows build and abstained on
-every unit, so the structural ratios describe a **one-backend witness** — Chapter 18 must re-observe
-on Linux or CI. And the **prior is declared, not measured**: a twin-paired corpus has a prevalence
+The structural ratios describe **both** backends (D-104): both splits were re-observed in the
+Linux image with Semgrep live on pinned rules, and the worker runs in that same image, so the
+witness that is audited is the witness that was fitted. One caveat travels with the numbers: the
+**prior is declared, not measured**: a twin-paired corpus has a prevalence
 of 0.5 by construction, so the base rate is a stated 3% that rescales every posterior by a recorded
 factor and refits nothing (D-083).
 
@@ -400,6 +401,12 @@ is the whole unit's: a silence and an abstention both carry `finding_key IS NULL
 the key would return only detections, which is the subset that makes a posterior look inevitable.
 The witness roster on the page comes from `fusion.witnesses`, never from the evidence — a list
 built from the agents that spoke would shorten to the ones that alerted.
+
+**The pull request comment is stored as posted** (D-103). `audits.github_comment_body` holds the
+exact string the worker sent, and the audit page's Review section renders it. Never fetch it from
+GitHub — one comment is edited in place per pull request, so GitHub only knows the latest audit's
+text — and never re-render it, which would put today's `comment.py` under an old audit. Storing it
+is safe only because the comment carries no source, path or model prose; keep it that way.
 
 **The dashboard reports the fitted numbers and cannot choose them** (D-089). The threshold, the
 four-witness roster and the closed CWE set are read-only facts with their provenance; the one
@@ -639,9 +646,11 @@ uv run codesheriff-worker precedent backfill --repository-id 1 --repo-full-name 
 
 uv run uvicorn codesheriff_api.main:app --reload   # /health, /auth/session, /repositories, /webhooks/github
 
-# The worker. Needs Redis; without it the API answers 503 on the webhook rather than losing work.
-docker compose up -d redis
-uv run celery -A codesheriff_worker.celery_app worker --loglevel=info --queues=audits
+# The worker runs in the Linux image, never natively (D-104): it needs Semgrep, and Semgrep cannot
+# run on Windows. Needs Redis; without it the API answers 503 on the webhook rather than losing work.
+# Restart it after a code change — Celery does not reload. Needs .semgrep/rules/ (corpus-run README).
+docker compose --profile worker up -d --force-recreate worker
+docker logs -f codesheriff-worker
 
 # Local webhook delivery (D-043). The channel URL goes in the App's webhook settings, once.
 npx smee-client --url https://smee.io/<channel> --target http://localhost:8000/webhooks/github
@@ -678,9 +687,9 @@ still starts without any of it, so `/health` works on a machine that has never s
 `CODESHERIFF_TEST_DB` at a separate database (`codesheriff_test`), never at the one holding real
 audits.
 
-All five Python gates and both frontend gates are green as of D-101 (1413 tests passing with the
+All five Python gates and both frontend gates are green as of D-103 (1430 tests passing with the
 test database and the WASI interpreter present, none skipped). `mypy
---strict` covers 135 source files and `lint-imports` keeps **seven** contracts — the sixth holds the
+--strict` covers 138 source files and `lint-imports` keeps **seven** contracts — the sixth holds the
 audit path away from the corpus now that the calibration harness shares the worker process (D-086),
 and the seventh keeps the patcher away from every model, repository and witness it might otherwise
 construct for itself (D-092).
@@ -716,11 +725,12 @@ does not measure is pgvector's own nearest-neighbour ordering; that waits for Ch
 needs a populated store anyway. `test_a_case_with_a_history_is_never_an_abstention` is the guard
 that keeps the measurement from passing vacuously against an agent that never ran.
 
-**Semgrep has no Windows build**, so `structural.semgrep` abstains with `tool_unavailable` on a
-Windows dev machine and the structural witness is the taint engine alone. That is a correctly
-handled abstention, not a defect — but it means the SARIF mapping is exercised only against fixture
-SARIF. Chapter 14 must run the corpus on Linux or CI, or its fitted structural ratios will describe
-a one-backend witness. `ruff` and `mypy` are
+**Semgrep does not run on the Windows host** (D-104). A `win_amd64` wheel exists, but its
+`semgrep-core` dies on `socketpair`, so natively `structural.semgrep` abstains and the structural
+witness is the taint engine alone. That is why the worker and every corpus run use the Linux
+image. Semgrep reads **pinned** rules from the gitignored `.semgrep/rules/`, each checked against
+`SEMGREP_RULESETS`, at the pinned `SEMGREP_VERSION`; it never fetches a ruleset at analysis time,
+and it takes a finding's CWE from the rule's own tags, never from its id. `ruff` and `mypy` are
 configured **once**, in the root `pyproject.toml` — a per-package `[tool.ruff]` silently shadows it
 with a different rule set, which is how the agent packages went unlinted (D-023).
 

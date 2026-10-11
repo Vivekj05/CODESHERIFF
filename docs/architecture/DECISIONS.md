@@ -3011,3 +3011,112 @@ explicit, confirmed delete, which does not exist yet.
 **Because** the product of this system is a history of checkable results, and an uninstall is often
 temporary, accidental, or a change of repository selection. Deleting on it destroyed exactly the
 record the project exists to keep, and did so permanently, from a webhook, with no confirmation.
+
+## D-103 — An audit stores the summary comment it posted, and the dashboard shows it as "Review"
+
+**Date:** 2026-10-11 · **Status:** ACTIVE · **Builds on:** D-034, D-050, D-090
+
+**Context.** The audit page showed each witness's statement and the odds product, but not what the
+pull request's author was actually told. The project owner asked for a Review section showing the
+comment as it appeared on GitHub. Only `audits.github_comment_id` was stored.
+
+Three sources were weighed. **Fetching from GitHub** shows the wrong text: there is one summary
+comment per pull request, edited in place on every push (D-034), so an older audit would display
+the latest audit's numbers. It would also make a dashboard read call GitHub, spending the
+installation's rate limit, which no read route does (D-102). **Re-rendering from the rows** is the
+trap D-090 avoided for the odds product: it explains an old audit with today's `comment.py`, and
+some inputs (the skipped-file counts, the in-memory patch records) are not stored at all.
+
+**Decision.**
+- Migration `0008` adds `audits.github_comment_body TEXT NULL`. The worker renders the body once,
+  posts that string, and passes the **same string** to `finish_audit`, which writes it in the
+  update that records `github_comment_id`. There is no second render.
+- `GET /audits/{id}` serves the body, a `github_comment_url` built from ids GitHub assigned, and
+  `comment_replaced_by`: the latest later succeeded audit of the same pull request carrying the
+  same comment id, whose edit has overwritten this text on GitHub.
+- The dashboard's Review section renders the body as GitHub-flavoured markdown with raw HTML
+  skipped and react-markdown's default URL sanitising, with a Markdown tab showing the source.
+- **No backfill.** An audit that posted before the column existed says so and links to GitHub;
+  superseded, failed and unfinished audits each say why nothing was posted.
+
+**Why storing it is allowed.** The body is built only from closed sets and numbers — CWE ids,
+witness names, stances, probabilities, counts. It carries no source, no file path (D-050) and no
+model prose, so keeping it does not breach "persisted records hold findings, evidence and hashes".
+The suggested-change review comments are **not** shown: their text is a repaired function, which
+D-097 hashes rather than stores, and this decision does not reopen that.
+
+**What it costs.** One text column per audit, a few kilobytes each. A change to `comment.py` that
+ever started echoing pull request content would now also persist it; the rule in `comment.py`'s
+docstring is what prevents that, and it now guards a stored record as well as a posted one.
+
+**Because** the comment is CodeSheriff's actual output to a developer, and the record of a run
+should include what it said, as it said it, independent of what GitHub shows today.
+
+## D-104 — Semgrep runs on pinned rules, in the Linux image, for the fit and the worker alike
+
+**Date:** 2026-10-11 · **Status:** ACTIVE · **Builds on:** D-011, D-052, D-074, D-098 · **Closes:**
+the "one-backend structural witness" caveat of Chapter 14
+
+**Context.** `structural.semgrep` had abstained `tool_unavailable` on every unit ever analysed on
+the Windows development machine, and `calibration.json` was fitted that way
+(`"backends_silent": ["structural.semgrep"]`). Turning Semgrep on in the worker alone would have
+scored a two-backend structural witness with ratios measured on one: Semgrep's hits would borrow a
+likelihood ratio fitted on taint's accuracy, and its false positives on safe twins would carry no
+penalty at all. Fitting with Semgrep but auditing without it fails the other way, overstating what
+a structural silence means. **The fit and the audit path must run the same witness.**
+
+Four further defects surfaced on the way:
+
+1. **Native Windows Semgrep does not run here.** PyPI now publishes a `win_amd64` wheel for
+   1.176.1, so the documented "no Windows build" is out of date — but its `semgrep-core` dies with
+   `Unix_error: Invalid argument socketpair` before reading a rule, from either shell, outside the
+   tool sandbox, with the AF_UNIX driver running.
+2. **The rules were fetched per run.** `--config p/security-audit p/owasp-top-ten` downloaded
+   whatever the registry served that day. The corpus-run image warmed them at build time, which
+   only moved the drift to the next rebuild: Chapter 18 recorded 22 findings, and the same command
+   against today's registry gives 20.
+3. **The CWE was guessed from the rule id.** The mapper hard-coded `"exec" → CWE-78`, so Python's
+   `exec()` (`exec-detected`, tagged CWE-95) was reported as command injection and keyed apart from
+   the taint and semantic witnesses' CWE-94 finding on the same line.
+4. **Metrics were on** in the worker path; only the image set `SEMGREP_SEND_METRICS=off`.
+
+A fifth was found while moving the worker: `tree-sitter-language-pack` downloads its grammar on
+first use, and in a fresh container that download timed out — every audit would have failed at
+extraction.
+
+**Decision.**
+- **One Linux image, two roles.** `backend/docker/corpus-run` is where the ratios are fitted and
+  where the audit worker runs (`docker compose --profile worker up -d worker`). `codesheriff.bat`
+  starts the container, never a native worker. The image is not the sandbox: analysed code still
+  executes only inside Wasmtime (§4).
+- **The worker gets only its own credentials.** No `env_file`: the compose service lists the
+  worker's variables explicitly, so the webhook secret and OAuth client secret stay with the API
+  and dashboard (D-042), and a stale `CALIBRATION_PATH` in `.env` cannot redirect the artifact.
+- **Rules pinned by digest, fetched by a person** — the D-074 pattern. `SEMGREP_RULESETS` names
+  two files in the gitignored `.semgrep/rules/` and their SHA-256; they are Semgrep's to
+  distribute, not ours. `SEMGREP_VERSION` pins the build. A missing ruleset abstains
+  `rules_unavailable`, an edited one `rules_mismatch`, another build `tool_version_mismatch`.
+  Changing any of them is a re-fit, never a quiet download.
+- **The CWE comes from the rule's own tags**, through `NARROWER_CWES` — MITRE ChildOf pairs the
+  pinned rules actually use (CWE-95 and CWE-96 → CWE-94). Nothing maps to a broader parent or
+  sideways; an untagged or out-of-scope rule is dropped. `COVERED_CWES` is recomputed from the
+  pinned rules by a test.
+- **No network at analysis time:** `--metrics=off`, the grammar baked into the image, and
+  `HF_HUB_OFFLINE=1` for the mounted embedding model.
+- `structural.semgrep` is **0.2.0**, and both splits were re-observed in the image and re-fitted.
+
+**Result.** Structural ratios: high 2.22 → 2.20, medium 15.56 → 8.25, silence 0.065 → 0.122.
+Validation ECE 0.027 → 0.024, Brier 0.013 → 0.013, alert threshold 0.227 → 0.218, precision 1.000
+and recall 0.857 unchanged. The medium tier halved because Semgrep fires on two safe twins
+(`cwe-079-greeting-render-safe`, `cwe-918-link-preview-safe`), which is the cost the fit now
+records rather than hides. The test split stays sealed.
+
+**What it costs.** The worker needs Docker, and a code change needs a container restart. Semgrep
+starts once per unit and loads about 690 rules each time: a corpus run took roughly fifteen
+minutes for 46 cases, and the static agent's p95 ≤ 3s target is not met with Semgrep in it. That
+is measured, not fixed here. The rules no longer improve on their own; updating them is a
+deliberate re-fit.
+
+**Because** the posterior is only a probability if the witness that produced it is the one its
+ratios were measured on, and a backend that changed with the registry, the platform or the morning
+was never one witness.

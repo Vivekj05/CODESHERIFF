@@ -1,7 +1,8 @@
 # Local development services.
 #
-# Postgres (with pgvector) and Redis only. The API and worker run on the host
-# via `uv run` so the edit/reload loop stays fast.
+# Postgres (with pgvector) and Redis by default. The API runs on the host so the
+# edit/reload loop stays fast; the worker runs in the `worker` profile below,
+# because it needs Semgrep and Semgrep needs Linux (D-104).
 #
 # Note on the runtime agent (Chapter 13): the sandbox is Wasmtime + WASI, NOT a
 # container. PROJECT_CONTEXT.md §4 rejects Docker as the sandbox — containers
@@ -41,6 +42,61 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # The audit worker, on the same Linux image the structural ratios are fitted in
+  # (D-104). Semgrep cannot run on the Windows host, and a worker without it would
+  # score a one-backend structural witness with ratios fitted on two. Start it with
+  #   docker compose --profile worker up -d worker
+  # This is NOT the sandbox either: analysed code still runs only inside Wasmtime.
+  worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      dockerfile: backend/docker/corpus-run/Dockerfile
+    image: codesheriff-corpus-run:latest
+    container_name: codesheriff-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Deliberately no `env_file`. The worker gets its own credentials and nothing
+    # else (D-042): the webhook secret and the OAuth client secret in .env are the
+    # API's and the dashboard's. Hosts are the compose service names, not localhost.
+    environment:
+      DATABASE_URL: postgresql+psycopg://codesheriff:codesheriff@postgres:5432/codesheriff
+      CELERY_BROKER_URL: redis://redis:6379/0
+      AUDIT_QUEUE_NAME: ${AUDIT_QUEUE_NAME:-audits}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:?set GITHUB_APP_ID in .env}
+      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
+      DASHBOARD_ORIGIN: ${DASHBOARD_ORIGIN:-http://localhost:3000}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY in .env}
+      # Pinned for the same reason as corpus-run: the semantic ratios were fitted
+      # on responses from this model (D-099).
+      SEMANTIC_MODEL: ${SEMANTIC_MODEL:-gemini-3.1-flash-lite}
+      SEMGREP_SEND_METRICS: "off"
+      # The embedding model is mounted below and must never be fetched mid-audit.
+      # Missing, it is a `retrieval_unavailable` abstention, not a download.
+      HF_HUB_OFFLINE: "1"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      # The checkout: code (installed editable into /opt/venv), the pinned Semgrep
+      # rules, the WASI interpreter, and the calibration artifact. Restart the
+      # container after a code change; Celery does not reload.
+      - .:/workspace
+      - type: bind
+        source: ${GITHUB_APP_PRIVATE_KEY_PATH:?set GITHUB_APP_PRIVATE_KEY_PATH in .env}
+        target: /run/secrets/github-app.pem
+        read_only: true
+      # The local embedding model context.rag uses, so it is not downloaded again.
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    working_dir: /workspace
+    command:
+      [
+        "celery", "-A", "codesheriff_worker.celery_app", "worker",
+        "--pool=solo", "--loglevel=info", "--queues=audits",
+      ]
+    restart: unless-stopped
 
   # The Linux host for a corpus run (Chapter 18). Not started by default:
   # `docker compose up` is for Postgres and Redis, and this container exists to
