@@ -259,6 +259,12 @@ export interface AuditDetail {
   duration_seconds: number | null;
   error_reason: string | null;
   github_comment_id: number | null;
+  github_comment_url: string | null;
+  /** The summary comment as this audit posted it (D-103). Null when nothing was posted, or when it
+   *  was posted before the text was recorded; `github_comment_id` tells those apart. */
+  github_comment_body: string | null;
+  /** A later audit whose edit replaced this text on GitHub. */
+  comment_replaced_by: string | null;
   contract_version: string;
   prior_probability: number;
   alert_threshold: number;

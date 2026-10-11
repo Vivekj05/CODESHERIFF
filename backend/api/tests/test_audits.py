@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from codesheriff_contracts import CONTRACT_VERSION, ChangeUnit, Evidence
 from codesheriff_engine.calibration import active_artifact
-from codesheriff_storage.audits import calibration_run_for, open_audit
+from codesheriff_storage.audits import calibration_run_for, claim_audit, finish_audit, open_audit
 from codesheriff_storage.identity import upsert_installation, upsert_repository
 from codesheriff_storage.mapping import to_change_unit_row, to_evidence_row
 from codesheriff_storage.models import Audit, CalibrationRun, Finding
@@ -215,6 +215,37 @@ def test_the_detail_reports_the_calibration_the_audit_actually_ran_under(
     assert body["calibration"]["is_provisional"] is False
     assert body["calibration"]["corpus_hash"] == calibration.corpus_hash
     assert body["prior_probability"] == pytest.approx(calibration.prior_probability)
+
+
+def test_the_detail_serves_the_comment_as_it_was_posted(
+    client: TestClient, db: DbSession, calibration: CalibrationRun
+) -> None:
+    """Read from the row, never fetched from GitHub or re-rendered (D-103)."""
+    sign_in(client)
+    audit = make_audit(db, calibration, OUR_REPO)
+    claim_audit(db, audit.id)
+    finish_audit(db, audit.id, github_comment_id=5101, github_comment_body="## CodeSheriff")
+    db.flush()
+
+    body = client.get(f"/audits/{audit.id}").json()
+
+    assert body["github_comment_body"] == "## CodeSheriff"
+    assert body["github_comment_url"] == (
+        "https://github.com/acme/payments-api/pull/7#issuecomment-5101"
+    )
+    assert body["comment_replaced_by"] is None
+
+
+def test_an_audit_that_posted_nothing_has_no_comment(
+    client: TestClient, db: DbSession, calibration: CalibrationRun
+) -> None:
+    sign_in(client)
+    audit = make_audit(db, calibration, OUR_REPO)
+
+    body = client.get(f"/audits/{audit.id}").json()
+
+    assert body["github_comment_body"] is None
+    assert body["github_comment_url"] is None
 
 
 def test_a_cursor_the_api_did_not_issue_is_rejected(client: TestClient) -> None:

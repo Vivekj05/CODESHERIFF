@@ -288,6 +288,21 @@ def test_finish_records_the_comment_it_owns(
     assert latest_comment_id(session, repository_id=repo_id, pr_number=7) == 12345
 
 
+def test_finish_records_the_text_it_posted(
+    session: DbSession, calibration: CalibrationRun, repo_id: int
+) -> None:
+    """The next push overwrites the comment on GitHub; the row keeps this text (D-103)."""
+    audit = make_audit(session, calibration, repo_id, delivery_id="d-1")
+    claim_audit(session, audit.id)
+
+    finished = finish_audit(
+        session, audit.id, github_comment_id=12345, github_comment_body="## CodeSheriff"
+    )
+
+    assert finished is not None
+    assert finished.github_comment_body == "## CodeSheriff"
+
+
 def test_a_later_run_that_never_posted_does_not_erase_the_pointer(
     session: DbSession, calibration: CalibrationRun, repo_id: int
 ) -> None:

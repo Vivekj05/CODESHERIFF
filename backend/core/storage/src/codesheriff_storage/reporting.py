@@ -99,6 +99,10 @@ class AuditDetail:
     units: list[ChangeUnitRow]
     unit_count: int
     findings: list[Finding]
+    comment_replaced_by: uuid.UUID | None = None
+    """A later audit of the same pull request that has since edited this audit's comment on
+    GitHub, or None. The stored body is still what this audit posted; this says it is no longer
+    what GitHub shows (D-034, D-103)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,7 +332,31 @@ def audit_detail(
         units=units,
         unit_count=unit_count,
         findings=findings,
+        comment_replaced_by=_comment_replaced_by(db, audit),
     )
+
+
+def _comment_replaced_by(db: DbSession, audit: Audit) -> uuid.UUID | None:
+    """The latest audit that edited the comment this one posted, if any.
+
+    Same repository, same pull request and same comment id — the comment is edited in place, so a
+    later succeeded audit carrying the id has overwritten this one's text on GitHub. Scoping is
+    inherited: the caller has already shown this audit's repository is visible.
+    """
+    if audit.github_comment_id is None or audit.finished_at is None:
+        return None
+    return db.execute(
+        select(Audit.id)
+        .where(
+            Audit.repository_id == audit.repository_id,
+            Audit.pr_number == audit.pr_number,
+            Audit.github_comment_id == audit.github_comment_id,
+            Audit.status == AuditStatus.SUCCEEDED,
+            Audit.finished_at > audit.finished_at,
+        )
+        .order_by(Audit.finished_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
 
 
 def finding_detail(

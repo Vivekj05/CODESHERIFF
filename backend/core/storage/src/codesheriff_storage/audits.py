@@ -191,12 +191,14 @@ def finish_audit(
     audit_id: uuid.UUID,
     *,
     github_comment_id: int | None = None,
+    github_comment_body: str | None = None,
 ) -> Audit | None:
     """Close a running audit as succeeded, recording the comment it owns.
 
     `github_comment_id` is what makes the next push edit this comment instead of posting another
-    (D-034). Only moves an audit out of `running`, so a superseded audit that finished its work
-    anyway does not quietly resurrect itself as a result.
+    (D-034). `github_comment_body` is the text this audit put there, kept because the next push
+    overwrites it on GitHub (D-103). Only moves an audit out of `running`, so a superseded audit
+    that finished its work anyway does not quietly resurrect itself as a result.
     """
     stmt = (
         update(Audit)
@@ -205,6 +207,7 @@ def finish_audit(
             status=AuditStatus.SUCCEEDED,
             finished_at=datetime.now(UTC),
             github_comment_id=github_comment_id,
+            github_comment_body=github_comment_body,
         )
         .returning(Audit)
     )

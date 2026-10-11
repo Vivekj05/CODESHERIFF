@@ -117,6 +117,21 @@ def test_the_audit_is_closed_with_the_comment_it_owns(
     assert row.github_comment_id is not None and row.github_comment_id > 0
 
 
+def test_the_audit_keeps_the_exact_text_it_posted(
+    db: DbSession,
+    factory: sessionmaker[DbSession],
+    gateway: FakeGitHubGateway,
+    audit: Audit,
+) -> None:
+    """The same string, not a second render: the dashboard shows what the author read (D-103)."""
+    execute_audit(audit.id, factory, gateway, url_for)
+
+    db.expire_all()
+    row = db.get(Audit, audit.id)
+    assert row is not None
+    assert [posted.body for posted in gateway.posted] == [row.github_comment_body]
+
+
 def test_no_number_reaches_the_comment_without_its_calibration_state(
     db: DbSession,
     factory: sessionmaker[DbSession],

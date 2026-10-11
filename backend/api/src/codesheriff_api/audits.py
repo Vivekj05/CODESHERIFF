@@ -269,6 +269,13 @@ class AuditDetailOut(BaseModel):
     duration_seconds: float | None
     error_reason: str | None
     github_comment_id: int | None
+    github_comment_url: str | None
+    github_comment_body: str | None
+    """The summary comment as this audit posted it, read from the row (D-103). NULL when nothing
+    was posted, or when it was posted before the body was recorded; `github_comment_id` tells
+    those two apart."""
+    comment_replaced_by: str | None
+    """A later audit whose edit has replaced this text on GitHub, or None."""
     contract_version: str
     prior_probability: float
     alert_threshold: float
@@ -277,6 +284,13 @@ class AuditDetailOut(BaseModel):
     units_returned: int
     units: list[ChangeUnitOut]
     findings: list[FindingOut]
+
+
+def _comment_url(full_name: str, pr_number: int, comment_id: int | None) -> str | None:
+    """Where the summary comment lives on GitHub. Built from ids GitHub assigned, never fetched."""
+    if comment_id is None:
+        return None
+    return f"https://github.com/{full_name}/pull/{pr_number}#issuecomment-{comment_id}"
 
 
 def _to_calibration(run: CalibrationRun | None) -> CalibrationOut | None:
@@ -524,6 +538,13 @@ def get_audit(audit_id: uuid.UUID, db: DbDep, session: SessionDep) -> AuditDetai
         duration_seconds=duration,
         error_reason=audit.error_reason,
         github_comment_id=audit.github_comment_id,
+        github_comment_url=_comment_url(
+            detail.repository_full_name, audit.pr_number, audit.github_comment_id
+        ),
+        github_comment_body=audit.github_comment_body,
+        comment_replaced_by=(
+            str(detail.comment_replaced_by) if detail.comment_replaced_by is not None else None
+        ),
         contract_version=audit.contract_version,
         prior_probability=audit.prior_probability,
         alert_threshold=audit.alert_threshold,
