@@ -141,3 +141,20 @@ def install_callback(
         url=_dashboard_url(config, "/sign-in?next=/github-app&refresh=1"),
         status_code=status.HTTP_303_SEE_OTHER,
     )
+
+
+@router.get("/callback")
+def stale_oauth_callback(config: ConfigDep) -> RedirectResponse:
+    """Where a stale App setting still sends people. Uses nothing from the URL; grants nothing.
+
+    Sign-in moved to Better Auth (D-101), whose callback is the dashboard's
+    `/api/auth/callback/github`. But a GitHub App with "Request user authorization during
+    installation" enabled sends the user to its *first* callback URL after an install or a change
+    of repositories, and an App registered before D-101 still lists this one. The `code` here
+    belongs to a flow Better Auth did not start, so it is never exchanged. The user is sent through
+    the same re-sign-in as the install callback, which reads the installation list from GitHub.
+    """
+    return RedirectResponse(
+        url=_dashboard_url(config, "/sign-in?next=/github-app&refresh=1"),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )

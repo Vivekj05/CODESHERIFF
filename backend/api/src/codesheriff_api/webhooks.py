@@ -36,7 +36,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session as DbSession
 
 from codesheriff_api.config import MissingCredentialError
-from codesheriff_api.deps import ConfigDep, DbDep
+from codesheriff_api.deps import ConfigDep, DbDep, GitHubDep
+from codesheriff_api.github_gateway import GitHubError, GitHubGateway
 from codesheriff_api.queue import QueueDep, QueueError, TaskQueue
 from codesheriff_contracts import CONTRACT_VERSION
 from codesheriff_engine.calibration import active_artifact
@@ -45,6 +46,7 @@ from codesheriff_storage import (
     calibration_run_for,
     ensure_installation,
     ensure_repository,
+    hide_repositories_not_in,
     mark_installation_uninstalled,
     mark_repositories_removed,
     open_audit,
@@ -101,6 +103,7 @@ async def receive_github_webhook(
     config: ConfigDep,
     db: DbDep,
     queue: QueueDep,
+    github: GitHubDep,
     x_github_event: Annotated[str | None, Header()] = None,
     x_github_delivery: Annotated[str | None, Header()] = None,
     x_hub_signature_256: Annotated[str | None, Header()] = None,
@@ -147,7 +150,7 @@ async def receive_github_webhook(
     if event == "installation":
         return await run_in_threadpool(_handle_installation, db, payload)
     if event == "installation_repositories":
-        return await run_in_threadpool(_handle_installation_repositories, db, payload)
+        return await run_in_threadpool(_handle_installation_repositories, db, github, payload)
 
     return _acknowledge("ignored", event=event)
 
@@ -321,8 +324,18 @@ def _handle_installation(db: DbSession, payload: dict[str, Any]) -> JSONResponse
     return _acknowledge("installation_synced", installation_id=installation_id, action=action)
 
 
-def _handle_installation_repositories(db: DbSession, payload: dict[str, Any]) -> JSONResponse:
-    """Repositories were added to or removed from an installation."""
+def _handle_installation_repositories(
+    db: DbSession, github: GitHubGateway, payload: dict[str, Any]
+) -> JSONResponse:
+    """Repositories were added to or removed from an installation.
+
+    The payload's lists are applied first, then the installation is reconciled against GitHub's
+    current list (D-102). The second step is not optional: switching from "All repositories" to
+    "Only select" arrives with `repositories_removed: []` by GitHub's own design, so the payload
+    alone would leave every deselected repository visible. If GitHub cannot be read, the payload's
+    result stands and the delivery still succeeds; the next change, or the next sign-in of an unseen
+    installation, reconciles again.
+    """
     installation = payload.get("installation") or {}
     try:
         installation_id = int(installation["id"])
@@ -339,10 +352,30 @@ def _handle_installation_repositories(db: DbSession, payload: dict[str, Any]) ->
         except (KeyError, TypeError, ValueError):
             logger.warning("Skipping a removed repository with no usable id")
     removed = mark_repositories_removed(db, installation_id, removed_ids)
+    removed += _reconcile_with_github(db, github, installation_id)
     db.commit()
 
     logger.info("Installation %s: repository set changed, %d hidden", installation_id, removed)
     return _acknowledge("repositories_synced", installation_id=installation_id, removed=removed)
+
+
+def _reconcile_with_github(db: DbSession, github: GitHubGateway, installation_id: int) -> int:
+    """Make this installation's visible repositories exactly GitHub's list. Returns how many hid."""
+    try:
+        current = github.list_installation_repositories(installation_id)
+    except (GitHubError, MissingCredentialError) as exc:
+        logger.warning("Could not reconcile installation %s with GitHub: %s", installation_id, exc)
+        return 0
+    for repo in current:
+        upsert_repository(
+            db,
+            repo_id=repo.repo_id,
+            installation_id=installation_id,
+            full_name=repo.full_name,
+            default_branch=repo.default_branch,
+            is_private=repo.is_private,
+        )
+    return hide_repositories_not_in(db, installation_id, [repo.repo_id for repo in current])
 
 
 def _ensure_payload_repository(db: DbSession, installation_id: int, repo: dict[str, Any]) -> None:

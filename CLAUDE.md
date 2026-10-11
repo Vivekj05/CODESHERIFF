@@ -644,7 +644,7 @@ docker compose up -d redis
 uv run celery -A codesheriff_worker.celery_app worker --loglevel=info --queues=audits
 
 # Local webhook delivery (D-043). The channel URL goes in the App's webhook settings, once.
-npx smee-client --url https://smee.io/<channel> --path /webhooks/github --port 8000
+npx smee-client --url https://smee.io/<channel> --target http://localhost:8000/webhooks/github
 
 # Database (Chapter 3). Alembic owns the schema; never Base.metadata.create_all.
 docker compose up -d postgres

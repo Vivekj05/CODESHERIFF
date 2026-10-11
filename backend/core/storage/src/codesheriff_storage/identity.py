@@ -265,6 +265,25 @@ def ensure_repository(
     )
 
 
+def hide_repositories_not_in(db: DbSession, installation_id: int, keep_ids: list[int]) -> int:
+    """Hide this installation's repositories that GitHub no longer lists for it. Returns how many.
+
+    The reconciliation half of an `installation_repositories` event (D-102). GitHub does not always
+    say what was removed: switching an installation from "All repositories" to "Only select" sends
+    `repositories_removed: []`, by design. So the caller reads the installation's current list from
+    GitHub and passes it here. An empty `keep_ids` is a real answer (nothing is selected) and hides
+    everything. Hidden, never deleted; `upsert_repository` brings a repository back.
+    """
+    now = datetime.now(UTC)
+    conditions = [Repository.installation_id == installation_id, Repository.removed_at.is_(None)]
+    if keep_ids:
+        conditions.append(Repository.id.not_in(keep_ids))
+    result = db.execute(
+        update(Repository).where(*conditions).values(removed_at=now, updated_at=now)
+    )
+    return int(getattr(result, "rowcount", 0) or 0)
+
+
 @dataclass(frozen=True)
 class InstallationSummary:
     """One connected installation, as the GitHub App page shows it."""

@@ -2989,6 +2989,14 @@ source code, which is never stored either way), so the reason it gave was not a 
   read-only. Better Auth's update-user endpoint stays unused, so the server-only fields of D-101
   are never reachable from the browser. There is no subscription tab; billing is out of scope (§6).
 
+- **A repository change is reconciled against GitHub, not trusted from the payload.** Switching an
+  installation from "All repositories" to "Only select" sends `repositories_removed: []` by
+  GitHub's documented design, so applying the payload alone left every deselected repository
+  visible. The handler applies the payload, then reads the installation's current list as the App
+  and hides whatever GitHub no longer lists. If GitHub cannot be read the payload's result stands
+  and the delivery still answers 200. The API's GitHub client fails fast (5s, no automatic retry)
+  so that call cannot push a delivery past GitHub's 10s limit.
+
 **What it costs.** Disconnecting no longer erases anything: findings, statements and hashes for a
 disconnected installation stay in the database, hidden. Someone who wants their data gone needs an
 explicit, confirmed delete, which does not exist yet.

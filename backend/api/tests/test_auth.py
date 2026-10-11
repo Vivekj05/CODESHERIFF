@@ -215,3 +215,18 @@ def test_install_callback_grants_nothing_and_re_derives(client: TestClient) -> N
         response.headers["location"] == "http://localhost:3000/sign-in?next=/github-app&refresh=1"
     )
     assert client.get("/auth/session").json()["installation_count"] == before
+
+
+def test_the_old_oauth_callback_re_derives_and_exchanges_nothing(
+    client: TestClient, github: FakeGitHubGateway
+) -> None:
+    """A stale App setting still lands here after an install; the code in the URL is never used."""
+    response = client.get(
+        "/auth/callback",
+        params={"code": "abc", "installation_id": 9999, "setup_action": "update"},
+    )
+    assert response.status_code == 303
+    assert (
+        response.headers["location"] == "http://localhost:3000/sign-in?next=/github-app&refresh=1"
+    )
+    assert github.installations_read == []

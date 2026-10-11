@@ -27,11 +27,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
+from codesheriff_api.github_gateway import InstallationRepository
 from codesheriff_engine.calibration import active_artifact
 from codesheriff_storage import upsert_installation, upsert_repository
 from codesheriff_storage.models import Audit, AuditStatus, Installation, Repository
 
-from .conftest import WEBHOOK_SECRET, FakeTaskQueue
+from .conftest import WEBHOOK_SECRET, FakeGitHubGateway, FakeTaskQueue
 
 pytestmark = pytest.mark.db
 
@@ -553,14 +554,34 @@ def test_reinstalling_under_a_new_id_brings_the_repository_back(
     assert repository.installation_id == 9002
 
 
+def github_lists(github: FakeGitHubGateway, *repos: tuple[int, str]) -> None:
+    """What GitHub currently says installation 9001 grants; the handler reconciles against it."""
+    github.repositories[INSTALLATION_ID] = [
+        InstallationRepository(repo_id=rid, full_name=name, default_branch="main", is_private=True)
+        for rid, name in repos
+    ]
+
+
+def visible(db: DbSession) -> set[int]:
+    db.expire_all()
+    rows = db.execute(
+        select(Repository.id).where(
+            Repository.installation_id == INSTALLATION_ID, Repository.removed_at.is_(None)
+        )
+    )
+    return set(rows.scalars())
+
+
 def test_repositories_added_to_an_installation_are_recorded(
-    client: TestClient, db: DbSession, known_repo: Repository
+    client: TestClient, db: DbSession, known_repo: Repository, github: FakeGitHubGateway
 ) -> None:
+    github_lists(github, (REPO_ID, REPO_FULL_NAME), (6001, "acme/added"))
     response = deliver(
         client,
         {
             "action": "added",
             "installation": {"id": INSTALLATION_ID},
+            "repository_selection": "selected",
             "repositories_added": [{"id": 6001, "full_name": "acme/added", "private": True}],
             "repositories_removed": [],
         },
@@ -568,60 +589,126 @@ def test_repositories_added_to_an_installation_are_recorded(
     )
 
     assert response.status_code == 200
-    assert db.get(Repository, 6001) is not None
+    assert visible(db) == {REPO_ID, 6001}
 
 
 def test_repositories_removed_from_an_installation_are_hidden(
-    client: TestClient, db: DbSession, known_repo: Repository
+    client: TestClient, db: DbSession, known_repo: Repository, github: FakeGitHubGateway
 ) -> None:
+    github_lists(github)
     response = deliver(
         client,
         {
             "action": "removed",
             "installation": {"id": INSTALLATION_ID},
+            "repository_selection": "selected",
             "repositories_added": [],
             "repositories_removed": [{"id": REPO_ID, "full_name": REPO_FULL_NAME}],
         },
         event="installation_repositories",
     )
 
-    db.expire_all()
     assert response.json()["removed"] == 1
     repository = db.get(Repository, REPO_ID)
     assert repository is not None and repository.removed_at is not None
 
 
-def test_a_reselected_repository_is_visible_again(
-    client: TestClient, db: DbSession, known_repo: Repository
+def test_switching_from_all_to_selected_hides_the_deselected_ones(
+    client: TestClient, db: DbSession, known_repo: Repository, github: FakeGitHubGateway
 ) -> None:
-    removal = {
-        "action": "removed",
-        "installation": {"id": INSTALLATION_ID},
-        "repositories_added": [],
-        "repositories_removed": [{"id": REPO_ID, "full_name": REPO_FULL_NAME}],
-    }
-    deliver(client, removal, event="installation_repositories")
+    """GitHub's documented quirk: this switch arrives with `repositories_removed: []`.
+
+    Trusting the payload left every deselected repository visible. Only reconciling against
+    GitHub's current list finds out what went.
+    """
+    upsert_repository(
+        db,
+        repo_id=6001,
+        installation_id=INSTALLATION_ID,
+        full_name="acme/deselected",
+        default_branch="main",
+        is_private=True,
+    )
+    db.flush()
+    github_lists(github, (REPO_ID, REPO_FULL_NAME))
+
+    response = deliver(
+        client,
+        {
+            "action": "removed",
+            "installation": {"id": INSTALLATION_ID},
+            "repository_selection": "selected",
+            "repositories_added": [],
+            "repositories_removed": [],
+        },
+        event="installation_repositories",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["removed"] == 1
+    assert visible(db) == {REPO_ID}
+
+
+def test_github_being_unreachable_still_applies_the_payload_and_answers_200(
+    client: TestClient, db: DbSession, known_repo: Repository, github: FakeGitHubGateway
+) -> None:
+    """A 5xx would make GitHub redeliver for nothing; the payload's own lists still apply."""
+    github.failing_installations = {INSTALLATION_ID}
+    response = deliver(
+        client,
+        {
+            "action": "removed",
+            "installation": {"id": INSTALLATION_ID},
+            "repository_selection": "selected",
+            "repositories_added": [],
+            "repositories_removed": [{"id": REPO_ID, "full_name": REPO_FULL_NAME}],
+        },
+        event="installation_repositories",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["removed"] == 1
+    assert visible(db) == set()
+
+
+def test_a_reselected_repository_is_visible_again(
+    client: TestClient, db: DbSession, known_repo: Repository, github: FakeGitHubGateway
+) -> None:
+    github_lists(github)
+    deliver(
+        client,
+        {
+            "action": "removed",
+            "installation": {"id": INSTALLATION_ID},
+            "repository_selection": "selected",
+            "repositories_added": [],
+            "repositories_removed": [{"id": REPO_ID, "full_name": REPO_FULL_NAME}],
+        },
+        event="installation_repositories",
+    )
+    assert visible(db) == set()
+
+    github_lists(github, (REPO_ID, REPO_FULL_NAME))
     deliver(
         client,
         {
             "action": "added",
             "installation": {"id": INSTALLATION_ID},
+            "repository_selection": "selected",
             "repositories_added": [{"id": REPO_ID, "full_name": REPO_FULL_NAME, "private": True}],
             "repositories_removed": [],
         },
         event="installation_repositories",
     )
 
-    db.expire_all()
-    repository = db.get(Repository, REPO_ID)
-    assert repository is not None and repository.removed_at is None
+    assert visible(db) == {REPO_ID}
 
 
 def test_a_removal_cannot_reach_another_installations_repository(
     client: TestClient, db: DbSession, known_repo: Repository
 ) -> None:
-    """The hide is scoped by installation as well as by id: otherwise one verification bug would
-    let a payload hide somebody else's rows."""
+    """The hide is scoped by installation as well as by id, in both the payload step and the
+    reconciliation: otherwise one verification bug would let a payload hide somebody else's rows."""
     upsert_installation(
         db, installation_id=9999, account_login="other", account_type="Organization"
     )

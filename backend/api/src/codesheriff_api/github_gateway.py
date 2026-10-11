@@ -73,6 +73,11 @@ class GitHubKitGateway:
             base_url=self._config.github_api_base,
             transport=self._transport,
             user_agent="CodeSheriff",
+            # The API is the edge: a webhook must be answered within GitHub's 10s, and every caller
+            # here tolerates a failure (it is logged and the request still succeeds). So fail fast
+            # rather than let retries and a slow GitHub stack past that budget.
+            timeout=5.0,
+            auto_retry=False,
         )
 
     def _as_installation(self, installation_id: int) -> BaseAuthStrategy:
