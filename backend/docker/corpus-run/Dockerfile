@@ -1,12 +1,11 @@
-# The Linux host for a corpus run — the one place all four witnesses are live.
+# The Linux host where all four witnesses are live: the corpus run that fits the
+# ratios, and the worker that applies them (D-104).
 #
-# Why this image exists: `structural.semgrep` has no Windows build, so a corpus
-# run from a Windows checkout fits a structural witness with **one** backend
-# behind it (PLAN.md Chapter 14, Chapter 18). The fitted ratios in
-# `calibration.json` carry that caveat today. Chapter 18 may not publish a
-# structural number measured that way, and the held-out test split may be
-# evaluated exactly once (PROJECT_CONTEXT.md §6) — so the one run that counts
-# has to happen somewhere Semgrep actually runs.
+# Why this image exists: Semgrep cannot run on the Windows development machine.
+# PyPI does publish a win_amd64 wheel for 1.176.1, but its semgrep-core dies on
+# `Unix_error: Invalid argument socketpair` before reading a rule. A structural
+# witness fitted here and applied on Windows would be two different backends
+# sharing one ratio table, so the fit and the audit path both run in this image.
 #
 # This is NOT the sandbox. PROJECT_CONTEXT.md §4 rejects Docker as the sandbox:
 # containers are OS-level isolation, not software fault isolation, and the SFI
@@ -17,7 +16,7 @@
 FROM python:3.12-slim-bookworm
 
 # git: Semgrep shells out to it for its own file discovery.
-# ca-certificates: registry rule fetch and the Gemini call both need TLS.
+# ca-certificates: the Gemini and GitHub API calls need TLS.
 RUN apt-get update \
     && apt-get install --no-install-recommends -y git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -57,29 +56,44 @@ COPY backend/worker/pyproject.toml               backend/worker/
 # resolved a different dependency set would be measuring a different system.
 RUN uv sync --all-packages --frozen --no-install-workspace
 
-COPY . .
-
-RUN uv sync --all-packages --frozen
+# Every instruction above this line is the 1.4 GB dependency layer and what it
+# rests on. Changing any of them rebuilds that layer and re-downloads all of
+# it, so new instructions go below. (Comments do not count; Docker strips them.)
 
 # Semgrep and Bandit are external CLIs, not workspace dependencies: nothing
 # imports them, `static_agent.semgrep.runner` shells out to `semgrep --sarif`,
 # and Bandit is a Chapter 18 baseline to compare against, not a witness. They
 # are pinned because an unpinned scanner makes the structural witness a moving
 # target between the run that fits its ratios and the run that tests them.
-RUN pip install --no-cache-dir semgrep==1.176.1 bandit==1.9.4
+# Installed before the source is copied, into the system interpreter rather
+# than /opt/venv, so a source edit never re-downloads Semgrep's dependency
+# tree. The download cache is a BuildKit cache mount, never a layer: a build
+# that dies halfway on a flaky connection keeps what it fetched for the next
+# try, and the image itself carries no cache.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --retries 10 --timeout 60 semgrep==1.176.1 bandit==1.9.4
 
-# Warm the registry rulesets into the image. `static_agent.config` asks for
-# `p/security-audit` and `p/owasp-top-ten`, which Semgrep fetches from its
-# registry on first use — so without this the rules a run measures are whatever
-# the registry served that morning, and a re-run is not a re-run.
-#
-# NOTE: this freezes the rules as of image build, which is better than fetching
-# per run but is still weaker than vendoring the YAML. See docker/corpus-run/README.md.
-RUN mkdir -p /tmp/warm \
-    && printf 'x = 1\n' > /tmp/warm/warm.py \
-    && semgrep --config p/security-audit --config p/owasp-top-ten \
-         --quiet --sarif --metrics=off /tmp/warm/warm.py > /dev/null \
-    && rm -rf /tmp/warm
+# The uv cache is a mount on another filesystem, so hard links fail; copy
+# instead, and give each request longer than the 30s default.
+ENV UV_LINK_MODE=copy \
+    UV_HTTP_TIMEOUT=120
+
+COPY . .
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --all-packages --frozen
+
+# tree-sitter-language-pack downloads each grammar on first use. Fetched here,
+# checksum-verified by the library, so extraction never reaches the network at
+# analysis time: in a fresh worker container that first-use download timed out
+# and every audit would have failed before a single unit existed (D-104).
+RUN python -c "import tree_sitter_language_pack as t; t.download(['python']); t.get_parser('python')"
+
+# No rules are baked in. `static_agent` reads the pinned rulesets from
+# `.semgrep/rules/` in the bind-mounted checkout and checks each one against its
+# SHA-256 before every unit (D-104), so the image and the rules it measures are
+# separately versioned and neither can drift silently. The earlier registry warm
+# froze whatever `p/...` served on build day, which a rebuild then changed.
 
 # No CMD that runs a measurement. The test split is evaluated exactly once
 # (§6), and an image whose default command performs a run is an image that

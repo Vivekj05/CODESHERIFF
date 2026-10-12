@@ -296,8 +296,34 @@ def test_the_detail_carries_units_statements_and_findings(
     assert [row.cwe for row in detail.findings] == ["CWE-89"]
     assert detail.audit.status.value == "succeeded"
     assert detail.audit.github_comment_id == 12345
+    assert detail.comment_replaced_by is None
     assert detail.calibration is not None
     assert detail.calibration.is_provisional is False
+
+
+def test_a_later_push_that_edited_the_comment_is_named(
+    session: DbSession, calibration: CalibrationRun, repos: tuple[int, int]
+) -> None:
+    """One comment per pull request, edited in place (D-034): the earlier audit's stored text is no
+    longer what GitHub shows, and the detail says which audit replaced it (D-103)."""
+    ours, _ = repos
+    first = make_audit(session, calibration, ours)
+    claim_audit(session, first.id)
+    finish_audit(session, first.id, github_comment_id=777, github_comment_body="first")
+    second = make_audit(session, calibration, ours, head_sha="e" * 40)
+    claim_audit(session, second.id)
+    finish_audit(session, second.id, github_comment_id=777, github_comment_body="second")
+    # `finished_at` is `datetime.now`, and two calls in one test can tie on a coarse clock.
+    second.finished_at = (first.finished_at or datetime.now(UTC)) + timedelta(seconds=5)
+    session.flush()
+
+    earlier = audit_detail(session, audit_id=first.id, installation_ids=[OURS])
+    latest = audit_detail(session, audit_id=second.id, installation_ids=[OURS])
+
+    assert earlier is not None and latest is not None
+    assert earlier.comment_replaced_by == second.id
+    assert earlier.audit.github_comment_body == "first"
+    assert latest.comment_replaced_by is None
 
 
 def test_a_detail_for_another_installation_is_none_not_a_partial_row(

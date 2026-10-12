@@ -205,25 +205,28 @@ def _run_claimed_audit(
     _persist_patches(db, patches)
 
     previous = latest_comment_id(db, repository_id=repository.id, pr_number=audit.pr_number)
+    body = render(
+        audit.id,
+        evidence,
+        findings,
+        url_for(audit.id),
+        extraction,
+        prior_probability=audit.prior_probability,
+        alert_threshold=audit.alert_threshold,
+        calibration=_calibration_facts(audit),
+        patches=patches,
+    )
     comment_id = gateway.post_or_update_comment(
         installation_id=installation_id,
         repo_full_name=repository.full_name,
         pr_number=audit.pr_number,
-        body=render(
-            audit.id,
-            evidence,
-            findings,
-            url_for(audit.id),
-            extraction,
-            prior_probability=audit.prior_probability,
-            alert_threshold=audit.alert_threshold,
-            calibration=_calibration_facts(audit),
-            patches=patches,
-        ),
+        body=body,
         comment_id=previous,
     )
 
-    finish_audit(db, audit.id, github_comment_id=comment_id)
+    # The same string that was just posted, not a second render: the dashboard's Review section
+    # must show what the author read, and the next push will overwrite it on GitHub (D-103).
+    finish_audit(db, audit.id, github_comment_id=comment_id, github_comment_body=body)
     db.commit()
     logger.info(
         "Audit %s finished: %s#%s, comment %s",

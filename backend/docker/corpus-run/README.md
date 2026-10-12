@@ -4,16 +4,22 @@ A Linux userland with Semgrep in it. That is the whole idea.
 
 ## Why it exists
 
-`structural.semgrep` has no Windows build. On a Windows checkout it abstains
-`tool_unavailable` on every unit — correctly handled, and recorded in the run's
-provenance as a backend that was silent throughout — but it means the structural
-witness is the taint engine alone. The likelihood ratios in `calibration.json`
-were fitted that way, and `PLAN.md` Chapter 14 flags it: *"Chapter 18 must
-re-observe on Linux or CI, or its fitted structural ratios will describe a
-one-backend witness."*
+Semgrep cannot run on the Windows development machine. PyPI does publish a
+`win_amd64` wheel for `semgrep==1.176.1`, but its `semgrep-core` dies with
+`Unix_error: Invalid argument socketpair` before reading a single rule, from
+any shell and with the AF_UNIX driver running. On Windows `structural.semgrep`
+therefore abstains on every unit, and the structural witness is the taint engine
+alone.
 
-Chapter 18 also spends the one evaluation of the held-out test split that §6
-permits. Both of those need a host where all four witnesses are live.
+That is only safe if the ratios were fitted the same way. So this image is the
+one place the structural witness has both backends, and **both** halves of the
+system run in it (D-104):
+
+- the corpus run that fits the ratios (`corpus-run`, below), and
+- the audit worker that applies them (`worker`, `docker compose --profile worker`).
+
+A worker on Windows with ratios fitted here would score a one-backend witness
+with numbers measured on two, and the posteriors would stop meaning what they say.
 
 ## What it is not
 
@@ -48,24 +54,33 @@ The console scripts are on `PATH` because `UV_PROJECT_ENVIRONMENT=/opt/venv` is
 first in it — there is no `uv run` prefix needed, and the Windows `.venv` in the
 bind mount is not on `PATH` at all.
 
-## Pinning, and the one gap in it
+## Pinning
 
 Pinned: Python 3.12-slim-bookworm, `uv==0.12.12`, the whole workspace resolved
 `--frozen` from the committed `uv.lock`, `semgrep==1.176.1`, `bandit==1.9.4`, and
 torch from the CPU-only index (D-100) — the default Linux wheel pulls the CUDA
 runtime and took the image from 2.63 GB to 9.15 GB for code that cannot use a GPU.
 
-**Not fully pinned: the Semgrep rulesets.** `static_agent.config` asks for
-`p/security-audit` and `p/owasp-top-ten`, which Semgrep fetches from its registry.
-The build warms them into the image so that every run from one image sees the same
-rules — but a rebuild months later fetches whatever the registry serves then, and
-that is a different structural witness.
+**The Semgrep rules are pinned by digest, not by image** (D-104). `static_agent`
+no longer names `p/security-audit` or `p/owasp-top-ten`; it reads two files from
+`.semgrep/rules/` in the checkout and checks each against the SHA-256 in
+`static_agent/config.py` before every unit. A missing file abstains
+`rules_unavailable`, an edited one `rules_mismatch`, and a different Semgrep build
+`tool_version_mismatch` — nothing fetches rules at analysis time. The files are
+gitignored because they are Semgrep's to distribute; fetch them once, by hand:
 
-Vendoring the rule YAML would close it. It is left open deliberately for now,
-because the fix has a cost worth deciding on rather than absorbing: vendored
-registry rules are a redistribution question, and they go stale in the opposite
-direction. **What must not happen is fitting the ratios from one image and
-evaluating the test split from another.** Record the image digest with the run:
+```bash
+mkdir -p .semgrep/rules
+curl -L -o .semgrep/rules/security-audit.yml https://semgrep.dev/c/p/security-audit
+curl -L -o .semgrep/rules/owasp-top-ten.yml  https://semgrep.dev/c/p/owasp-top-ten
+sha256sum .semgrep/rules/*.yml   # must equal SEMGREP_RULESETS
+```
+
+A later fetch will usually not match, because the registry moves. That is the
+point: changing the rules is changing the witness, so it means editing
+`SEMGREP_RULESETS` and re-fitting, never a quiet download. **What must not happen
+is fitting the ratios from one image and evaluating the test split from another.**
+Record the image digest with the run:
 
 ```bash
 docker image inspect codesheriff-corpus-run:latest --format '{{index .RepoDigests 0}}{{.Id}}'

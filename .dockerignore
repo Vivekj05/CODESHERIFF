@@ -16,12 +16,28 @@
 # (D-074). It is mounted from the host at run time, never baked into a layer.
 .wasm-runtimes/
 
-# Frontend: not a uv workspace member and not part of a corpus run.
-apps/dashboard/node_modules/
-apps/dashboard/.next/
+# The pinned Semgrep rules are mounted from the host at run time and checked
+# against their digests there (D-104); none is baked into a layer.
+.semgrep/
 
-# Secrets never enter the build context. GEMINI_API_KEY is passed at run time.
-.env
+# Frontend: not a uv workspace member, not part of a corpus run, and never
+# imported by the worker. Excluded whole rather than by subfolder: when it moved
+# from apps/dashboard/ the old entries stopped matching, and node_modules, .next
+# and the dashboard's .env.local (its OAuth client secret and BETTER_AUTH_SECRET)
+# were copied into every image (D-042).
+frontend/
 
+# Secrets never enter the build context, at any depth. GEMINI_API_KEY is passed
+# at run time and the App's private key is bind-mounted read-only.
+**/.env
+**/.env.*
+# The templates hold names, not values, and a test reads the root one.
+!**/.env.example
+**/*.pem
+**/*.key
+
+# Local tooling and documents, not part of the system.
 .git/
-docs/paper/*.pdf
+.archify/
+**/.claude/
+**/*.pdf

@@ -20,8 +20,7 @@ echo [*] Starting Docker Infrastructure (Postgres + Redis)...
 docker compose up -d postgres redis
 echo [*] Starting Backend API...
 start "CodeSheriff API" cmd /k ".venv\Scripts\python.exe -m uvicorn codesheriff_api.main:app --reload --port 8000"
-echo [*] Starting Backend Worker...
-start "CodeSheriff Worker" cmd /k ".venv\Scripts\python.exe -m celery -A codesheriff_worker.celery_app worker --pool=solo --loglevel=info --queues=audits"
+call :start_worker
 call :start_smee
 echo [*] Starting Frontend Dashboard...
 cd frontend && npm run dev
@@ -35,9 +34,18 @@ goto end
 :backend
 echo [*] Starting Backend API and Worker...
 start "CodeSheriff API" cmd /k ".venv\Scripts\python.exe -m uvicorn codesheriff_api.main:app --reload --port 8000"
-start "CodeSheriff Worker" cmd /k ".venv\Scripts\python.exe -m celery -A codesheriff_worker.celery_app worker --pool=solo --loglevel=info --queues=audits"
+call :start_worker
 call :start_smee
 goto end
+
+:start_worker
+rem The worker runs in the Linux image, never on this host (D-104): it needs Semgrep, Semgrep
+rem cannot run on Windows, and a worker without it would score a one-backend structural witness
+rem with ratios fitted on two. Celery does not reload, so this recreates the container each time.
+echo [*] Starting Backend Worker (Linux container, with Semgrep)...
+docker compose --profile worker up -d --force-recreate worker
+start "CodeSheriff Worker" cmd /k "docker logs -f codesheriff-worker"
+exit /b 0
 
 :start_smee
 rem Forwards GitHub's webhooks from the smee.io channel to the local API (D-043). The channel is
@@ -87,7 +95,7 @@ goto end
 echo Usage: codesheriff.bat [command]
 echo.
 echo Available Commands:
-echo   dev       - Start Docker infra + API + Worker + webhook forwarder (smee) + Dashboard
+echo   dev       - Start Docker infra + API + Worker (container) + webhook forwarder (smee) + Dashboard
 echo   infra     - Start Postgres (pgvector) and Redis containers
 echo   backend   - Start FastAPI, the Worker and the webhook forwarder (smee)
 echo   frontend  - Start only Next.js web dashboard

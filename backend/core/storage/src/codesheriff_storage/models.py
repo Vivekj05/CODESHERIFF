@@ -395,6 +395,12 @@ class Audit(Base):
     finished_at: Mapped[datetime | None] = mapped_column(nullable=True)
     error_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     github_comment_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    github_comment_body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The summary comment exactly as this audit posted it (D-103). Stored rather than fetched,
+    because the comment is edited in place on every push and GitHub only knows the latest text;
+    stored rather than re-rendered, because today's renderer did not write an old audit's comment.
+    Built from closed sets and numbers only, so it holds no source and no path (D-050). NULL for an
+    audit that posted nothing, and for one that posted before this column existed."""
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
 
     repository: Mapped[Repository] = relationship(back_populates="audits")

@@ -1371,9 +1371,15 @@ Three things were fixed on the way there, each of which would have corrupted a m
 - **torch pulled the CUDA runtime on Linux** (D-100), taking the image to 9.15 GB for code that
   cannot use a GPU. Pinned to the CPU index: 2.63 GB.
 
-**Not yet done, and in this order.** Re-observe calibration and validation in the image and
-**re-fit** — the committed artifact describes a one-backend structural witness, and a test split
-scored against it would be measuring a system that no longer exists. Then the comparators, built
+**Done: re-observed and re-fitted with both structural backends** (D-104). Both splits were
+re-observed in the image with Semgrep 1.176.1 on digest-pinned rules, and the artifact re-fitted:
+structural medium 15.56 → 8.25 and silence 0.065 → 0.122, validation ECE 0.027 → 0.024, threshold
+0.227 → 0.218. The audit worker now runs in the same image, so production applies the ratios to the
+witness they were measured on. Semgrep's CWE now comes from rule metadata (the keyword mapper had
+reported `exec()` as command injection), and it loads ~690 rules per unit — the static p95 target
+is not met with it and is not yet addressed.
+
+**Not yet done, and in this order.** The comparators, built
 and debugged against those two splits: majority voting, the anchored-vs-blind ablation, and the
 Semgrep/Bandit/single-LLM baselines. The test split is opened last, once, with the image id
 recorded beside the result.

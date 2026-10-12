@@ -7,6 +7,7 @@ import { ArrowLeft, ExternalLink } from "lucide-react";
 
 import { buttonVariants } from "@/components/chai/button";
 import { Chip } from "@/components/chai/chip";
+import { CommentReview } from "@/components/comment-review";
 import { EvidenceKindBadge } from "@/components/evidence-kind-badge";
 import { PageHeader } from "@/components/page-header";
 import { Posterior } from "@/components/posterior";
@@ -191,6 +192,8 @@ export default function AuditPage() {
           ))
         )}
       </section>
+
+      <CommentReview audit={audit} />
 
       <section aria-labelledby="units-h" className="flex flex-col gap-4">
         <div>
