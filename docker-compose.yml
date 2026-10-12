@@ -80,10 +80,18 @@ services:
       HF_HUB_OFFLINE: "1"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
-      # The checkout: code (installed editable into /opt/venv), the pinned Semgrep
-      # rules, the WASI interpreter, and the calibration artifact. Restart the
-      # container after a code change; Celery does not reload.
-      - .:/workspace
+      # Only the three parts of the checkout the worker reads, each read-only:
+      # the code (installed editable into /opt/venv, calibration artifact
+      # included), the pinned Semgrep rules, and the WASI interpreter. Never the
+      # whole checkout: that would put .env and frontend/.env.local, the API's
+      # and the dashboard's secrets, inside this process (D-042, D-106). The rest
+      # of /workspace is the image's own copy, which holds no secrets (D-105), so
+      # anything the worker writes there, such as the semantic response cache,
+      # stays in the container and never reaches the host. Restart the container
+      # after a code change; Celery does not reload.
+      - ./backend:/workspace/backend:ro
+      - ./.semgrep:/workspace/.semgrep:ro
+      - ./.wasm-runtimes:/workspace/.wasm-runtimes:ro
       - type: bind
         source: ${GITHUB_APP_PRIVATE_KEY_PATH:?set GITHUB_APP_PRIVATE_KEY_PATH in .env}
         target: /run/secrets/github-app.pem
