@@ -3155,7 +3155,7 @@ repository source and the 11 layers built on them were deleted by id, leaves fir
 and Semgrep layers were kept, and a rebuild afterwards ran all 20 steps from cache. Rotating the two
 secrets is optional: they never left the machine.
 
-**Open, and recorded rather than hidden.** D-104 says the worker gets only its own credentials
+**Open, and recorded rather than hidden** (closed by D-106). D-104 says the worker gets only its own credentials
 because it has no `env_file`. That holds for its environment, not its filesystem: the service
 bind-mounts the whole checkout at `/workspace`, so `.env` and `frontend/.env.local` are readable
 there. Analysed code cannot reach them, because the Wasmtime guest has no preopened directory
@@ -3165,3 +3165,40 @@ needs its own change.
 
 **Because** an ignore list that names paths is only as current as the last move, and a secret in an
 image layer outlives the file it was copied from.
+
+## D-106 — The worker mounts three read-only paths, never the whole checkout
+
+**Date:** 2026-10-12 · **Status:** ACTIVE · **Builds on:** D-042, D-104, D-105 · **Closes:** the
+open item recorded in D-105
+
+**Context.** The worker service bind-mounted the whole checkout at `/workspace`, so the root `.env`
+(the API's webhook secret) and `frontend/.env.local` (the dashboard's OAuth client secret and
+`BETTER_AUTH_SECRET`) were readable inside the one process that also holds the LLM key. D-104's "no
+`env_file`" kept them out of the worker's environment and left them in its filesystem, so D-042's
+three credential sets were three in name. Analysed code could never reach them, because the
+Wasmtime guest has no preopened directory (D-075); a compromised worker process could.
+
+A second consequence surfaced while tracing what the worker reads. `semantic.hosted` writes its
+response cache to `.cache/semantic_llm_cache.sqlite`, relative to the working directory. With the
+checkout mounted, that landed in the host repository: a SHA-256 key and the raw model response,
+which quotes the analysed code (the sink is required verbatim, D-066's gate). Source is meant to
+live in memory and ephemeral storage only.
+
+**Decision.** The worker mounts exactly what it reads, each read-only: `backend/` (the code, which
+the image installs editable, with the packaged calibration artifact inside it), `.semgrep/` (the
+pinned rules) and `.wasm-runtimes/` (the interpreter). The rest of `/workspace` is the image's own
+copy, which holds no secrets since D-105, so the response cache is written into the container and
+discarded with it. The App's private key and the embedding model keep their own mounts.
+`corpus-run` keeps the full checkout: it is started by hand for a measurement run and writes the
+observation files.
+
+**Verified.** Inside the recreated worker, `/workspace/.env`, `frontend/` and every `.pem`/`.key`
+are absent, and a write to `/workspace/backend` fails. The four-agent smoke test on
+`cwe-078-host-ping-vuln` gives the same five verdicts as before, and the host's cache file was not
+modified by it.
+
+**What it costs.** A new top-level path the worker needs must be added to the list. That is the
+point: what the worker can see is now a list somebody wrote down.
+
+**Because** a credential boundary drawn in the environment and not the filesystem is drawn around
+half the process.
