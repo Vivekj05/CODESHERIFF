@@ -437,19 +437,22 @@ would score a different structural witness than the one that was fitted.
 
 ### 4. Run
 
-**Windows, one command:**
+**Windows, one command** (from the repository root, in PowerShell or Command Prompt):
 
-```bash
-codesheriff.bat dev
+```powershell
+.\codesheriff.bat dev
 ```
 
 This checks that Docker is running and that ports 8000 and 3000 are free, then starts Postgres and
 Redis, the API, the worker container, the webhook forwarder and the dashboard, each in its own
 window. Open http://localhost:3000. To stop everything (container data is kept):
 
-```bash
-codesheriff.bat stop
+```powershell
+.\codesheriff.bat stop
 ```
+
+The `.\` prefix is required in PowerShell, which does not run scripts from the current folder by
+name alone; Command Prompt accepts it too.
 
 **Any platform, one terminal each:**
 
