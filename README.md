@@ -1,265 +1,580 @@
+<div align="center">
+
 # CodeSheriff
 
-Automated security review for GitHub pull requests, with **calibrated** confidence.
+**Calibrated security review for GitHub pull requests**
 
-Four specialist agents analyse each changed function independently, and a Bayesian inference engine
-fuses their evidence into a posterior probability that the change introduces a vulnerability.
+Four independent analysis agents examine every changed function. A Bayesian engine combines their
+evidence into a probability that the change introduces a vulnerability, and that probability is
+measured against ground truth.
 
-> 🔨 **In evaluation.** All four agents are built and measured, and every likelihood ratio and the
-> alert threshold are fitted from a labelled corpus. What remains is the held-out evaluation the
-> research paper reports. See **Project status**.
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Celery](https://img.shields.io/badge/Celery-Redis-37814A?style=flat-square&logo=celery&logoColor=white)](https://docs.celeryq.dev/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%20%2B%20pgvector-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
+[![Next.js](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
+<br>
+[![Semgrep](https://img.shields.io/badge/Semgrep-1.176.1-2B4C7E?style=flat-square)](https://semgrep.dev/)
+[![tree-sitter](https://img.shields.io/badge/tree--sitter-AST-6E5494?style=flat-square)](https://tree-sitter.github.io/)
+[![Gemini](https://img.shields.io/badge/Gemini-Flash-8E75B2?style=flat-square&logo=googlegemini&logoColor=white)](https://ai.google.dev/)
+[![Wasmtime](https://img.shields.io/badge/Wasmtime-WASI%20sandbox-654FF0?style=flat-square&logo=webassembly&logoColor=white)](https://wasmtime.dev/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white)](https://docs.docker.com/compose/)
+
+</div>
 
 ---
 
-## Why
+## Contents
 
-Existing PR security tooling emits binary alerts with no measure of reliability. State-of-the-art
-research tools still report false discovery rates above 80%, which trains developers to ignore
-alerts entirely.
+- [Problem statement](#problem-statement)
+- [Core idea](#core-idea)
+- [Research gap](#research-gap)
+- [What makes it different](#what-makes-it-different)
+- [System architecture](#system-architecture)
+- [How an audit works](#how-an-audit-works)
+- [The four agents](#the-four-agents)
+- [Combining the evidence](#combining-the-evidence)
+- [Security model](#security-model)
+- [Tech stack](#tech-stack)
+- [Getting started](#getting-started)
+- [Repository layout](#repository-layout)
+- [Scope](#scope)
+- [License](#license)
 
-The problem is not detection count. It is that no tool tells you how much to trust a given finding.
+---
 
-> An AI code reviewer tells you what it thinks. CodeSheriff tells you how often it is right when it
-> thinks that.
+## Problem statement
 
-A stated 87% must correspond to being right about 87% of the time, **measured against ground truth
-rather than asserted**. Calibration metrics (ECE, Brier score) are mandatory acceptance criteria,
-not optional analysis.
+Pull request security tools report findings as binary alerts: a rule matched, or it did not. None of
+them says how far a given alert can be trusted.
+
+| Challenge | Impact |
+|---|---|
+| Alerts carry no measure of reliability | A reviewer cannot tell a near-certain finding from a guess |
+| High false-positive rates | Developers learn to ignore alerts, including the real ones |
+| Confidence scores, where they exist, are asserted rather than measured | A stated "high confidence" has no defined meaning |
+| One analysis technique per tool | Every finding fails the same way the technique fails |
+| Findings rarely explain themselves | Fixing or dismissing one takes investigation |
+
+## Core idea
+
+> An AI code reviewer tells you what it thinks. CodeSheriff tells you how often it is right when
+> it thinks that.
+
+CodeSheriff's output is a **calibrated probability**: across many findings reported at 87%, about
+87% should turn out to be real vulnerabilities. Calibration is checked against a labelled corpus
+using Expected Calibration Error (ECE) and the Brier score, and those metrics are acceptance
+criteria for the project rather than optional analysis.
+
+## Research gap
+
+Static analysers such as Semgrep and CodeQL match patterns and data flows; LLM-based reviewers
+reason about intent. Each is useful, and each reports what it found without stating, in a
+measurable way, how often that kind of finding is correct.
+
+CodeSheriff does not try to out-detect them. It contributes the layer they lack:
+
+- **Several independent witnesses** that fail in different ways, so their agreement is informative.
+- **Likelihood ratios fitted from labelled data**, so each witness's statement carries the weight
+  its measured accuracy earns, and no more.
+- **A probability whose reliability is itself measured**, on a corpus split that was never used to
+  fit it.
+
+## What makes it different
+
+| | |
+|---|---|
+| **Calibrated, not asserted** | Every number in the posterior is fitted on a calibration split and checked on a separate validation split. No confidence value is hand-set. |
+| **Four heterogeneous witnesses** | Data-flow analysis, model reasoning, repository precedent and sandboxed execution. They fail for different reasons, which is what makes combining them worthwhile. |
+| **Explainable by construction** | Each finding shows the odds product witness by witness: what each agent said and how much that moved the probability. |
+| **Abstains rather than guesses** | An agent that cannot analyse a function says so. An abstention leaves the probability unchanged instead of counting as evidence of safety. |
+| **Real isolation for untrusted code** | Pull request code is only ever executed inside a Wasmtime/WASI sandbox with no network, no environment and no filesystem. |
+| **Suggestions, never commits** | A verified repair is posted as a GitHub suggested change. CodeSheriff never commits, pushes or merges. |
+
+---
+
+## System architecture
+
+```mermaid
+flowchart TD
+    GH["GitHub<br/>pull request event"] -->|webhook| SMEE["smee.io forwarder<br/>local development"]
+    SMEE --> API["FastAPI<br/>verify HMAC, enqueue, 202"]
+    API --> REDIS[("Redis<br/>audit queue")]
+    REDIS --> EXT
+
+    subgraph WORKER_BOX["Celery worker, Linux container"]
+        direction TB
+        EXT["Extract one unit<br/>per changed function"]
+        AG["Four agents<br/>run blind and in parallel"]
+        FUS["Bayesian fusion<br/>fitted ratios"]
+        PAT["Patch drafting<br/>and verification"]
+        EXT --> AG --> FUS --> PAT
+    end
+
+    PAT --> PG[("PostgreSQL + pgvector<br/>audits, evidence, findings")]
+    PAT -->|summary comment<br/>and suggestions| GH
+    PG --> API2["FastAPI<br/>read routes"]
+    API2 --> DASH["Next.js dashboard<br/>Better Auth sign-in"]
+```
+
+Three processes, each holding only its own credentials:
+
+| Process | Holds | Never holds |
+|---|---|---|
+| Dashboard (Next.js) | GitHub OAuth client secret, Better Auth secret | Webhook secret, LLM key |
+| API (FastAPI) | Webhook secret, GitHub App private key | User tokens, LLM key |
+| Worker (Celery, in Docker) | LLM key, GitHub App private key | Webhook secret, OAuth secrets |
+
+## How an audit works
+
+```mermaid
+flowchart TD
+    A["Pull request opened or updated"] --> B["Webhook signature verified<br/>before the body is parsed"]
+    B --> C["Audit row written and queued<br/>response in under 3 seconds"]
+    C --> D["Worker fetches base and head files"]
+    D --> E["One ChangeUnit per changed function"]
+    E --> F["Structural, semantic, context and runtime<br/>agents analyse each unit independently"]
+    F --> G["Each agent returns detection,<br/>silence or abstention"]
+    G --> H["Fusion: prior odds multiplied by<br/>one fitted ratio per witness"]
+    H --> I{"Posterior at or above<br/>the alert threshold?"}
+    I -->|yes| J["Alert, plus a verified repair<br/>where one can be produced"]
+    I -->|no| K["Recorded, not alerted"]
+    J --> L["One summary comment on the pull request<br/>edited in place on later pushes"]
+    K --> L
+    L --> M["Full record on the dashboard"]
+```
+
+Every agent returns one of three kinds of statement for each function:
+
+| Statement | Meaning | Effect on the probability |
+|---|---|---|
+| **Detection** | "I found this vulnerability class here" | Raises it, by the agent's fitted ratio |
+| **Silence** | "I looked for these vulnerability classes and found nothing" | Lowers it, by the agent's fitted ratio |
+| **Abstention** | "I could not analyse this" | None. The ratio is exactly 1.0 |
+
+---
 
 ## The four agents
 
-Each decides on a fundamentally different basis. This heterogeneity is the entire justification for
-the project — agents that failed the same way would add nothing to a probability estimate.
+Each agent sees only the changed function. None of them knows the others exist or sees their
+results; running them blind keeps their errors independent, which the fusion step depends on.
 
-| Agent | Basis for decision | Fails when |
-|---|---|---|
-| `structural.taint` / `structural.semgrep` | Rules plus a mechanical reachability proof: source → sink with no covering sanitizer. No LLM. | The bug has no syntactic pattern |
-| `semantic.hosted` | Absorbed model knowledge — functional intent → trust boundaries → violated safety invariant | The model hallucinates or is over-agreeable |
-| `context.rag` | This repository's own precedent: does the change bypass a control an earlier merged PR established? | The repo has no relevant history |
-| `runtime.sfi` | Direct observation — executes in a Wasmtime/WASI sandbox, recording attempted syscalls, network egress and file access | The code will not run in a sandbox |
+Accuracy figures below are measured on the **calibration split** of the project's corpus: 76
+hand-written functions in 38 pairs, each pair being the same function once vulnerable and once
+safe. A false positive is a finding on the safe twin.
 
-Agents run **blind and in parallel**. None knows another exists, or knows about GitHub, the
-database, or fusion. Every agent implements exactly `analyze(unit: ChangeUnit) -> list[Evidence]`,
-and none ever raises — failure paths return an abstention with a distinct reason.
+### 1. Structural: taint analysis and Semgrep
 
-## How it works
+Follows untrusted data through the function to a dangerous operation, using two backends that are
+counted together as **one** witness, because they read the same source text with related
+techniques.
 
-```
-GitHub PR opened
-      ▼
-API: verify HMAC → enqueue → return 202
-      ▼
-Worker: diff → ChangeUnits (one per changed function)
-      ▼
-  ┌──────┬──────────┬─────────┬─────────┐
-Static  Semantic  Context  Runtime      ← blind, parallel, no shared state
-  └──────┴─────┬────┴─────────┘
-              ▼
-   Evidence grouped by finding_key
-              ▼
-   Bayesian fusion → posterior per finding
-              ▼
-   One summary comment on the PR, plus the dashboard:
-   - a calibrated posterior per finding, with what each agent said (detection, silence, abstention)
-   - the odds product factor by factor, and the calibration it ran under
-   - a checked repair, posted as a GitHub suggested change inside the diff, when one survives
+```mermaid
+flowchart TD
+    S["Function parameters<br/>treated as untrusted"] --> G["Def-use graph<br/>built from the tree-sitter AST"]
+    G --> P["Taint spreads through assignments,<br/>f-strings, concatenation, calls"]
+    P --> Z{"Sanitizer or validating<br/>guard on the path?"}
+    Z -->|yes| C["Taint cleared"]
+    Z -->|no| K{"Reaches a dangerous<br/>argument of a sink?"}
+    K -->|yes| D["Detection with the full path<br/>source to sink"]
+    K -->|no| SI["Silence"]
+    SG["Semgrep, pinned rules"] --> M["CWE from the rule's own tags"] --> D2["Detection or silence"]
 ```
 
-### Using it
+- **Taint engine:** every parameter is treated as untrusted input. A sanitizer only clears the
+  matching class of danger, so escaping HTML does not silence a shell command. A check such as
+  `if x not in ALLOWED: raise` counts as validation; `if x is None: return` does not.
+- **Semgrep:** runs digest-pinned rule sets at a pinned version and takes each finding's CWE from
+  the rule's metadata.
+- **Accuracy:** taint engine 13 of 13 expected detections, 0 false positives across 23 safe twins.
+  Semgrep adds independent signal but fires on 2 safe twins, which the fitted ratios account for.
+- **Fails when** a vulnerability has no syntactic pattern, such as a missing permission check.
+- **Fallbacks:** source that cannot be parsed (`parse_failed`); Semgrep missing, its rules missing
+  or altered, or the wrong Semgrep version (`tool_unavailable`, `rules_unavailable`,
+  `rules_mismatch`, `tool_version_mismatch`); a run past its time limit (`timeout`); a function too
+  large to analyse whole (`unit_too_large`). Each is an abstention, never a guess.
 
-1. **Sign in** from the home page (`/sign-in`, GitHub). Signing in grants no repository access.
-2. **Connect the GitHub App** from the dashboard's GitHub App page, choosing all or selected
-   repositories on GitHub. Overview prompts for this until it is done.
-3. **Open a pull request** on a connected repository. The audit runs and comments on the PR, and the
-   dashboard shows how every number was reached.
+### 2. Semantic: hosted model reasoning
 
-Disconnecting the App, or deselecting a repository, hides its audits rather than deleting them;
-reconnecting brings them back (D-102).
+Asks a language model what the function is for, where its trust boundaries are, and which security
+invariant the change breaks.
 
-Evidence comes in three kinds. **Detection** raises the odds. **Silence** — an agent ran and found
-nothing — lowers them, but only within the CWEs that agent actually covers. **Abstention** — an
-agent could not run — leaves them untouched. Conflating the last two would let an agent that
-*could not look* penalise a finding.
-
-Likelihood ratios are fitted on a held-out calibration split, never hardcoded. The alert threshold
-comes from a precision-recall sweep on a separate validation split. The test split is evaluated
-exactly once, at the end.
-
-Patches are **suggestions only** — the system never commits or merges.
-
-## Stack
-
-* **Backend**: Python 3.12 · uv workspace · FastAPI · Celery + Redis · PostgreSQL 16 + pgvector · SQLAlchemy + Alembic · tree-sitter · Semgrep · scikit-learn · sentence-transformers (`bge-small-en-v1.5`, local) · Gemini Flash free tier · Wasmtime + WASI
-* **Frontend**: Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS 4 · ChaiUI (on shadcn/ui) and Base UI · Better Auth (GitHub sign-in, JWT for the API) · TanStack Query v5 · Recharts
-
-Zero recurring cost: free-tier LLM, local embeddings, self-hosted everything.
-
-## Layout
-
+```mermaid
+flowchart TD
+    U["Changed function"] --> W["Wrapped in a random,<br/>per-request sentinel"]
+    W --> P["Prompt with worked examples,<br/>including safe code that looks unsafe"]
+    P --> L["Gemini, 3 samples<br/>with different seeds"]
+    L --> H{"Hallucination gate"}
+    H -->|"CWE in scope, sink appears verbatim,<br/>lines inside the function"| D["Detection, confidence from<br/>agreement across samples"]
+    H -->|fails any check| X["That finding is dropped"]
+    L -->|no finding| S["Silence"]
 ```
-backend/         Every uv workspace member lives here
-  api/           FastAPI: verifies the dashboard's JWT, webhooks (HMAC + enqueue + 202), dashboard reads
-  worker/        Celery: owns the pipeline and all agents, runs them, fuses, posts to GitHub
-  core/
-    contracts/   The single shared contract (ChangeUnit, Evidence). Never vendored.
-    engine/      ChangeUnit extraction, Bayesian fusion, calibration fitting. No DB, no agents.
-    storage/     SQLAlchemy models, Alembic migrations, pgvector store, dashboard queries
-    patch/       Draft a repair, check it on a fixed ladder, anchor it as a suggestion
-    corpus/      Labelled cases + committed immutable splits
-  agents/        The 4 specialist analysis agents
-    static/      Semgrep & Taint static analysis agent
-    semantic/    LLM semantic reasoning agent
-    context/     Repository context & RAG agent
-    runtime/     WASI / Wasmtime sandbox agent
-  calibration/   Observations, recorded responses
-  docker/        Corpus evaluation Dockerfiles
-  scripts/       Database init scripts (init-pgvector.sql)
 
-frontend/        Next.js 16 dashboard (separate npm project, not a uv member)
-  src/app/       Home page, /sign-in, the dashboard pages, and /api/auth (Better Auth, the only API route)
-  src/components/ ChaiUI pieces (components/chai), the shell, sidebar and shared widgets
-  src/lib/       auth.ts (Better Auth server), auth-client.ts, api.ts (the only caller of the Python API)
+- The analysed code sits between random markers generated for each request, so code that tries to
+  pass itself off as instructions cannot escape them.
+- The worked examples include safe code that looks dangerous, which discourages the model from
+  simply agreeing that something is a bug.
+- Every finding must name an in-scope CWE, quote a sink that appears verbatim in the code, and
+  point at lines inside the function. Model prose that reads like an instruction is discarded
+  before anything is published.
+- **Accuracy:** 94% of safe twins correctly passed, 0% success for prompt-injection attempts, and 0
+  hallucinated sinks on the calibration split.
+- **Fails when** the model is confidently wrong or too ready to agree.
+- **Fallbacks:** no API key or provider unreachable (`llm_unavailable`, `provider_unavailable`);
+  the per-function cost budget would be exceeded (`budget_exceeded`); the function is too large
+  (`unit_too_large`).
 
-examples/        Evaluation benchmarks (baseline_eval, paper_eval) and sample PRs
+### 3. Context: repository precedent
 
-docs/            Consolidated documentation (specs, architecture, roadmap, guides)
+Checks whether the change drops a security control that this repository's own merged code
+consistently applies. There is deliberately no language model in this agent.
+
+```mermaid
+flowchart TD
+    U["Changed function"] --> E["Embedded locally<br/>bge-small-en-v1.5"]
+    E --> R["Nearest merged code<br/>from this repository only, pgvector"]
+    R --> C["Controls that history establishes,<br/>for example an ownership check"]
+    C --> Q{"Established control missing<br/>from the changed function?"}
+    Q -->|yes| D["Detection: CWE-862 or CWE-639"]
+    Q -->|no| S["Silence"]
 ```
+
+- A control counts as established only if the same function carried it before, or at least two
+  other functions share it. One neighbour's habit is treated as coincidence.
+- It reports only missing authorization (CWE-862) and access to another user's object (CWE-639).
+  Retrieval can never cross repositories: the repository is fixed when the retriever is built.
+- **Accuracy:** 5 of 5 expected detections, 0 false positives across 11 twins and negative
+  controls.
+- **Fails when** a repository has no relevant history.
+- **Fallbacks:** no relevant history (`no_precedent`); the vector store or embedding model is
+  unavailable (`retrieval_unavailable`), kept distinct because a store that is down is not a
+  repository that is new; the function is too large (`unit_too_large`).
+
+### 4. Runtime: sandboxed execution
+
+Runs the changed function once inside a Wasmtime/WASI sandbox, with every parameter set to a
+uniquely tagged untrusted value, and reports which dangerous operations that value actually
+reached.
+
+```mermaid
+flowchart TD
+    U["Changed function"] --> T["Each parameter bound to a<br/>uniquely tagged untrusted string"]
+    T --> SB["Wasmtime + WASI sandbox<br/>no network, empty environment,<br/>fuel, time and memory limits"]
+    SB --> O["Recorded stand-ins for dangerous calls:<br/>os.system, open, pickle.loads, ..."]
+    O --> Q{"Did the tagged value<br/>reach one?"}
+    Q -->|yes| D["Detection: observed, not inferred"]
+    Q -->|no| S["Silence"]
+```
+
+- The sandbox has no network capability at all, so a module that tries to connect fails before
+  running a single instruction. The guest receives an argument list and three standard streams,
+  and nothing else.
+- It covers CWE-22, 78, 94, 502 and 918, where an observation is direct evidence. SQL injection and
+  XSS are left to the other witnesses, because there the "sink" would be an object the harness
+  itself created.
+- **Accuracy:** 9 of 9 expected detections, 0 false positives across 23 safe twins.
+- **Fails when** the code will not run in a sandbox.
+- **Fallbacks:** the pinned interpreter is missing (`interpreter_unavailable`) or its checksum
+  does not match (`interpreter_digest_mismatch`); a non-Python unit (`unsupported_language`); the function raised, had
+  no safe entry point, ran out of fuel or time, or reached for a capability the sandbox does not
+  have (`unit_raised`, `no_safe_entrypoint`, `fuel_exhausted`, `timed_out`, `sandbox_trapped`); a
+  guard the probe could not evaluate (`guard_unresolved`). Reporting in that last case would
+  penalise code that defends itself, so it abstains.
+
+### Fallbacks shared by all agents
+
+The worker guarantees at least one statement per agent per function. An agent that fails to load,
+raises an exception, exceeds its time limit or returns nothing is recorded as an abstention under
+its own name (`agent_unavailable`, `agent_raised`, `agent_timeout`, `agent_returned_nothing`). A
+missing agent therefore never shortens the record or silently lowers a probability.
+
+---
+
+## Combining the evidence
+
+```mermaid
+flowchart LR
+    P["Prior odds<br/>declared base rate 3%"] --> X(("multiply"))
+    W1["Structural ratio"] --> X
+    W2["Semantic ratio"] --> X
+    W3["Context ratio"] --> X
+    W4["Runtime ratio"] --> X
+    X --> PO["Posterior probability"]
+    PO --> T{"At or above the fitted<br/>threshold 0.218?"}
+    T -->|yes| A["Alert"]
+    T -->|no| N["No alert"]
+```
+
+- Exactly **four** factors are multiplied, one per witness, whatever the agents said. Fusion
+  iterates over all witnesses, so silence can lower a probability as well as detection raise it.
+- Each likelihood ratio is **fitted on the calibration split**, per witness and per confidence
+  level, with its observation counts recorded. The alert threshold is **selected on the validation
+  split**. The held-out test split is reserved for a single final evaluation.
+- The prior is **declared, not measured**: a corpus built from twin pairs is 50% vulnerable by
+  construction, which would wildly overstate how often real changes are vulnerable.
+- There is no hand-set fallback. If the fitted artifact (`calibration.json`) is missing, fusion
+  refuses to run rather than invent numbers.
+
+**Measured on the validation split** (base-rate weighted): ECE 0.024, Brier score 0.013, precision
+1.000 and recall 0.857 at the selected threshold of 0.218. The held-out test split has not yet been
+evaluated; it is opened exactly once, at the end.
+
+---
+
+## Security model
+
+```mermaid
+flowchart TD
+    GH["GitHub"] -->|"X-Hub-Signature-256,<br/>checked before parsing"| API["API"]
+    USER["Browser"] -->|"15-minute EdDSA JWT<br/>from Better Auth"| API
+    API -->|"audit id only"| Q[("Redis")]
+    Q --> W["Worker container<br/>read-only mounts: code, rules, interpreter"]
+    W --> SB["Wasmtime sandbox<br/>no network, no files, no environment"]
+    W --> DB[("PostgreSQL<br/>findings, evidence and hashes,<br/>never full source")]
+```
+
+- **Webhook authenticity:** the signature is verified against the raw body before anything is
+  parsed, and the API answers within GitHub's time limit by queuing rather than processing.
+- **Access control:** the dashboard signs users in with GitHub, and the API verifies a short-lived
+  signed token. Each user sees only the installations GitHub says they can reach; an empty list
+  returns nothing rather than everything.
+- **Untrusted code:** pull request code is executed only inside the WASI sandbox, which has no
+  network, no files and no environment variables, so it cannot reach the credentials of the worker
+  around it.
+- **Credential separation:** the worker container mounts only the code, the pinned Semgrep rules
+  and the interpreter, all read-only. No `.env` file is visible inside it, and the image contains
+  no secrets.
+- **Data minimisation:** stored records hold findings, evidence and hashes of source, never full
+  file contents. The pull request comment carries no file paths or source.
+- **Prompt injection:** analysed code is fenced by a random per-request sentinel, and
+  instruction-like model output is dropped rather than published.
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| API | Python 3.12, FastAPI, Pydantic v2 |
+| Queue and worker | Celery, Redis |
+| Database | PostgreSQL 16 with pgvector, SQLAlchemy, Alembic |
+| Code parsing | tree-sitter, tree-sitter-language-pack, networkx |
+| Static analysis | Custom taint engine, Semgrep CLI (SARIF) |
+| Model reasoning | Gemini Flash (free tier) |
+| Embeddings | sentence-transformers, BAAI/bge-small-en-v1.5 (384 dimensions, local) |
+| Sandbox | Wasmtime with WASI, pinned CPython build |
+| Calibration | Likelihood-ratio fitting and ECE/Brier metrics, implemented in the engine |
+| GitHub integration | githubkit, GitHub App, smee.io for local webhooks |
+| Dashboard | Next.js 16, TypeScript, Tailwind, ChaiUI on shadcn/ui, Recharts, Better Auth |
+| Tooling | uv workspace, pytest, ruff, mypy --strict, import-linter, Typer, Docker Compose |
+
+---
 
 ## Getting started
 
-Requires Docker, Node 20+, and Python 3.12 with `uv`.
+### Prerequisites
 
-### Quick Start (Windows)
-Use the one-click batch runner:
-```cmd
-# Docker infra + API + Worker + webhook forwarder (smee) + Dashboard, each in its own window
-codesheriff.bat dev
+- Docker Desktop
+- Python 3.12 and [`uv`](https://docs.astral.sh/uv/)
+- Node.js 20 or later
+- A registered GitHub App and a smee.io channel. [`docs/github-app-setup.md`](docs/github-app-setup.md)
+  walks through both.
+- A Gemini API key
 
-# Run full test suite
-codesheriff.bat test
+### 1. Install and configure
 
-# Run benchmark evaluations
-codesheriff.bat eval
-```
-
-### Manual Setup
 ```bash
-cp .env.example .env          # then fill it in; it also lists what frontend/.env.local needs
-docker compose up -d postgres redis
-uv sync --all-packages        # install the workspace (without the flag, members are skipped)
-uv run alembic -c backend/core/storage/alembic.ini upgrade head
-uv run lint-imports           # agent boundary enforcement
+cp .env.example .env
 ```
 
-Then, each in its own terminal:
+Fill in `.env`, and `frontend/.env.local` for the dashboard's variables; `.env.example` lists both.
+Then install the workspace:
+
+```bash
+uv sync --all-packages
+```
+
+```bash
+npm --prefix frontend install
+```
+
+### 2. Fetch the pinned analysis artifacts
+
+Neither file is committed. Each is checked against a recorded SHA-256 before use, and a mismatch is
+an abstention, not a silent change of behaviour.
+
+```bash
+mkdir -p .wasm-runtimes
+curl -L -o .wasm-runtimes/python-3.12.0.wasm https://github.com/vmware-labs/webassembly-language-runtimes/releases/download/python%2F3.12.0%2B20231211-040d5a6/python-3.12.0.wasm
+```
+
+```bash
+mkdir -p .semgrep/rules
+curl -L -o .semgrep/rules/security-audit.yml https://semgrep.dev/c/p/security-audit
+curl -L -o .semgrep/rules/owasp-top-ten.yml https://semgrep.dev/c/p/owasp-top-ten
+```
+
+The rule sets must match the digests in `SEMGREP_RULESETS`
+(`backend/agents/static/src/static_agent/config.py`). The registry changes over time, so a fresh
+download may not match; see [`backend/docker/corpus-run/README.md`](backend/docker/corpus-run/README.md).
+
+### 3. Create the database and build the worker image
+
+```bash
+docker compose up -d postgres redis
+```
+
+```bash
+uv run alembic -c backend/core/storage/alembic.ini upgrade head
+```
+
+```bash
+docker compose --profile worker build worker
+```
+
+The worker runs in a Linux container because Semgrep does not run on Windows; running it natively
+would score a different structural witness than the one that was fitted.
+
+### 4. Run
+
+**Windows, one command:**
+
+```bash
+codesheriff.bat dev
+```
+
+This checks that Docker is running and that ports 8000 and 3000 are free, then starts Postgres and
+Redis, the API, the worker container, the webhook forwarder and the dashboard, each in its own
+window. Open http://localhost:3000. To stop everything (container data is kept):
+
+```bash
+codesheriff.bat stop
+```
+
+**Any platform, one terminal each:**
 
 ```bash
 uv run uvicorn codesheriff_api.main:app --reload --port 8000
-uv run celery -A codesheriff_worker.celery_app worker --loglevel=info --queues=audits --pool=solo
+```
+
+```bash
+docker compose --profile worker up -d --force-recreate worker
+```
+
+```bash
 npx smee-client --url "$SMEE_URL" --target http://localhost:8000/webhooks/github
+```
+
+```bash
 npm --prefix frontend run dev
 ```
 
-`--pool=solo` is for Windows. Without the smee forwarder, GitHub's webhooks never reach a local API,
-and smee keeps nothing for a client that was not listening.
+Restart the worker after a code change; Celery does not reload. Without the smee forwarder,
+webhooks never reach a local API.
 
-**The GitHub App** needs, in its settings: the callback URL
-`http://localhost:3000/api/auth/callback/github`, the "Email addresses: Read-only" account
-permission, and the Setup URL `http://localhost:8000/auth/install/callback` with "Redirect on
-update". [`docs/github-app-setup.md`](docs/github-app-setup.md) walks through registering one.
-
-**Tests that touch Postgres** migrate their database to empty and back, so point them at a separate
-database, never the one holding real audits:
+### 5. Test
 
 ```bash
-export CODESHERIFF_TEST_DB=postgresql+psycopg://codesheriff:codesheriff@localhost:5432/codesheriff_test
 uv run pytest
 ```
 
-`import-linter` is the guardrail that matters: agents may import `contracts` and nothing else. An
-agent importing a sibling, the engine, or infrastructure fails CI.
+```bash
+uv run ruff check . && uv run ruff format --check . && uv run mypy . && uv run lint-imports
+```
 
-## Project status
+```bash
+npm --prefix frontend run lint && npm --prefix frontend run build
+```
 
-Chapters 1–17 of the 18-chapter roadmap are done; Chapter 18, the evaluation, is in progress.
+Tests that need Postgres run only when `CODESHERIFF_TEST_DB` is set, and they reset that database,
+so point it at a separate one:
 
-**The pipeline runs end to end.** A signature-verified webhook becomes a queued audit. The worker
-cuts one `ChangeUnit` per changed function from the real base and head files, runs the four agents
-blind, fuses what they said into one posterior per finding, and posts a single summary comment
-that is edited in place on later pushes.
+```bash
+docker exec codesheriff-postgres psql -U codesheriff -c "create database codesheriff_test"
+```
 
-**All four agents are built and measured** on the calibration split of a corpus of 76 hand-written
-units in 38 vulnerable/safe twin pairs:
+```bash
+export CODESHERIFF_TEST_DB=postgresql+psycopg://codesheriff:codesheriff@localhost:5432/codesheriff_test
+```
 
-| Agent | Recall on the cases it should catch | False positives |
-|---|---|---|
-| `structural.taint` | 13/13 | 0 across 23 safe twins |
-| `semantic.hosted` | — | 94% safe-twin pass rate, 0% injection subversion, 0 hallucinated sinks |
-| `context.rag` | 5/5 | 0 across 11 twins and negative controls |
-| `runtime.sfi` | 9/9 | 0 across 23 safe twins |
+Sandbox tests run only when the WASI interpreter is present. No test makes a live network call:
+non-local connections fail at the socket layer.
 
-An agent that cannot run, such as the runtime witness on a machine without the pinned WASI
-interpreter, abstains under its own name at a likelihood ratio of exactly 1.0. It costs the
-posterior nothing and is visible on the record.
+---
 
-**The numbers are fitted, not hand-set.** Likelihood ratios come from the calibration split, the
-alert threshold from a precision–recall sweep on the validation split, and both ship in
-`calibration.json` with the corpus hash they were measured against. Weighted ECE is 0.027 and Brier
-0.013 at selection time. No hand-set fallback exists: a missing artifact is an error. The prior is
-a declared 3%, because a twin-paired corpus has a prevalence of 0.5 by construction.
+## Repository layout
 
-**Findings are explainable.** The dashboard shows every audit, every witness's statement per
-function, and each finding's odds product factor by factor, as stored at the time of the run.
-The calibration page shows the reliability bins, per-cell observation counts and the full threshold
-sweep.
+```
+backend/
+  api/            FastAPI: webhook verification and queuing, JWT verification, dashboard reads
+  worker/         Celery: fetches files, runs the agents, fuses, posts to GitHub
+  core/
+    contracts/    The single shared contract (ChangeUnit, Evidence)
+    engine/       Unit extraction, Bayesian fusion, calibration fitting; no database, no agents
+    storage/      SQLAlchemy models, Alembic migrations, pgvector store, dashboard queries
+    patch/        Drafts a repair, checks it on a fixed ladder, anchors it as a suggestion
+    corpus/       Labelled vulnerable/safe twin cases and their fixed splits
+  agents/
+    static/       structural.taint and structural.semgrep
+    semantic/     semantic.hosted
+    context/      context.rag
+    runtime/      runtime.sfi and its Wasmtime sandbox
+  calibration/    Recorded observations and model responses used for fitting
+  docker/         The Linux image used by the worker and for corpus runs
+  scripts/        Database initialisation (pgvector)
+frontend/         Next.js dashboard and Better Auth sign-in
+examples/         Evaluation scripts and sample pull requests
+docs/             Specifications, architecture decisions, roadmap
+```
 
-**Sign-in and connecting are separate steps.** Better Auth signs users in with GitHub in the
-dashboard and hands the Python API a short-lived signed token; the API verifies it and still shows
-each user only the installations GitHub says they can reach (D-101). The GitHub App page installs,
-manages and disconnects the App, and disconnecting keeps the history (D-102).
+Module boundaries are enforced by `import-linter`: an agent may import only the shared contract,
+the engine may not reach the database, and the audit path may not read the corpus labels.
 
-**An alert-worthy finding can carry a repair.** A drafted patch is checked on a fixed six-step
-ladder and, if it passes, posted as a GitHub suggested change inside the diff. CodeSheriff never
-commits, merges, or runs the repository's own test suite.
-
-**Still to do (Chapter 18):**
-
-- Re-observe the calibration and validation splits on the Linux corpus image, where Semgrep runs,
-  and re-fit. The committed ratios describe a structural witness with only the taint backend live,
-  because Semgrep has no Windows build.
-- Finish the comparisons against majority voting, leave-one-witness-out ablations, and the Semgrep,
-  Bandit and single-LLM baselines (`examples/paper_eval.py`, `examples/baseline_eval.py`).
-- Evaluate the held-out test split, exactly once, last.
-
-Separately, Chapter 5 needs one person-only step: confirming sign-in and the repository list
-against the registered GitHub App ([`docs/github-app-setup.md`](docs/github-app-setup.md)).
-
-The conformance audit that started the rebuild is in
-**[`docs/architecture/AUDIT.md`](docs/architecture/AUDIT.md)**, with a `file:line` citation for
-every claim. Its findings are left as audited; the "Closure status" at its top records which
-chapter closed each one.
-
-| Doc | What it's for |
-|---|---|
-| **[`docs/roadmap/PLAN.md`](docs/roadmap/PLAN.md)** | The roadmap: 18 chapters, one per session, with live status. **Start here.** |
-| [`CLAUDE.md`](CLAUDE.md) | Session guidance, document hierarchy, invariants that must not be "simplified" |
-| [`docs/specs/PROJECT_CONTEXT.md`](docs/specs/PROJECT_CONTEXT.md) | **Authoritative** design. §5 overrides everything else |
-| [`docs/architecture/DECISIONS.md`](docs/architecture/DECISIONS.md) | Living record — every decision with its reason |
-| [`docs/architecture/AUDIT.md`](docs/architecture/AUDIT.md) | Conformance audit: what the code does vs. what it should |
-| [`docs/roadmap/DEFECTS.md`](docs/roadmap/DEFECTS.md) | One line per false positive / false negative, written as found |
-| [`docs/specs/G2_Synopsis_CodeSheriff.pdf`](docs/specs/G2_Synopsis_CodeSheriff.pdf) | Academic synopsis paper |
-| [`docs/history/`](docs/history/) | Superseded specs, kept for provenance |
-
-⚠️ Anything in `docs/history/` is **superseded**. One of those documents is the direct cause of the
-non-conformance recorded in the audit, and following it reproduces known bugs.
+---
 
 ## Scope
 
-GitHub only, Python first. In scope: CWE-22, 78, 79, 89, 94, 502, 639, 798, 862, 918.
+**Platform:** GitHub, Python first.
 
-Out of scope: dependency and supply-chain scanning, container and IaC scanning, binary analysis,
-auto-merge or auto-commit of patches, compliance reporting, multi-tenancy with billing, IDE plugins.
+**Vulnerability classes (closed set):**
+
+| CWE | Vulnerability |
+|---|---|
+| CWE-22 | Path traversal |
+| CWE-78 | OS command injection |
+| CWE-79 | Cross-site scripting |
+| CWE-89 | SQL injection |
+| CWE-94 | Code injection |
+| CWE-502 | Deserialization of untrusted data |
+| CWE-639 | Authorization bypass through a user-controlled key |
+| CWE-798 | Hard-coded credentials |
+| CWE-862 | Missing authorization |
+| CWE-918 | Server-side request forgery |
+
+<details>
+<summary><b>Out of scope</b></summary>
+<br>
+
+- Dependency and supply-chain scanning
+- Container and infrastructure-as-code scanning
+- Binary analysis
+- Automatic commits or merges of patches
+- Running a repository's own test suite
+- Compliance reporting
+- Multi-tenant billing
+- IDE plugins
+
+</details>
+
+---
 
 ## License
 
-Developed as a final-year B.Tech project.
+Developed as a final-year B.Tech project. No open-source license has been granted.
+
+<div align="center">
+<br>
+
+**CodeSheriff**: a probability you can check, for every finding.
+
+</div>
